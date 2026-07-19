@@ -109,7 +109,8 @@ case "\${1:-}" in
   up)          ${COMPOSE} up -d --build ;;
   down)        ${COMPOSE} down ;;
   status|ps)   ${COMPOSE} ps ;;
-  logs)        ${COMPOSE} logs -f --tail=100 \${2:-} ;;
+  logs)        ${COMPOSE} logs --tail=200 \${2:-} ;;
+  logf)        ${COMPOSE} logs -f --tail=100 \${2:-} ;;
   update)      git pull --ff-only && ${COMPOSE} up -d --build ;;
   reconfigure) exec bash "$here/install.sh" ;;
   *) echo "استفاده: telabzar {up|down|status|logs|update|reconfigure}" ;;
