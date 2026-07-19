@@ -1,4 +1,8 @@
-"""نقطهٔ اجرا: سرورِ وبهوکِ aiohttp + ثبتِ وبهوک روی local-bot-api."""
+"""نقطه اجرا: long-polling در برابرِ سرورِ محلیِ Bot API.
+
+polling (نه webhook) انتخاب شد چون ربات اتصالِ رو‌به‌بیرون به local-bot-api می‌زند
+و به تغییرِ IP کانتینر (هنگام بازساخت) حساس نیست.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -6,8 +10,8 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
+from arq import create_pool
+from arq.connections import RedisSettings
 
 from .bot import create_bot, create_dispatcher
 from .config import settings
@@ -32,22 +36,14 @@ async def _wait_db(attempts: int = 15, delay: float = 3.0) -> None:
     log.error("Database still not ready; continuing (will retry on demand).")
 
 
-async def _register_webhook(bot: Bot, dp: Dispatcher, attempts: int = 20, delay: float = 3.0) -> None:
-    allowed = dp.resolve_used_update_types()
-    for i in range(1, attempts + 1):
-        try:
-            await bot.set_webhook(
-                url=settings.webhook_url,
-                secret_token=settings.webhook_secret,
-                allowed_updates=allowed,
-                drop_pending_updates=True,
-            )
-            log.info("Webhook registered → %s", settings.webhook_url)
-            return
-        except Exception as exc:  # noqa: BLE001
-            log.warning("set_webhook failed (%s/%s): %s", i, attempts, exc)
-            await asyncio.sleep(delay)
-    log.error("Could not register webhook after retries.")
+async def _init_arq(dp: Dispatcher) -> None:
+    try:
+        dp.workflow_data["arq_pool"] = await asyncio.wait_for(
+            create_pool(RedisSettings.from_dsn(settings.redis_url)), timeout=15
+        )
+        log.info("ARQ pool ready.")
+    except Exception as exc:  # noqa: BLE001
+        log.error("ARQ pool init failed (operations unavailable until fixed): %s", exc)
 
 
 async def _set_commands(bot: Bot) -> None:
@@ -57,37 +53,35 @@ async def _set_commands(bot: Bot) -> None:
         log.warning("set_my_commands failed: %s", exc)
 
 
-def main() -> None:
+async def _run() -> None:
     bot = create_bot()
     dp = create_dispatcher()
 
-    async def on_startup(bot: Bot) -> None:
-        await _wait_db()
-        await _register_webhook(bot, dp)
-        await _set_commands(bot)
+    await _wait_db()
+    await _init_arq(dp)
+    await _set_commands(bot)
 
-    async def on_shutdown(bot: Bot) -> None:
-        try:
-            await bot.delete_webhook()
-        except Exception:  # noqa: BLE001
-            pass
+    # polling و webhook متقابلاً منحصربه‌فردند → هر وبهوکِ قبلی را پاک کن
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("delete_webhook failed: %s", exc)
 
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
+    log.info("Starting long-polling…")
+    try:
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    finally:
+        pool = dp.workflow_data.get("arq_pool")
+        if pool is not None:
+            try:
+                await pool.aclose()
+            except Exception:  # noqa: BLE001
+                pass
+        await bot.session.close()
 
-    app = web.Application()
-    SimpleRequestHandler(
-        dispatcher=dp, bot=bot, secret_token=settings.webhook_secret
-    ).register(app, path=settings.webhook_path)
-    setup_application(app, dp, bot=bot)
 
-    async def health(_: web.Request) -> web.Response:
-        return web.Response(text="ok")
-
-    app.router.add_get("/healthz", health)
-
-    log.info("Starting Telabzar bot (webhook) on :%s", settings.web_port)
-    web.run_app(app, host="0.0.0.0", port=settings.web_port, print=None)
+def main() -> None:
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

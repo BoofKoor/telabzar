@@ -11,7 +11,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 from .config import settings
 from .db import Sessionmaker
 from .middlewares import DataMiddleware
-from .routers import files, start
+from .routers import files, ops, start
 
 
 def create_bot() -> Bot:
@@ -30,6 +30,7 @@ def create_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=storage)
 
     dp.include_router(start.router)
+    dp.include_router(ops.router)
     dp.include_router(files.router)
 
     data_mw = DataMiddleware(Sessionmaker)

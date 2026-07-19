@@ -1,0 +1,111 @@
+"""سیستمِ کارت: فایل + کپشن (سرآیند + لاگِ تغییراتِ بلاک‌کوت) + کیبوردِ اینلاین.
+
+کارت = خودِ فایل که ربات می‌فرستد و کیبورد زیرش است. هر عملیات، همین کارت را
+درجا (editMessageMedia) به‌روزرسانی می‌کند.
+"""
+from __future__ import annotations
+
+from html import escape
+
+from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import (
+    FSInputFile,
+    InputMediaAudio,
+    InputMediaDocument,
+    InputMediaPhoto,
+    InputMediaVideo,
+    Message,
+)
+
+from .filetypes import human_size
+from .i18n import t
+from .keyboards import file_card_kb
+from .models import File
+
+_ICON = {"document": "🗎", "image": "🖼", "video": "🎬", "audio": "🎵", "archive": "🗜"}
+_INPUT_MEDIA = {"image": InputMediaPhoto, "video": InputMediaVideo, "audio": InputMediaAudio}
+
+
+def card_caption(file: File, lang: str, note: str | None = None) -> str:
+    icon = _ICON.get(file.kind, "📄")
+    head = f"{icon} <b>{escape(file.name or '—')}</b>  ·  <code>{human_size(file.size)}</code>"
+    lines = [head]
+    changelog = file.changelog or []
+    if changelog:
+        body = "\n".join(escape(x) for x in changelog[-8:])
+        lines.append(f"<blockquote expandable>{body}</blockquote>")
+    if note:
+        lines.append(note)
+    return "\n".join(lines)
+
+
+def message_media_id(msg: Message) -> tuple[str | None, str | None]:
+    """(file_id, file_unique_id) از پیامِ رسانه‌ایِ ارسال‌شده."""
+    if msg.photo:
+        p = msg.photo[-1]
+        return p.file_id, p.file_unique_id
+    for attr in ("document", "video", "audio", "animation", "voice", "video_note"):
+        obj = getattr(msg, attr, None)
+        if obj is not None:
+            return obj.file_id, obj.file_unique_id
+    return None, None
+
+
+def _media_arg(file: File, path: str | None):
+    return FSInputFile(path, filename=file.name or "file") if path else file.file_id
+
+
+async def _send_typed(bot: Bot, chat_id: int, file: File, media, caption, kb):
+    if file.kind == "image":
+        return await bot.send_photo(chat_id, media, caption=caption, reply_markup=kb)
+    if file.kind == "video":
+        return await bot.send_video(chat_id, media, caption=caption, reply_markup=kb)
+    if file.kind == "audio":
+        return await bot.send_audio(chat_id, media, caption=caption, reply_markup=kb)
+    return await bot.send_document(chat_id, media, caption=caption, reply_markup=kb)
+
+
+async def send_card(bot: Bot, chat_id: int, file: File, lang: str, *, path: str | None = None) -> Message:
+    """ارسالِ کارتِ فایل (فایل + کپشن + کیبورد). با fallback به سند."""
+    caption = card_caption(file, lang)
+    kb = file_card_kb(file.ref, file.kind, lang)
+    try:
+        return await _send_typed(bot, chat_id, file, _media_arg(file, path), caption, kb)
+    except TelegramBadRequest:
+        return await bot.send_document(chat_id, _media_arg(file, path), caption=caption, reply_markup=kb)
+
+
+async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, *, path: str | None = None) -> Message:
+    """به‌روزرسانیِ درجای کارت با فایلِ جدید (editMessageMedia). در صورت ناتوانی،
+    کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند."""
+    caption = card_caption(file, lang)
+    kb = file_card_kb(file.ref, file.kind, lang)
+    im_cls = _INPUT_MEDIA.get(file.kind, InputMediaDocument)
+    try:
+        return await bot.edit_message_media(
+            chat_id=chat_id,
+            message_id=message_id,
+            media=im_cls(media=_media_arg(file, path), caption=caption),
+            reply_markup=kb,
+        )
+    except TelegramBadRequest:
+        # تغییرِ نوعِ رسانه یا محدودیت → کارتِ تازه + حذفِ قدیمی
+        msg = await send_card(bot, chat_id, file, lang, path=path)
+        try:
+            await bot.delete_message(chat_id, message_id)
+        except TelegramBadRequest:
+            pass
+        return msg
+
+
+async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, note: str | None = None, *, keyboard: bool) -> None:
+    """فقط کپشن/کیبوردِ کارت را عوض کن (برای حالتِ «در حال پردازش» یا «خطا»)."""
+    kb = file_card_kb(file.ref, file.kind, lang) if keyboard else None
+    try:
+        await bot.edit_message_caption(
+            chat_id=chat_id, message_id=message_id,
+            caption=card_caption(file, lang, note=note), reply_markup=kb,
+        )
+    except TelegramBadRequest:
+        pass
