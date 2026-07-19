@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     clamav_host: str = "clamav"
     clamav_port: int = 3310
 
+    # آرشیو (محدودیتِ استخراج — دفاعِ پایه در برابرِ bomb)
+    max_extract_files: int = 40
+    max_extract_mb: int = 500
+
     # کنترلِ سوءاستفاده (بات عمومی)
     daily_op_quota: int = 50
     rate_per_min: int = 12

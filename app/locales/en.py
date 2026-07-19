@@ -48,6 +48,11 @@ MESSAGES: dict[str, str] = {
     "cl_scan_clean": "🛡 Scan: clean ✓",
     "cl_scan_infected": "⚠️ Scan: infected — {name}",
     "cl_scan_unavailable": "🛡 Scan is temporarily unavailable",
+    "cl_zip": "🗜 Zipped",
+    "cl_topdf": "📄 Converted to PDF",
+    "cl_list": "📋 Listed contents ({n} items)",
+    "cl_extract": "📤 Extracted ({n} files)",
+    "list_header": "📋 <b>Archive contents</b> — {n} items:",
     # limits
     "limit_rate": "A bit too fast! Please wait a moment ⏳",
     "limit_quota": "You've hit today's operation limit. Try again tomorrow.",

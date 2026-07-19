@@ -99,6 +99,23 @@ async def op_scan(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
     await _start(cq, file, lang, arq_pool, session, "scan", {}, user)
 
 
+# ── سند/آرشیو: عملیاتِ مستقیم (zip · to_pdf · list_zip · extract) ─
+_DIRECT_OPS = {"zip", "to_pdf", "list_zip", "extract"}
+
+
+@router.callback_query(Act.filter(F.op.in_(_DIRECT_OPS)))
+async def op_direct(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
+                    arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+        return
+    await _start(cq, file, lang, arq_pool, session, callback_data.op, {}, user)
+
+
 # ── تبدیلِ فرمت: منو ────────────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "convert"))
 async def op_convert_menu(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:

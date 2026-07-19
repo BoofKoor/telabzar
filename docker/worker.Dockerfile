@@ -4,9 +4,13 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# ffmpeg برای پردازشِ ویدیو/صوت (تصویر با Pillow)
+# ابزارها: ffmpeg (ویدیو/صوت) · 7-Zip + unrar (آرشیو) · LibreOffice (سند→PDF) + فونت‌ها
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        p7zip-full unrar-free \
+        libreoffice-writer libreoffice-calc libreoffice-impress \
+        fonts-liberation fonts-dejavu fonts-noto-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv

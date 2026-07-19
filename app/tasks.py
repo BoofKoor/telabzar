@@ -11,12 +11,15 @@ import os
 import re
 import shutil
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from typing import Any
 
 from aiogram import Bot
+from aiogram.types import FSInputFile
 
 from . import processing as P
+from .filetypes import human_size
 from .cards import message_media_id, set_card_note, update_card
 from .config import settings
 from .db import Sessionmaker
@@ -79,6 +82,30 @@ async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir
             raise RuntimeError("convert not supported for this type")
         return {"path": out, "filename": f"{stem}.{fmt}", "label": t(lang, "cl_convert", fmt=fmt.upper())}
 
+    if op == "zip":
+        out = os.path.join(workdir, f"{stem}.zip")
+        await P.make_zip(inpath, out, file.name or stem)
+        return {"path": out, "filename": f"{stem}.zip", "label": t(lang, "cl_zip"), "kind": "archive"}
+
+    if op == "to_pdf":
+        src = os.path.join(workdir, os.path.basename(file.name or "input"))
+        shutil.copyfile(inpath, src)
+        out = await P.office_to_pdf(src, workdir)
+        return {"path": out, "filename": f"{stem}.pdf", "label": t(lang, "cl_topdf"), "kind": "document"}
+
+    if op == "list_zip":
+        entries = await P.archive_list(inpath)
+        lines = [t(lang, "list_header", n=len(entries))]
+        for name, sz in entries[:60]:
+            lines.append(f"• {escape(name)}  <code>{human_size(sz)}</code>")
+        if len(entries) > 60:
+            lines.append(f"… (+{len(entries) - 60})")
+        return {"note_only": True, "label": t(lang, "cl_list", n=len(entries)), "message": "\n".join(lines)}
+
+    if op == "extract":
+        files = await P.archive_extract(inpath, workdir, settings.max_extract_files, settings.max_extract_mb)
+        return {"note_only": True, "label": t(lang, "cl_extract", n=len(files)), "files": files}
+
     raise RuntimeError(f"unknown op: {op}")
 
 
@@ -114,16 +141,37 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             job.error = str(exc)[:500]
             await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
         else:
-            if res.get("note_only"):
+            if res.get("files") is not None:
+                # خروجیِ چندفایلی (استخراج) → هر کدام را جدا بفرست؛ کارت دست‌نخورده
+                for p in res["files"]:
+                    try:
+                        await bot.send_document(chat_id, FSInputFile(p, filename=os.path.basename(p)))
+                    except Exception:  # noqa: BLE001
+                        log.warning("sending extracted file failed: %s", p)
+                file.changelog = list(file.changelog or []) + [res["label"]]
+                await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+                job.status = "done"
+            elif res.get("message") is not None:
+                # نتیجهٔ متنی (لیستِ آرشیو) → پیامِ جدا؛ کارت دست‌نخورده
+                try:
+                    await bot.send_message(chat_id, res["message"])
+                except Exception:  # noqa: BLE001
+                    log.warning("sending listing failed")
+                file.changelog = list(file.changelog or []) + [res["label"]]
+                await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+                job.status = "done"
+            elif res.get("note_only"):
                 # عملیاتِ بررسی (اسکن) → فقط لاگ + کپشن؛ رسانه دست‌نخورده
                 file.changelog = list(file.changelog or []) + [res["label"]]
                 await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
                 job.status = "done"
             else:
                 # عملیاتِ رسانه‌ساز → فیلدهای فایل را عوض کن و کارت را درجا به‌روزرسانی کن
-                orig = (file.name, file.size, list(file.changelog or []))
+                orig = (file.name, file.size, file.kind, list(file.changelog or []))
                 outpath = res["path"]
                 file.name = res["filename"]
+                if res.get("kind"):
+                    file.kind = res["kind"]
                 if os.path.exists(outpath):
                     file.size = os.path.getsize(outpath)
                 file.changelog = list(file.changelog or []) + [res["label"]]
@@ -137,7 +185,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     job.status = "done"
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ فایل را برگردان
                     log.exception("job %s delivery failed", job_id)
-                    file.name, file.size, file.changelog = orig
+                    file.name, file.size, file.kind, file.changelog = orig
                     job.status = "failed"
                     job.error = str(exc)[:500]
                     await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
