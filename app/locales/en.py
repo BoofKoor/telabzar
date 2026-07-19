@@ -40,4 +40,9 @@ MESSAGES: dict[str, str] = {
     "ask_new_name": "Send the new file name ✍️",
     "choose_format": "Choose the target format:",
     "too_large": "This file exceeds the limit ({mb}MB).",
+    "btn_cancel": "Cancel",
+    # changelog (in the card caption)
+    "cl_rename": "✏️ Renamed → {name}",
+    "cl_compress": "🗜 Compressed",
+    "cl_convert": "🔄 Converted to {fmt}",
 }

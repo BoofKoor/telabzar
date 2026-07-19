@@ -46,6 +46,7 @@ class File(Base):
     mime: Mapped[str | None] = mapped_column(String(128), nullable=True)
     name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    changelog: Mapped[list | None] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

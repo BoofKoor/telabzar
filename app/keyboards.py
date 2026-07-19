@@ -65,6 +65,12 @@ def file_card_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def cancel_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
+    return b.as_markup()
+
+
 def convert_menu_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     fmts = CONVERT_FORMATS.get(kind, [])

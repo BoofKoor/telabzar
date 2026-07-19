@@ -1,4 +1,8 @@
-"""تابعِ ARQ که در ورکر اجرا می‌شود: دانلود (مسیرِ لوکال) → پردازش → تحویل → پاکسازی."""
+"""تابعِ ARQ (ورکر): دانلود (مسیرِ لوکال) → پردازش → به‌روزرسانیِ درجای کارت → پاکسازی.
+
+موفق: کارت با فایلِ ادیت‌شده + لاگِ تغییرات به‌روزرسانی می‌شود.
+ناموفق: کارت به منوی اصلی + هشدار برمی‌گردد (بدونِ بن‌بست).
+"""
 from __future__ import annotations
 
 import logging
@@ -10,14 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import FSInputFile
 
 from . import processing as P
+from .cards import message_media_id, set_card_note, update_card
 from .config import settings
 from .db import Sessionmaker
 from .i18n import t
-from .keyboards import file_card_kb
 from .models import File, Job
 
 log = logging.getLogger("telabzar.worker")
@@ -29,79 +31,44 @@ def _safe_stem(name: str | None, default: str = "file") -> str:
     return stem or default
 
 
-def _send_as(kind: str) -> str:
-    return {"video": "video", "audio": "audio"}.get(kind, "document")
-
-
-async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir: str) -> dict[str, str]:
+async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir: str, lang: str) -> dict[str, str]:
+    """پردازش → {path, filename, label}."""
     stem = _safe_stem(file.name)
 
     if op == "rename":
-        new = (args.get("new_name") or "file").strip()
-        new = re.sub(r"[\\/\x00]+", "_", new)[:120] or "file"
+        new = re.sub(r"[\\/\x00]+", "_", (args.get("new_name") or "file").strip())[:120] or "file"
         if not Path(new).suffix and file.name and Path(file.name).suffix:
             new += Path(file.name).suffix
-        return {"path": inpath, "filename": new, "send_as": _send_as(file.kind)}
+        return {"path": inpath, "filename": new, "label": t(lang, "cl_rename", name=new)}
 
     if op == "compress":
         if file.kind == "image":
             out = os.path.join(workdir, f"{stem}-min.jpg")
             await P.compress_image(inpath, out)
-            return {"path": out, "filename": f"{stem}-min.jpg", "send_as": "document"}
-        if file.kind == "video":
+        elif file.kind == "video":
             out = os.path.join(workdir, f"{stem}-min.mp4")
             await P.compress_video(inpath, out)
-            return {"path": out, "filename": f"{stem}-min.mp4", "send_as": "video"}
-        if file.kind == "audio":
+        elif file.kind == "audio":
             out = os.path.join(workdir, f"{stem}-min.mp3")
             await P.compress_audio(inpath, out)
-            return {"path": out, "filename": f"{stem}-min.mp3", "send_as": "audio"}
-        raise RuntimeError("compress not supported for this type")
+        else:
+            raise RuntimeError("compress not supported for this type")
+        return {"path": out, "filename": os.path.basename(out), "label": t(lang, "cl_compress")}
 
     if op == "convert":
         fmt = (args.get("target") or "").lower()
         out = os.path.join(workdir, f"{stem}.{fmt}")
         if file.kind == "image":
             await P.convert_image(inpath, out, fmt)
-            return {"path": out, "filename": f"{stem}.{fmt}", "send_as": "document"}
-        if file.kind == "audio":
+        elif file.kind == "audio":
             await P.convert_audio(inpath, out, fmt)
-            send = "audio" if fmt in ("mp3", "m4a", "ogg") else "document"
-            return {"path": out, "filename": f"{stem}.{fmt}", "send_as": send}
-        if file.kind == "video":
+        elif file.kind == "video":
             await P.convert_video(inpath, out, fmt)
-            send = "video" if fmt in ("mp4", "webm") else "document"
-            return {"path": out, "filename": f"{stem}.{fmt}", "send_as": send}
-        raise RuntimeError("convert not supported for this type")
+        else:
+            raise RuntimeError("convert not supported for this type")
+        return {"path": out, "filename": f"{stem}.{fmt}", "label": t(lang, "cl_convert", fmt=fmt.upper())}
 
     raise RuntimeError(f"unknown op: {op}")
-
-
-def _infile(res: dict[str, str]) -> FSInputFile:
-    return FSInputFile(res["path"], filename=res["filename"])
-
-
-async def _send_result(bot: Bot, chat_id: int, res: dict[str, str]) -> None:
-    send_as = res["send_as"]
-    try:
-        if send_as == "video":
-            await bot.send_video(chat_id, _infile(res))
-        elif send_as == "audio":
-            await bot.send_audio(chat_id, _infile(res))
-        else:
-            await bot.send_document(chat_id, _infile(res))
-    except TelegramBadRequest:
-        # مثلاً VOICE_MESSAGES_FORBIDDEN یا محدودیتِ نوعِ مدیا → به‌صورت سند بفرست
-        if send_as == "document":
-            raise
-        await bot.send_document(chat_id, _infile(res))
-
-
-async def _safe_edit(bot: Bot, chat_id: int, message_id: int, text: str, markup=None) -> None:
-    try:
-        await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=markup)
-    except Exception:  # noqa: BLE001
-        pass
 
 
 async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str) -> None:
@@ -122,7 +89,6 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
 
         job.status = "running"
         await session.commit()
-        await _safe_edit(bot, chat_id, card_mid, t(lang, "processing"))
 
         try:
             os.makedirs(workdir, exist_ok=True)
@@ -130,20 +96,34 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             inpath = tg_file.file_path
             if not inpath or not os.path.exists(inpath):
                 raise RuntimeError("input file not found on disk")
-
-            res = await _do_op(job.op, job.args or {}, file, inpath, workdir)
-            await _send_result(bot, chat_id, res)
-
-            job.status = "done"
-            await _safe_edit(
-                bot, chat_id, card_mid, t(lang, "done"),
-                file_card_kb(file.ref, file.kind, lang),
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.exception("job %s failed", job_id)
+            res = await _do_op(job.op, job.args or {}, file, inpath, workdir, lang)
+        except Exception as exc:  # noqa: BLE001  — پردازش شکست خورد؛ فایل هنوز دست‌نخورده است
+            log.exception("job %s processing failed", job_id)
             job.status = "failed"
             job.error = str(exc)[:500]
-            await _safe_edit(bot, chat_id, card_mid, t(lang, "failed"))
+            await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
+        else:
+            # پردازش موفق → فیلدهای فایل را به نسخهٔ جدید تغییر بده و کارت را درجا به‌روزرسانی کن
+            orig = (file.name, file.size, list(file.changelog or []))
+            outpath = res["path"]
+            file.name = res["filename"]
+            if os.path.exists(outpath):
+                file.size = os.path.getsize(outpath)
+            file.changelog = list(file.changelog or []) + [res["label"]]
+            try:
+                sent = await update_card(bot, chat_id, card_mid, file, lang, path=outpath)
+                fid, fuid = message_media_id(sent)
+                if fid:
+                    file.file_id = fid
+                if fuid:
+                    file.file_unique_id = fuid
+                job.status = "done"
+            except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ فایل را برگردان
+                log.exception("job %s delivery failed", job_id)
+                file.name, file.size, file.changelog = orig
+                job.status = "failed"
+                job.error = str(exc)[:500]
+                await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
         finally:
             job.finished_at = datetime.now(timezone.utc)
             await session.commit()

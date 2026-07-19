@@ -40,4 +40,9 @@ MESSAGES: dict[str, str] = {
     "ask_new_name": "نامِ جدیدِ فایل را بفرست ✍️",
     "choose_format": "فرمتِ مقصد را انتخاب کن:",
     "too_large": "این فایل بزرگ‌تر از سقفِ مجاز است ({mb}MB).",
+    "btn_cancel": "لغو",
+    # لاگِ تغییرات (در کپشنِ کارت)
+    "cl_rename": "✏️ تغییر نام → {name}",
+    "cl_compress": "🗜 کاهش حجم",
+    "cl_convert": "🔄 تبدیل به {fmt}",
 }

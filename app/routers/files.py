@@ -1,4 +1,4 @@
-"""دریافتِ فایل → کارتِ عملیات."""
+"""دریافتِ فایل → کارت (خودِ فایل + کیبورد زیرش)."""
 from __future__ import annotations
 
 import secrets
@@ -8,10 +8,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..cards import card_text
+from ..cards import send_card
 from ..filetypes import detect
 from ..i18n import t
-from ..keyboards import file_card_kb
 from ..models import File, User
 
 router = Router(name="files")
@@ -31,14 +30,13 @@ async def on_file(
     message: Message, session: AsyncSession, user: User | None,
     lang: str, state: FSMContext,
 ) -> None:
-    await state.clear()  # ارسالِ فایلِ جدید، هر فلوی نیمه‌کارهٔ FSM را لغو می‌کند
+    await state.clear()  # فایلِ جدید، هر فلوی نیمه‌کارهٔ FSM را لغو می‌کند
     info = detect(message)
     if info is None or user is None:
         return
 
-    ref = _new_ref()
     file = File(
-        ref=ref,
+        ref=_new_ref(),
         owner_id=user.id,
         file_unique_id=info.file_unique_id,
         file_id=info.file_id,
@@ -46,11 +44,18 @@ async def on_file(
         mime=info.mime,
         name=info.name,
         size=info.size,
+        changelog=[],
     )
     session.add(file)
     await session.commit()
 
-    await message.answer(card_text(file, lang), reply_markup=file_card_kb(ref, info.kind, lang))
+    # کارت = خودِ فایل، دوباره فرستاده‌شده با کیبورد زیرش
+    await send_card(message.bot, message.chat.id, file, lang)
+    # پیامِ آپلودیِ کاربر را پاک کن تا چت تمیز بماند (در چتِ خصوصی مجاز است)
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @router.message()
