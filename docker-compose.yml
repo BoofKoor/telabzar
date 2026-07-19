@@ -1,0 +1,72 @@
+# تل‌ابزار — Master stack (Milestone 1)
+# سرویس‌ها: local-bot-api · postgres · redis · bot (webhook)
+name: telabzar
+
+services:
+  local-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TG_API_ID}
+      TELEGRAM_API_HASH: ${TG_API_HASH}
+      TELEGRAM_LOCAL: 1
+    volumes:
+      - tg-bot-api-data:/var/lib/telegram-bot-api
+    expose:
+      - "8081"
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  bot:
+    build:
+      context: .
+      dockerfile: docker/bot.Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LOCAL_API_BASE: http://local-bot-api:8081
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      WEBHOOK_HOST: http://bot:8080
+    depends_on:
+      local-bot-api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # فایل‌های دانلودشده توسط سرور محلی (برای پردازش در M2)
+      - tg-bot-api-data:/var/lib/telegram-bot-api:ro
+    expose:
+      - "8080"
+
+volumes:
+  tg-bot-api-data:
+  pg-data:
+  redis-data:
