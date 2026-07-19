@@ -7,23 +7,33 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from .callbacks import Act, Conv, Lang
 from .i18n import t
 
-# عملیاتِ مختصِ هر نوع: (op, ترجمه‌کلید)
-TYPE_OPS: dict[str, list[tuple[str, str]]] = {
-    "audio": [("meta", "btn_meta"), ("transcribe", "btn_transcribe")],
-    "image": [("bg_remove", "btn_bg_remove")],
-    "video": [("to_gif", "btn_to_gif")],
-    "document": [("to_pdf", "btn_to_pdf")],
-    "archive": [("list_zip", "btn_list"), ("extract", "btn_extract")],
+# عملیاتِ مرتبط با هر نوعِ فایل (فقط کلیدهایی که برای آن نوع معنا دارند).
+# ترتیب: عملیاتِ مختصِ نوع اول، بعد عمومی‌های مرتبط.
+OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
+    "image": [
+        ("bg_remove", "btn_bg_remove"), ("convert", "btn_convert"),
+        ("compress", "btn_compress"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+    ],
+    "video": [
+        ("to_gif", "btn_to_gif"), ("thumb", "btn_thumb"), ("convert", "btn_convert"),
+        ("compress", "btn_compress"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+    ],
+    "audio": [
+        ("meta", "btn_meta"), ("transcribe", "btn_transcribe"), ("convert", "btn_convert"),
+        ("compress", "btn_compress"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+    ],
+    "document": [
+        ("to_pdf", "btn_to_pdf"), ("convert", "btn_convert"), ("compress", "btn_compress"),
+        ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+    ],
+    "archive": [
+        ("list_zip", "btn_list"), ("extract", "btn_extract"),
+        ("scan", "btn_scan"), ("rename", "btn_rename"),
+    ],
 }
-
-# عملیاتِ عمومی روی همهٔ فایل‌ها
-GENERAL_OPS: list[tuple[str, str]] = [
-    ("convert", "btn_convert"),
-    ("compress", "btn_compress"),
-    ("rename", "btn_rename"),
-    ("thumb", "btn_thumb"),
-    ("zip", "btn_zip"),
-    ("scan", "btn_scan"),
+_DEFAULT_OPS: list[tuple[str, str]] = [
+    ("convert", "btn_convert"), ("compress", "btn_compress"),
+    ("rename", "btn_rename"), ("scan", "btn_scan"), ("zip", "btn_zip"),
 ]
 
 # عملیاتی که در M2 واقعاً کار می‌کنند
@@ -46,21 +56,16 @@ def lang_keyboard() -> InlineKeyboardMarkup:
 
 def file_card_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    sizes: list[int] = []
-
-    type_ops = TYPE_OPS.get(kind, [])
-    for op, key in type_ops:
+    ops = OPS_BY_KIND.get(kind, _DEFAULT_OPS)
+    for op, key in ops:
         b.button(text=t(lang, key), callback_data=Act(op=op, ref=ref))
-    if type_ops:
-        sizes.append(len(type_ops))
-
-    for op, key in GENERAL_OPS:
-        b.button(text=t(lang, key), callback_data=Act(op=op, ref=ref))
-    sizes += [3, 3]  # شش عملیاتِ عمومی در دو ردیفِ سه‌تایی
-
     b.button(text=t(lang, "btn_close"), callback_data=Act(op="close", ref=ref))
-    sizes.append(1)
 
+    n = len(ops)
+    sizes = [3] * (n // 3)
+    if n % 3:
+        sizes.append(n % 3)
+    sizes.append(1)  # «بستن» در ردیفِ خودش
     b.adjust(*sizes)
     return b.as_markup()
 
