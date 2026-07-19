@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import zipfile
 
 from PIL import Image
 
 FFMPEG = "ffmpeg"
+FFPROBE = "ffprobe"
 SEVENZ = "7z"
 
 
@@ -106,6 +108,46 @@ async def convert_video(inp: str, out: str, fmt: str) -> None:
         ]
     args.append(out)
     await _run(args)
+
+
+# ── ویدیو → GIF (پالت دومرحله‌ای برای کیفیت؛ سقفِ ۱۰ ثانیه و عرضِ ۴۸۰) ─
+async def video_to_gif(inp: str, out: str) -> None:
+    vf = ("fps=12,scale=480:-1:flags=lanczos,split[s0][s1];"
+          "[s0]palettegen[p];[s1][p]paletteuse")
+    await _run([FFMPEG, "-y", "-i", inp, "-t", "10", "-vf", vf, "-loop", "0", out])
+    if not os.path.exists(out):
+        raise RuntimeError("GIF generation produced no output")
+
+
+# ── تامبنیلِ ویدیو (فریمِ نماینده با فیلترِ thumbnail) ──────────
+async def video_thumbnail(inp: str, out: str) -> None:
+    await _run([
+        FFMPEG, "-y", "-i", inp,
+        "-vf", "thumbnail,scale=640:-1", "-frames:v", "1", "-q:v", "3", out,
+    ])
+    if not os.path.exists(out):
+        raise RuntimeError("thumbnail extraction produced no output")
+
+
+# ── متادیتای صوت (ffprobe؛ بدونِ وابستگیِ جدید) ─────────────────
+async def audio_metadata(inp: str) -> dict:
+    """{'format': {...}, 'tags': {lower: value}, 'stream': {...}} از ffprobe."""
+    proc = await asyncio.create_subprocess_exec(
+        FFPROBE, "-v", "quiet", "-print_format", "json",
+        "-show_format", "-show_streams", inp,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+    )
+    out, _ = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError("cannot read metadata")
+    data = json.loads(out.decode("utf-8", "ignore") or "{}")
+    fmt = data.get("format", {}) or {}
+    tags = {str(k).lower(): v for k, v in (fmt.get("tags") or {}).items()}
+    stream = next(
+        (s for s in data.get("streams", []) if s.get("codec_type") == "audio"),
+        {},
+    )
+    return {"format": fmt, "tags": tags, "stream": stream}
 
 
 # ── زیپ ────────────────────────────────────────────────────────

@@ -36,6 +36,13 @@ def _safe_stem(name: str | None, default: str = "file") -> str:
     return stem or default
 
 
+def _fmt_dur(seconds: float) -> str:
+    s = int(seconds)
+    h, s = divmod(s, 3600)
+    m, s = divmod(s, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
 async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
     """پردازش → یا {path, filename, label} (رسانه‌ساز) یا {note_only, label} (بررسی)."""
     stem = _safe_stem(file.name)
@@ -106,6 +113,44 @@ async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir
         files = await P.archive_extract(inpath, workdir, settings.max_extract_files, settings.max_extract_mb)
         return {"note_only": True, "label": t(lang, "cl_extract", n=len(files)), "files": files}
 
+    if op == "to_gif":
+        out = os.path.join(workdir, f"{stem}.gif")
+        await P.video_to_gif(inpath, out)
+        return {"send_media": {"as": "animation", "path": out, "filename": f"{stem}.gif"},
+                "label": t(lang, "cl_gif")}
+
+    if op == "thumb":
+        out = os.path.join(workdir, f"{stem}-thumb.jpg")
+        await P.video_thumbnail(inpath, out)
+        return {"send_media": {"as": "photo", "path": out, "filename": f"{stem}.jpg"},
+                "label": t(lang, "cl_thumb")}
+
+    if op == "meta":
+        m = await P.audio_metadata(inpath)
+        tags, fmt, st = m["tags"], m["format"], m["stream"]
+        rows: list[tuple[str, str]] = []
+        for key in ("title", "artist", "album", "album_artist", "date", "genre", "track"):
+            if tags.get(key):
+                rows.append((key, str(tags[key])))
+        dur = float(fmt.get("duration") or 0)
+        if dur:
+            rows.append(("duration", _fmt_dur(dur)))
+        br = str(fmt.get("bit_rate") or "")
+        if br.isdigit():
+            rows.append(("bitrate", f"{int(br) // 1000} kbps"))
+        if st.get("codec_name"):
+            rows.append(("codec", str(st["codec_name"])))
+        if st.get("sample_rate"):
+            rows.append(("sample rate", f"{st['sample_rate']} Hz"))
+        if st.get("channels"):
+            rows.append(("channels", str(st["channels"])))
+        lines = [t(lang, "meta_header")]
+        if rows:
+            lines += [f"• <b>{escape(k)}</b>: <code>{escape(v)}</code>" for k, v in rows]
+        else:
+            lines.append(t(lang, "meta_empty"))
+        return {"note_only": True, "label": t(lang, "cl_meta"), "message": "\n".join(lines)}
+
     raise RuntimeError(f"unknown op: {op}")
 
 
@@ -141,7 +186,27 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             job.error = str(exc)[:500]
             await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
         else:
-            if res.get("files") is not None:
+            if res.get("send_media") is not None:
+                # آرتیفکتِ رسانه‌ایِ جدا (GIF/تامبنیل) → پیامِ جدا؛ کارت دست‌نخورده
+                sm = res["send_media"]
+                p = sm["path"]
+                src = FSInputFile(p, filename=sm.get("filename") or os.path.basename(p))
+                try:
+                    if sm["as"] == "animation":
+                        await bot.send_animation(chat_id, src)
+                    elif sm["as"] == "photo":
+                        await bot.send_photo(chat_id, src)
+                    else:
+                        await bot.send_document(chat_id, src)
+                    file.changelog = list(file.changelog or []) + [res["label"]]
+                    await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+                    job.status = "done"
+                except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ بدونِ بن‌بست
+                    log.exception("job %s artifact delivery failed", job_id)
+                    job.status = "failed"
+                    job.error = str(exc)[:500]
+                    await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
+            elif res.get("files") is not None:
                 # خروجیِ چندفایلی (استخراج) → هر کدام را جدا بفرست؛ کارت دست‌نخورده
                 for p in res["files"]:
                     try:
