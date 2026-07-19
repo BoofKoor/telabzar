@@ -45,4 +45,10 @@ MESSAGES: dict[str, str] = {
     "cl_rename": "✏️ تغییر نام → {name}",
     "cl_compress": "🗜 کاهش حجم",
     "cl_convert": "🔄 تبدیل به {fmt}",
+    "cl_scan_clean": "🛡 اسکن: امن ✓",
+    "cl_scan_infected": "⚠️ اسکن: آلوده — {name}",
+    "cl_scan_unavailable": "🛡 اسکن فعلاً در دسترس نیست",
+    # محدودیت‌ها
+    "limit_rate": "یه کم سریع رفتی! چند لحظه صبر کن ⏳",
+    "limit_quota": "به سقفِ روزانهٔ عملیات رسیدی. فردا دوباره امتحان کن.",
 }

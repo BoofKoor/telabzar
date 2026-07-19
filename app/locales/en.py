@@ -45,4 +45,10 @@ MESSAGES: dict[str, str] = {
     "cl_rename": "✏️ Renamed → {name}",
     "cl_compress": "🗜 Compressed",
     "cl_convert": "🔄 Converted to {fmt}",
+    "cl_scan_clean": "🛡 Scan: clean ✓",
+    "cl_scan_infected": "⚠️ Scan: infected — {name}",
+    "cl_scan_unavailable": "🛡 Scan is temporarily unavailable",
+    # limits
+    "limit_rate": "A bit too fast! Please wait a moment ⏳",
+    "limit_quota": "You've hit today's operation limit. Try again tomorrow.",
 }

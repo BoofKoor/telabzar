@@ -15,14 +15,8 @@ class Settings(BaseSettings):
     admin_ids: str = ""
     max_file_mb: int = 2000
 
-    # سرورِ محلیِ Bot API
+    # سرورِ محلیِ Bot API (ربات با long-polling به آن وصل می‌شود)
     local_api_base: str = "http://local-bot-api:8081"
-
-    # وبهوک (داخلی — local-bot-api آپدیت‌ها را به این آدرس می‌فرستد)
-    webhook_host: str = "http://bot:8080"
-    webhook_path: str = "/webhook"
-    webhook_secret: str = "dev-secret"
-    web_port: int = 8080
 
     # داده
     redis_url: str = "redis://redis:6379/0"
@@ -33,9 +27,13 @@ class Settings(BaseSettings):
     # پردازش (ورکر)
     work_dir: str = "/work"
 
-    @property
-    def webhook_url(self) -> str:
-        return f"{self.webhook_host}{self.webhook_path}"
+    # امنیت
+    clamav_host: str = "clamav"
+    clamav_port: int = 3310
+
+    # کنترلِ سوءاستفاده (بات عمومی)
+    daily_op_quota: int = 50
+    rate_per_min: int = 12
 
     @property
     def admin_id_set(self) -> set[int]:

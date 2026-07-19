@@ -1,6 +1,7 @@
 """تابعِ ARQ (ورکر): دانلود (مسیرِ لوکال) → پردازش → به‌روزرسانیِ درجای کارت → پاکسازی.
 
-موفق: کارت با فایلِ ادیت‌شده + لاگِ تغییرات به‌روزرسانی می‌شود.
+عملیاتِ رسانه‌ساز (تبدیل/فشرده/تغییرنام): کارت درجا با فایلِ جدید به‌روزرسانی می‌شود.
+عملیاتِ بررسی (اسکن): فقط لاگِ تغییرات + کپشن عوض می‌شود (فایل دست‌نخورده).
 ناموفق: کارت به منوی اصلی + هشدار برمی‌گردد (بدونِ بن‌بست).
 """
 from __future__ import annotations
@@ -21,6 +22,7 @@ from .config import settings
 from .db import Sessionmaker
 from .i18n import t
 from .models import File, Job
+from .security import ScanUnavailable, scan_file
 
 log = logging.getLogger("telabzar.worker")
 
@@ -31,9 +33,18 @@ def _safe_stem(name: str | None, default: str = "file") -> str:
     return stem or default
 
 
-async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir: str, lang: str) -> dict[str, str]:
-    """پردازش → {path, filename, label}."""
+async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
+    """پردازش → یا {path, filename, label} (رسانه‌ساز) یا {note_only, label} (بررسی)."""
     stem = _safe_stem(file.name)
+
+    if op == "scan":
+        try:
+            status, name = await scan_file(inpath)
+        except ScanUnavailable:
+            return {"note_only": True, "label": t(lang, "cl_scan_unavailable")}
+        if status == "OK":
+            return {"note_only": True, "label": t(lang, "cl_scan_clean")}
+        return {"note_only": True, "label": t(lang, "cl_scan_infected", name=name or "?")}
 
     if op == "rename":
         new = re.sub(r"[\\/\x00]+", "_", (args.get("new_name") or "file").strip())[:120] or "file"
@@ -97,33 +108,39 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             if not inpath or not os.path.exists(inpath):
                 raise RuntimeError("input file not found on disk")
             res = await _do_op(job.op, job.args or {}, file, inpath, workdir, lang)
-        except Exception as exc:  # noqa: BLE001  — پردازش شکست خورد؛ فایل هنوز دست‌نخورده است
+        except Exception as exc:  # noqa: BLE001  — پردازش شکست خورد؛ فایل دست‌نخورده
             log.exception("job %s processing failed", job_id)
             job.status = "failed"
             job.error = str(exc)[:500]
             await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
         else:
-            # پردازش موفق → فیلدهای فایل را به نسخهٔ جدید تغییر بده و کارت را درجا به‌روزرسانی کن
-            orig = (file.name, file.size, list(file.changelog or []))
-            outpath = res["path"]
-            file.name = res["filename"]
-            if os.path.exists(outpath):
-                file.size = os.path.getsize(outpath)
-            file.changelog = list(file.changelog or []) + [res["label"]]
-            try:
-                sent = await update_card(bot, chat_id, card_mid, file, lang, path=outpath)
-                fid, fuid = message_media_id(sent)
-                if fid:
-                    file.file_id = fid
-                if fuid:
-                    file.file_unique_id = fuid
+            if res.get("note_only"):
+                # عملیاتِ بررسی (اسکن) → فقط لاگ + کپشن؛ رسانه دست‌نخورده
+                file.changelog = list(file.changelog or []) + [res["label"]]
+                await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
                 job.status = "done"
-            except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ فایل را برگردان
-                log.exception("job %s delivery failed", job_id)
-                file.name, file.size, file.changelog = orig
-                job.status = "failed"
-                job.error = str(exc)[:500]
-                await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
+            else:
+                # عملیاتِ رسانه‌ساز → فیلدهای فایل را عوض کن و کارت را درجا به‌روزرسانی کن
+                orig = (file.name, file.size, list(file.changelog or []))
+                outpath = res["path"]
+                file.name = res["filename"]
+                if os.path.exists(outpath):
+                    file.size = os.path.getsize(outpath)
+                file.changelog = list(file.changelog or []) + [res["label"]]
+                try:
+                    sent = await update_card(bot, chat_id, card_mid, file, lang, path=outpath)
+                    fid, fuid = message_media_id(sent)
+                    if fid:
+                        file.file_id = fid
+                    if fuid:
+                        file.file_unique_id = fuid
+                    job.status = "done"
+                except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ فایل را برگردان
+                    log.exception("job %s delivery failed", job_id)
+                    file.name, file.size, file.changelog = orig
+                    job.status = "failed"
+                    job.error = str(exc)[:500]
+                    await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
         finally:
             job.finished_at = datetime.now(timezone.utc)
             await session.commit()
