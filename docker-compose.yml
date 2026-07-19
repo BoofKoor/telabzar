@@ -61,12 +61,35 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      # فایل‌های دانلودشده توسط سرور محلی (برای پردازش در M2)
+      # فایل‌های دانلودشده توسط سرور محلی (خواندن مسیرِ لوکال)
       - tg-bot-api-data:/var/lib/telegram-bot-api:ro
     expose:
       - "8080"
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LOCAL_API_BASE: http://local-bot-api:8081
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      WORK_DIR: /work
+    depends_on:
+      local-bot-api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - tg-bot-api-data:/var/lib/telegram-bot-api:ro  # خواندن ورودی
+      - work-data:/work                               # خروجیِ موقتِ پردازش
 
 volumes:
   tg-bot-api-data:
   pg-data:
   redis-data:
+  work-data:

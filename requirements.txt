@@ -3,3 +3,4 @@ SQLAlchemy[asyncio]>=2.0,<2.1
 asyncpg>=0.30,<0.31
 redis>=5.2,<6
 pydantic-settings>=2.5,<3
+arq>=0.26,<1

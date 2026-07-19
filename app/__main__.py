@@ -8,6 +8,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
+from arq import create_pool
+from arq.connections import RedisSettings
 
 from .bot import create_bot, create_dispatcher
 from .config import settings
@@ -63,10 +65,17 @@ def main() -> None:
 
     async def on_startup(bot: Bot) -> None:
         await _wait_db()
+        # استخرِ ARQ برای صف‌گذاریِ جاب‌ها → به هندلرها تزریق می‌شود
+        dp.workflow_data["arq_pool"] = await create_pool(
+            RedisSettings.from_dsn(settings.redis_url)
+        )
         await _register_webhook(bot, dp)
         await _set_commands(bot)
 
     async def on_shutdown(bot: Bot) -> None:
+        pool = dp.workflow_data.get("arq_pool")
+        if pool is not None:
+            await pool.aclose()
         try:
             await bot.delete_webhook()
         except Exception:  # noqa: BLE001

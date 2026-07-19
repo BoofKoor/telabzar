@@ -31,4 +31,13 @@ MESSAGES: dict[str, str] = {
     "btn_to_pdf": "To PDF",
     "btn_list": "List contents",
     "btn_extract": "Extract",
+    "btn_back": "‹ Back",
+    # processing
+    "queued": "Queued… ⏳",
+    "processing": "Processing… ⚙️",
+    "done": "✓ Done — need another action?",
+    "failed": "❌ Processing failed. Please try again.",
+    "ask_new_name": "Send the new file name ✍️",
+    "choose_format": "Choose the target format:",
+    "too_large": "This file exceeds the limit ({mb}MB).",
 }

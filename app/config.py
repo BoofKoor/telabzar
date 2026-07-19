@@ -30,6 +30,9 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://telabzar:telabzar@postgres:5432/telabzar"
     )
 
+    # پردازش (ورکر)
+    work_dir: str = "/work"
+
     @property
     def webhook_url(self) -> str:
         return f"{self.webhook_host}{self.webhook_path}"

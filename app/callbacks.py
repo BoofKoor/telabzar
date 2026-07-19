@@ -11,3 +11,8 @@ class Lang(CallbackData, prefix="lang"):
 class Act(CallbackData, prefix="act"):
     op: str
     ref: str
+
+
+class Conv(CallbackData, prefix="cv"):
+    ref: str
+    fmt: str

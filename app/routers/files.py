@@ -1,14 +1,15 @@
-"""دریافتِ فایل → کارتِ عملیات. (M1: عملیات‌ها placeholder)."""
+"""دریافتِ فایل → کارتِ عملیات."""
 from __future__ import annotations
 
 import secrets
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..callbacks import Act
-from ..filetypes import detect, human_size
+from ..cards import card_text
+from ..filetypes import detect
 from ..i18n import t
 from ..keyboards import file_card_kb
 from ..models import File, User
@@ -27,47 +28,29 @@ def _new_ref() -> str:
 
 @router.message(FILE_FILTER)
 async def on_file(
-    message: Message, session: AsyncSession, user: User | None, lang: str
+    message: Message, session: AsyncSession, user: User | None,
+    lang: str, state: FSMContext,
 ) -> None:
+    await state.clear()  # ارسالِ فایلِ جدید، هر فلوی نیمه‌کارهٔ FSM را لغو می‌کند
     info = detect(message)
     if info is None or user is None:
         return
 
     ref = _new_ref()
-    session.add(
-        File(
-            ref=ref,
-            owner_id=user.id,
-            file_unique_id=info.file_unique_id,
-            file_id=info.file_id,
-            kind=info.kind,
-            mime=info.mime,
-            name=info.name,
-            size=info.size,
-        )
+    file = File(
+        ref=ref,
+        owner_id=user.id,
+        file_unique_id=info.file_unique_id,
+        file_id=info.file_id,
+        kind=info.kind,
+        mime=info.mime,
+        name=info.name,
+        size=info.size,
     )
+    session.add(file)
     await session.commit()
 
-    caption = t(
-        lang,
-        f"detected_{info.kind}",
-        name=info.name or "—",
-        size=human_size(info.size),
-    )
-    await message.answer(caption, reply_markup=file_card_kb(ref, info.kind, lang))
-
-
-@router.callback_query(Act.filter(F.op == "close"))
-async def close_card(cq: CallbackQuery, lang: str) -> None:
-    if isinstance(cq.message, Message):
-        await cq.message.delete()
-    await cq.answer(t(lang, "card_closed"))
-
-
-@router.callback_query(Act.filter())
-async def op_placeholder(cq: CallbackQuery, lang: str) -> None:
-    # M1: عملیاتِ واقعی در M2 اضافه می‌شود.
-    await cq.answer(t(lang, "coming_soon"), show_alert=True)
+    await message.answer(card_text(file, lang), reply_markup=file_card_kb(ref, info.kind, lang))
 
 
 @router.message()
