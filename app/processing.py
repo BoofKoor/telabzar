@@ -21,10 +21,12 @@ async def _run(cmd: list[str], timeout: float = 600) -> None:
         await proc.wait()
         raise RuntimeError("processing timed out") from None
     if proc.returncode != 0:
-        tail = (err or b"").decode("utf-8", "ignore").strip().splitlines()[-1:]
-        raise RuntimeError("ffmpeg failed: " + (tail[0] if tail else "unknown"))
+        lines = [ln for ln in (err or b"").decode("utf-8", "ignore").splitlines() if ln.strip()]
+        detail = " | ".join(lines[-3:]) if lines else "unknown error"
+        raise RuntimeError("ffmpeg failed: " + detail)
 
 
+# ── تصویر (Pillow) ─────────────────────────────────────────────
 def _flatten_rgb(img: Image.Image) -> Image.Image:
     if img.mode in ("RGBA", "LA", "P"):
         img = img.convert("RGBA")
@@ -35,9 +37,7 @@ def _flatten_rgb(img: Image.Image) -> Image.Image:
 
 
 def _compress_image_sync(inp: str, out: str) -> None:
-    img = Image.open(inp)
-    img = _flatten_rgb(img)
-    img.save(out, "JPEG", quality=70, optimize=True)
+    _flatten_rgb(Image.open(inp)).save(out, "JPEG", quality=70, optimize=True)
 
 
 def _convert_image_sync(inp: str, out: str, fmt: str) -> None:
@@ -61,6 +61,29 @@ async def convert_image(inp: str, out: str, fmt: str) -> None:
     await asyncio.to_thread(_convert_image_sync, inp, out, fmt)
 
 
+# ── صوت (ffmpeg) ───────────────────────────────────────────────
+# نکته: '-vn' کاورآرتِ جاسازی‌شده در MP3 را دراپ می‌کند تا تبدیل به
+# ogg/m4a شکست نخورد.
+_AUDIO_CODEC: dict[str, list[str]] = {
+    "mp3": ["-c:a", "libmp3lame", "-b:a", "192k"],
+    "m4a": ["-c:a", "aac", "-b:a", "192k"],
+    "ogg": ["-c:a", "libvorbis", "-q:a", "5"],
+    "opus": ["-c:a", "libopus", "-b:a", "128k"],
+    "wav": ["-c:a", "pcm_s16le"],
+    "flac": ["-c:a", "flac"],
+}
+
+
+async def compress_audio(inp: str, out: str) -> None:
+    await _run([FFMPEG, "-y", "-i", inp, "-vn", "-c:a", "libmp3lame", "-b:a", "128k", out])
+
+
+async def convert_audio(inp: str, out: str, fmt: str) -> None:
+    codec = _AUDIO_CODEC.get(fmt.lower(), [])
+    await _run([FFMPEG, "-y", "-i", inp, "-vn", *codec, out])
+
+
+# ── ویدیو (ffmpeg) ─────────────────────────────────────────────
 async def compress_video(inp: str, out: str) -> None:
     await _run([
         FFMPEG, "-y", "-i", inp,
@@ -71,13 +94,9 @@ async def compress_video(inp: str, out: str) -> None:
     ])
 
 
-async def compress_audio(inp: str, out: str) -> None:
-    await _run([FFMPEG, "-y", "-i", inp, "-c:a", "libmp3lame", "-b:a", "128k", out])
-
-
-async def convert_av(inp: str, out: str, fmt: str) -> None:
+async def convert_video(inp: str, out: str, fmt: str) -> None:
     args = [FFMPEG, "-y", "-i", inp]
-    if fmt == "mp4":
+    if fmt.lower() == "mp4":
         args += [
             "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
             "-c:a", "aac", "-movflags", "+faststart",

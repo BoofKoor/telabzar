@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import FSInputFile
 
 from . import processing as P
@@ -63,29 +64,37 @@ async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir
         if file.kind == "image":
             await P.convert_image(inpath, out, fmt)
             return {"path": out, "filename": f"{stem}.{fmt}", "send_as": "document"}
-        if file.kind in ("video", "audio"):
-            await P.convert_av(inpath, out, fmt)
-            if file.kind == "video" and fmt in ("mp4", "webm"):
-                send = "video"
-            elif file.kind == "audio" and fmt in ("mp3", "m4a", "ogg"):
-                send = "audio"
-            else:
-                send = "document"
+        if file.kind == "audio":
+            await P.convert_audio(inpath, out, fmt)
+            send = "audio" if fmt in ("mp3", "m4a", "ogg") else "document"
+            return {"path": out, "filename": f"{stem}.{fmt}", "send_as": send}
+        if file.kind == "video":
+            await P.convert_video(inpath, out, fmt)
+            send = "video" if fmt in ("mp4", "webm") else "document"
             return {"path": out, "filename": f"{stem}.{fmt}", "send_as": send}
         raise RuntimeError("convert not supported for this type")
 
     raise RuntimeError(f"unknown op: {op}")
 
 
+def _infile(res: dict[str, str]) -> FSInputFile:
+    return FSInputFile(res["path"], filename=res["filename"])
+
+
 async def _send_result(bot: Bot, chat_id: int, res: dict[str, str]) -> None:
-    file = FSInputFile(res["path"], filename=res["filename"])
     send_as = res["send_as"]
-    if send_as == "video":
-        await bot.send_video(chat_id, file)
-    elif send_as == "audio":
-        await bot.send_audio(chat_id, file)
-    else:
-        await bot.send_document(chat_id, file)
+    try:
+        if send_as == "video":
+            await bot.send_video(chat_id, _infile(res))
+        elif send_as == "audio":
+            await bot.send_audio(chat_id, _infile(res))
+        else:
+            await bot.send_document(chat_id, _infile(res))
+    except TelegramBadRequest:
+        # مثلاً VOICE_MESSAGES_FORBIDDEN یا محدودیتِ نوعِ مدیا → به‌صورت سند بفرست
+        if send_as == "document":
+            raise
+        await bot.send_document(chat_id, _infile(res))
 
 
 async def _safe_edit(bot: Bot, chat_id: int, message_id: int, text: str, markup=None) -> None:
