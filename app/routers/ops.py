@@ -99,8 +99,10 @@ async def op_scan(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
     await _start(cq, file, lang, arq_pool, session, "scan", {}, user)
 
 
-# ── سند/آرشیو: عملیاتِ مستقیم (zip · to_pdf · list_zip · extract) ─
-_DIRECT_OPS = {"zip", "to_pdf", "list_zip", "extract"}
+# ── عملیاتِ مستقیم (بدونِ منو/ورودی): enqueue و تمام ───────────
+# سند/آرشیو: zip · to_pdf · list_zip · extract
+# رسانه:      to_gif · thumb (ویدیو) · meta (صوت)
+_DIRECT_OPS = {"zip", "to_pdf", "list_zip", "extract", "to_gif", "thumb", "meta"}
 
 
 @router.callback_query(Act.filter(F.op.in_(_DIRECT_OPS)))

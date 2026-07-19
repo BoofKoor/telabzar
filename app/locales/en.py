@@ -53,6 +53,11 @@ MESSAGES: dict[str, str] = {
     "cl_list": "📋 Listed contents ({n} items)",
     "cl_extract": "📤 Extracted ({n} files)",
     "list_header": "📋 <b>Archive contents</b> — {n} items:",
+    "cl_gif": "🎞 Made GIF",
+    "cl_thumb": "🖼 Thumbnail extracted",
+    "cl_meta": "🏷 Read metadata",
+    "meta_header": "🏷 <b>File metadata</b>:",
+    "meta_empty": "— No metadata found.",
     # limits
     "limit_rate": "A bit too fast! Please wait a moment ⏳",
     "limit_quota": "You've hit today's operation limit. Try again tomorrow.",
