@@ -35,9 +35,10 @@ class Settings(BaseSettings):
     max_extract_files: int = 40
     max_extract_mb: int = 500
 
-    # کنترلِ سوءاستفاده (بات عمومی)
-    daily_op_quota: int = 50
-    rate_per_min: int = 12
+    # کنترلِ سوءاستفاده (بات عمومی) — ۰ = نامحدود (خاموش).
+    # فعلاً خاموش؛ بعداً از پنلِ ادمین (M5) مقداردهی می‌شود.
+    daily_op_quota: int = 0
+    rate_per_min: int = 0
 
     @property
     def admin_id_set(self) -> set[int]:
