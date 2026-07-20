@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from datetime import datetime, timezone
 from html import escape
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -500,6 +502,35 @@ async def op_meta_apply(cq: CallbackQuery, callback_data: Act, session: AsyncSes
                         note=t(lang, "processing"), keyboard=False)
     await _enqueue(arq_pool, session, file.id, "meta_write", {"tags": tags, "cover_id": cover_id},
                    cq.message.chat.id, cq.message.message_id, lang)
+
+
+# ── لینکِ دانلود/استریم ─────────────────────────────────────────
+@router.callback_query(Act.filter(F.op == "link"))
+async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if not settings.public_base:
+        await cq.answer(t(lang, "link_unconfigured"), show_alert=True)
+        return
+    if not file.dl_token:
+        file.dl_token = secrets.token_urlsafe(18)[:24]
+        await session.commit()
+    base = settings.public_base.rstrip("/")
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_dl"), url=f"{base}/dl/{file.dl_token}")
+    if file.kind in ("video", "audio"):
+        b.button(text=t(lang, "btn_stream"), url=f"{base}/s/{file.dl_token}")
+    b.adjust(2)
+    try:
+        await cq.message.answer(
+            t(lang, "link_ready", name=escape(file.name or "file")),
+            reply_markup=b.as_markup(),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
 
 
 # ── بستن ───────────────────────────────────────────────────────

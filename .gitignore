@@ -18,3 +18,7 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Cloudflare origin cert material (never commit)
+certs/*.pem
+certs/*.key

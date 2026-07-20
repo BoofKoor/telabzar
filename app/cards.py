@@ -28,10 +28,45 @@ _ICON = {"document": "🗎", "image": "🖼", "video": "🎬", "audio": "🎵",
 _INPUT_MEDIA = {"image": InputMediaPhoto, "video": InputMediaVideo, "audio": InputMediaAudio}
 
 
+def _fmt_dur(seconds: int | None) -> str | None:
+    if not seconds:
+        return None
+    s = int(seconds)
+    h, s = divmod(s, 3600)
+    m, s = divmod(s, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _format_label(file: File) -> str | None:
+    if file.name and "." in file.name:
+        ext = file.name.rsplit(".", 1)[1]
+        if 1 <= len(ext) <= 5:
+            return ext.upper()
+    if file.mime and "/" in file.mime:
+        return file.mime.split("/", 1)[1].upper()[:6]
+    return None
+
+
+def _info_line(file: File) -> str:
+    """خطِ اطلاعات: حجم · ابعاد · مدت · فرمت (فقط مواردِ موجود)."""
+    parts = [f"<code>{human_size(file.size)}</code>"]
+    if file.width and file.height:
+        parts.append(f"{file.width}×{file.height}")
+    dur = _fmt_dur(file.duration)
+    if dur:
+        parts.append(f"⏱ {dur}")
+    fmt = _format_label(file)
+    if fmt:
+        parts.append(fmt)
+    return "  ·  ".join(parts)
+
+
 def card_caption(file: File, lang: str, note: str | None = None) -> str:
     icon = _ICON.get(file.kind, "📄")
-    head = f"{icon} <b>{escape(file.name or '—')}</b>  ·  <code>{human_size(file.size)}</code>"
-    lines = [head]
+    lines = [
+        f"{icon} <b>{escape(file.name or '—')}</b>",
+        _info_line(file),
+    ]
     changelog = file.changelog or []
     if changelog:
         body = "\n".join(escape(x) for x in changelog[-8:])
