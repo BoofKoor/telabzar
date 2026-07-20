@@ -99,6 +99,39 @@ async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang:
         return msg
 
 
+def _meta_editor_note(lang: str, file: File, pending: dict) -> str:
+    from .keyboards import FIELD_LABEL
+
+    def label(k: str) -> str:
+        return escape(t(lang, FIELD_LABEL.get(k, k)))
+
+    lines = [t(lang, "meta_edit_prompt")]
+    current = file.meta
+    if current is None:
+        lines.append(t(lang, "meta_reading"))
+    elif current:
+        body = "\n".join(f"{label(k)}: {escape(str(v)[:60])}" for k, v in current.items() if v)
+        lines.append(f"{t(lang, 'meta_current_header')}\n<blockquote>{body}</blockquote>"
+                     if body else t(lang, "meta_current_empty"))
+    else:
+        lines.append(t(lang, "meta_current_empty"))
+    if pending:
+        rows = []
+        for k, v in pending.items():
+            if k == "_cover":
+                rows.append(f"{escape(t(lang, 'btn_f_cover'))}: {t(lang, 'meta_cover_new')}")
+            else:
+                rows.append(f"{label(k)}: {escape(str(v)[:60])}")
+        lines.append(f"{t(lang, 'meta_pending_header')}\n<blockquote>" + "\n".join(rows) + "</blockquote>")
+    return "\n".join(lines)
+
+
+def meta_editor_view(file: File, lang: str, pending: dict):
+    """(caption, keyboard) برای ویرایشگرِ متادیتا — اطلاعاتِ فعلی + تغییراتِ آماده."""
+    from .keyboards import meta_edit_kb
+    return card_caption(file, lang, note=_meta_editor_note(lang, file, pending)), meta_edit_kb(file.ref, lang)
+
+
 async def move_card_below(bot: Bot, chat_id: int, old_message_id: int, file: File, lang: str) -> Message:
     """کارتِ تازه پایینِ چت می‌فرستد و کارتِ قدیمی را پاک می‌کند.
 

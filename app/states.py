@@ -14,5 +14,6 @@ class ZipCollect(StatesGroup):
 
 
 class MetaEdit(StatesGroup):
-    choosing = State()       # انتخابِ فیلد برای ویرایش
-    waiting_value = State()  # منتظرِ مقدارِ جدیدِ فیلد
+    choosing = State()        # انتخابِ فیلد برای ویرایش
+    waiting_value = State()   # منتظرِ مقدارِ متنیِ فیلد
+    waiting_cover = State()   # منتظرِ عکسِ کاور

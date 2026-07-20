@@ -14,6 +14,7 @@ from .config import settings
 # مهاجرت‌های سبک (تا وقتی Alembic اضافه شود): افزودنِ ستون‌ها به جدولِ موجود.
 _MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS changelog JSON DEFAULT '[]'",
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS meta JSON",
 ]
 
 

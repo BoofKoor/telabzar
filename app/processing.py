@@ -180,9 +180,19 @@ async def make_zip_many(members: list[tuple[str, str]], out: str) -> None:
     await asyncio.to_thread(_zip_many_sync, members, out)
 
 
-# ── نوشتنِ متادیتای صوت (ffmpeg -metadata؛ بدونِ رمزگذاریِ دوباره) ─
-async def write_audio_metadata(inp: str, out: str, tags: dict[str, str]) -> None:
-    args = [FFMPEG, "-y", "-i", inp, "-map", "0", "-c", "copy"]
+# ── نوشتنِ متادیتای صوت + کاور (ffmpeg؛ بدونِ رمزگذاریِ دوباره) ──
+async def write_audio_metadata(inp: str, out: str, tags: dict[str, str],
+                               cover_path: str | None = None) -> None:
+    args = [FFMPEG, "-y", "-i", inp]
+    if cover_path:
+        # صوت از ورودیِ ۰، کاورِ جدید از ورودیِ ۱ (کاورِ قبلی دراپ می‌شود)
+        args += [
+            "-i", cover_path, "-map", "0:a", "-map", "1:0", "-c", "copy",
+            "-id3v2_version", "3", "-disposition:v", "attached_pic",
+            "-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)",
+        ]
+    else:
+        args += ["-map", "0", "-c", "copy"]
     for key, val in tags.items():
         args += ["-metadata", f"{key}={val}"]
     args.append(out)
