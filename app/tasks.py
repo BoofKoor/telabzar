@@ -187,7 +187,9 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             tg_file = await bot.get_file(file.file_id)
             inpath = tg_file.file_path
             if not inpath or not os.path.exists(inpath):
-                raise RuntimeError("input file not found on disk")
+                # مسیر را در خطا بیاور تا ریشه فوراً معلوم شود:
+                # نسبی → سرور local نیست؛ مطلق → مشکلِ mount یا پرمیشن/capability
+                raise RuntimeError(f"input file not found on disk: {inpath or '(empty)'}"[:200])
             res = await _do_op(job.op, job.args or {}, file, inpath, workdir, lang)
         except Exception as exc:  # noqa: BLE001  — پردازش شکست خورد؛ فایل دست‌نخورده
             log.exception("job %s processing failed", job_id)
