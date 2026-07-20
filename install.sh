@@ -79,8 +79,9 @@ install_master() {
 
   local PUBLIC_BASE="" TLS_CERT="" TLS_KEY="" GW_PORT="8080"
   if [[ -n "$DOMAIN" ]]; then
-    PUBLIC_BASE="https://${DOMAIN}"
-    ask GW_PORT "پورتِ HTTPS روی سرور (Cloudflare معمولاً ۴۴۳)" "443"
+    say "${DIM}اگر ۴۴۳ سرور آزاد است بزن ۴۴۳؛ اگر اشغال است ۸۴۴۳ (کلودفلر هر دو را پروکسی می‌کند).${RESET}"
+    ask GW_PORT "پورتِ HTTPS روی سرور" "8443"
+    if [[ "$GW_PORT" == "443" ]]; then PUBLIC_BASE="https://${DOMAIN}"; else PUBLIC_BASE="https://${DOMAIN}:${GW_PORT}"; fi
     mkdir -p certs
     read_pem certs/cert.pem "۱) سرتیفیکیتِ Origin کلودفلر (Origin Certificate)"
     read_pem certs/key.pem  "۲) کلیدِ خصوصیِ Origin (Private Key)"

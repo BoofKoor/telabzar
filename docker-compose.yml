@@ -102,9 +102,10 @@ services:
     volumes:
       - tg-bot-api-data:/var/lib/telegram-bot-api:ro   # خواندنِ فایلِ لوکال
       - ./certs:/certs:ro                              # سرتیفیکیتِ Origin کلودفلر
-    # میزبان:‏۴۴۳ → کانتینر:۸۰۸۰ (بایندِ غیرِ-privileged؛ نیازی به NET_BIND_SERVICE نیست)
+    # میزبان → کانتینر:۸۰۸۰ (بایندِ غیرِ-privileged؛ نیازی به NET_BIND_SERVICE نیست).
+    # پیش‌فرض ۸۴۴۳ تا با ۴۴۳ِ سرویس‌های دیگر تداخل نکند (کلودفلر ۸۴۴۳ را هم پروکسی می‌کند).
     ports:
-      - "${GATEWAY_HTTPS_PORT:-443}:8080"
+      - "${GATEWAY_HTTPS_PORT:-8443}:8080"
     security_opt:
       - no-new-privileges:true
     cap_drop:
