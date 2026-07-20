@@ -1,11 +1,17 @@
 """کیبوردهای اینلاین."""
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import CopyTextButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .callbacks import Act, Conv, Lang, Meta
+from .callbacks import Act, Cmp, Conv, Lang, Meta
 from .i18n import t
+
+# رزولوشن‌های هدفِ کاهشِ حجمِ ویدیو → (ارتفاع, بیت‌ریتِ ویدیو kbps)
+VIDEO_TARGETS: list[tuple[int, int]] = [
+    (1080, 4000), (720, 2200), (480, 1100), (360, 600), (240, 350),
+]
+VIDEO_KBPS = {h: k for h, k in VIDEO_TARGETS}
 
 # فیلدهای متنیِ قابلِ‌ویرایشِ متادیتای صوت → (کلیدِ ffmpeg, کلیدِ ترجمهٔ دکمه)
 META_FIELDS: list[tuple[str, str]] = [
@@ -17,7 +23,7 @@ FIELD_LABEL: dict[str, str] = {field: key for field, key in META_FIELDS}
 FIELD_LABEL["cover"] = "btn_f_cover"
 
 # نوع‌هایی که کلیدِ اولِ منویشان تمام‌عرض (ردیفِ جدا) نمایش داده می‌شود
-FEATURED_TOP = {"audio"}
+FEATURED_TOP = {"audio", "video"}
 
 # عملیاتِ مرتبط با هر نوعِ فایل (فقط کلیدهایی که برای آن نوع معنا دارند).
 # ترتیب: عملیاتِ مختصِ نوع اول، بعد عمومی‌های مرتبط.
@@ -27,8 +33,9 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("link", "btn_link"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "video": [
-        ("to_gif", "btn_to_gif"), ("thumb", "btn_thumb"), ("convert", "btn_convert"),
-        ("compress", "btn_compress"), ("link", "btn_link"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+        ("link", "btn_link_stream"), ("cover", "btn_cover_v"), ("compress", "btn_compress"),
+        ("convert", "btn_convert"), ("extract_audio", "btn_extract_audio"), ("to_gif", "btn_to_gif"),
+        ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "audio": [
         ("meta", "btn_edit_music"), ("transcribe", "btn_transcribe"), ("convert", "btn_convert"),
@@ -99,6 +106,18 @@ def cancel_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def link_menu_kb(ref: str, lang: str, dl_url: str, stream_url: str, streamable: bool) -> InlineKeyboardMarkup:
+    """زیرمنوی لینک: دانلود/پخش (URL) + کپیِ لینک (CopyTextButton) + بازگشت."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_dl"), url=dl_url)
+    if streamable:
+        b.button(text=t(lang, "btn_stream"), url=stream_url)
+    b.button(text=t(lang, "btn_copy_link"), copy_text=CopyTextButton(text=dl_url))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(2, 1, 1) if streamable else b.adjust(1, 1, 1)
+    return b.as_markup()
+
+
 def collect_kb(ref: str, lang: str, purpose: str) -> InlineKeyboardMarkup:
     """کیبوردِ جمع‌کردنِ فایل — دکمهٔ اجرا بسته به هدف (زیپ یا ادغامِ PDF)."""
     go_key = "btn_merge_go" if purpose == "merge" else "btn_zip_go"
@@ -117,6 +136,28 @@ def meta_edit_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     b.button(text=t(lang, "btn_apply"), callback_data=Act(op="meta_apply", ref=ref))
     b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
     b.adjust(3, 3, 2)  # ۵ فیلد + کاور: ۳+۳ ، بعد اعمال+لغو
+    return b.as_markup()
+
+
+def _est_mb(kbps: int, duration: int | None) -> float | None:
+    if not duration:
+        return None
+    return round((kbps + 128) * duration / 8 / 1024, 1)
+
+
+def compress_menu_kb(ref: str, file, lang: str) -> InlineKeyboardMarkup:
+    """منوی کاهشِ حجمِ ویدیو: رزولوشن‌های پایین‌تر + تخمینِ حجم."""
+    b = InlineKeyboardBuilder()
+    h, dur = file.height or 0, file.duration or 0
+    for th, kbps in VIDEO_TARGETS:
+        if h and th >= h:            # فقط پایین‌تر از کیفیتِ فعلی
+            continue
+        est = _est_mb(kbps, dur)
+        label = f"🔻 {th}p" + (f"  ·  ~{est:g}MB" if est else "")
+        b.button(text=label, callback_data=Cmp(ref=ref, res=str(th)))
+    b.button(text=t(lang, "btn_same_res"), callback_data=Cmp(ref=ref, res="same"))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(1)  # هر گزینه یک ردیف (با تخمینِ حجم خواناتر)
     return b.as_markup()
 
 

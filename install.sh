@@ -12,6 +12,9 @@ die()  { printf "${RED}✗ %s${RESET}\n" "$*" >&2; exit 1; }
 
 rand() { openssl rand -hex "${1:-24}" 2>/dev/null || head -c "${1:-24}" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
+# مقدارِ یک کلید از .envِ موجود (برای حفظِ اسرار هنگامِ reconfigure)
+env_get() { [[ -f .env ]] && sed -n "s/^$1=//p" .env | head -n1 || true; }
+
 ask() { # ask <var> <prompt> [default]
   local __var=$1 __prompt=$2 __def=${3:-} __ans=""
   if [[ -n "$__def" ]]; then
@@ -79,8 +82,9 @@ install_master() {
 
   local PUBLIC_BASE="" TLS_CERT="" TLS_KEY="" GW_PORT="8080"
   if [[ -n "$DOMAIN" ]]; then
-    PUBLIC_BASE="https://${DOMAIN}"
-    ask GW_PORT "پورتِ HTTPS روی سرور (Cloudflare معمولاً ۴۴۳)" "443"
+    say "${DIM}اگر ۴۴۳ سرور آزاد است بزن ۴۴۳؛ اگر اشغال است ۸۴۴۳ (کلودفلر هر دو را پروکسی می‌کند).${RESET}"
+    ask GW_PORT "پورتِ HTTPS روی سرور" "8443"
+    if [[ "$GW_PORT" == "443" ]]; then PUBLIC_BASE="https://${DOMAIN}"; else PUBLIC_BASE="https://${DOMAIN}:${GW_PORT}"; fi
     mkdir -p certs
     read_pem certs/cert.pem "۱) سرتیفیکیتِ Origin کلودفلر (Origin Certificate)"
     read_pem certs/key.pem  "۲) کلیدِ خصوصیِ Origin (Private Key)"
@@ -90,9 +94,11 @@ install_master() {
     warn "بدونِ دامنه؛ دکمهٔ «لینک» تا تنظیمِ دامنه (telabzar reconfigure) غیرفعال است."
   fi
 
+  # اسرارِ ثابت را از .envِ موجود حفظ کن (رمزِ Postgres در ولومِ pg-data پخته
+  # شده؛ بازتولیدِ آن هنگامِ reconfigure اتصالِ دیتابیس را می‌شکند).
   local PG_PASS WH_SECRET
-  PG_PASS=$(rand 18)
-  WH_SECRET=$(rand 24)
+  PG_PASS=$(env_get POSTGRES_PASSWORD); [[ -n "$PG_PASS" ]] || PG_PASS=$(rand 18)
+  WH_SECRET=$(env_get WEBHOOK_SECRET); [[ -n "$WH_SECRET" ]] || WH_SECRET=$(rand 24)
 
   umask 077
   cat > .env <<EOF

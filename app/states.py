@@ -18,3 +18,7 @@ class MetaEdit(StatesGroup):
     choosing = State()        # انتخابِ فیلد برای ویرایش
     waiting_value = State()   # منتظرِ مقدارِ متنیِ فیلد
     waiting_cover = State()   # منتظرِ عکسِ کاور
+
+
+class SetCover(StatesGroup):
+    waiting = State()         # منتظرِ عکسِ کاورِ ویدیو

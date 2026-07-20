@@ -75,10 +75,21 @@ MESSAGES: dict[str, str] = {
     "cl_convert_pages": "🖼 Converted to {n} page images",
     # download / stream links
     "btn_link": "🔗 Link",
+    "btn_link_stream": "🔗 Download + stream link",
     "btn_dl": "⬇️ Download",
     "btn_stream": "▶️ Stream",
-    "link_ready": "🔗 Link for “{name}” is ready:",
+    "btn_copy_link": "📋 Copy download link",
+    "link_ready_menu": "🔗 <b>Link ready</b> — download, stream, or copy:",
     "link_unconfigured": "Links aren't configured yet (no domain set at install).",
+    # video cover & audio extraction
+    "btn_cover_v": "🖼 Cover",
+    "btn_extract_audio": "🎵 Extract audio",
+    "cover_ask": "🖼 Send the video cover image:",
+    "cl_cover": "🖼 Cover set",
+    "cl_extract_audio": "🎵 Audio extracted",
+    # smart compress
+    "compress_choose": "🗜 <b>Compress</b> — choose the output quality:",
+    "btn_same_res": "♻️ Same quality, smaller",
     # audio metadata editing
     "meta_edit_prompt": "🏷 <b>Edit music info</b> — pick a field to change:",
     "meta_current_header": "Current info:",
