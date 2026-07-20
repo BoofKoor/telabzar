@@ -119,7 +119,9 @@ async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir
         return {"note_only": True, "label": t(lang, "cl_list", n=len(entries)), "message": "\n".join(lines)}
 
     if op == "extract":
-        files = await P.archive_extract(inpath, workdir, settings.max_extract_files, settings.max_extract_mb)
+        files = await P.archive_extract(
+            inpath, workdir, settings.max_extract_files, settings.max_extract_mb * 1024 * 1024
+        )
         return {"note_only": True, "label": t(lang, "cl_extract", n=len(files)), "files": files}
 
     if op == "to_gif":

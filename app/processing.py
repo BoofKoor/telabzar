@@ -232,7 +232,9 @@ async def archive_extract(path: str, outdir: str, max_files: int, max_bytes: int
         raise RuntimeError(f"too many files: {len(entries)} > {max_files}")
     total = sum(sz for _, sz in entries)
     if total > max_bytes:
-        raise RuntimeError(f"declared size too large: {total} > {max_bytes}")
+        raise RuntimeError(
+            f"declared size too large: {total // (1024 * 1024)}MB > {max_bytes // (1024 * 1024)}MB"
+        )
 
     exdir = os.path.join(outdir, "ex")
     os.makedirs(exdir, exist_ok=True)
