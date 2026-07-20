@@ -98,14 +98,20 @@ async def extract_audio(inp: str, out: str, fmt: str = "mp3") -> None:
 
 
 # ── ویدیو (ffmpeg) ─────────────────────────────────────────────
-async def compress_video(inp: str, out: str) -> None:
-    await _run([
-        FFMPEG, "-y", "-i", inp,
-        "-c:v", "libx264", "-crf", "28", "-preset", "veryfast",
-        "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",
-        out,
-    ])
+async def compress_video(inp: str, out: str, height: int | None = None, kbps: int | None = None) -> None:
+    """فشرده‌سازی؛ اگر height بدهی به آن رزولوشن اسکیل می‌کند و اگر kbps بدهی
+    نرخِ هدف را می‌گیرد (برای تخمینِ حجمِ دقیق‌تر)، وگرنه CRF."""
+    args = [FFMPEG, "-y", "-i", inp]
+    if height:
+        # عرض را زوج نگه‌دار (نیازِ libx264)
+        args += ["-vf", f"scale=-2:{height}"]
+    if kbps:
+        args += ["-c:v", "libx264", "-b:v", f"{kbps}k",
+                 "-maxrate", f"{int(kbps * 1.5)}k", "-bufsize", f"{kbps * 2}k", "-preset", "veryfast"]
+    else:
+        args += ["-c:v", "libx264", "-crf", "30", "-preset", "veryfast"]
+    args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out]
+    await _run(args)
 
 
 async def convert_video(inp: str, out: str, fmt: str) -> None:
@@ -119,11 +125,13 @@ async def convert_video(inp: str, out: str, fmt: str) -> None:
     await _run(args)
 
 
-# ── ویدیو → GIF (پالت دومرحله‌ای برای کیفیت؛ سقفِ ۱۰ ثانیه و عرضِ ۴۸۰) ─
-async def video_to_gif(inp: str, out: str) -> None:
-    vf = ("fps=12,scale=480:-1:flags=lanczos,split[s0][s1];"
-          "[s0]palettegen[p];[s1][p]paletteuse")
-    await _run([FFMPEG, "-y", "-i", inp, "-t", "10", "-vf", vf, "-loop", "0", out])
+# ── ویدیو → GIF (کم‌مصرف؛ پالت با max_colors محدود تا OOM/‏code -9 ندهد) ─
+# نکته: '-t' قبل از '-i' فقط چند ثانیهٔ اول را decode می‌کند (حافظهٔ کمتر)؛
+# max_colors + stats_mode=diff مصرفِ palettegen را پایین می‌آورد.
+async def video_to_gif(inp: str, out: str, seconds: int = 6, width: int = 360, fps: int = 10) -> None:
+    vf = (f"fps={fps},scale={width}:-2:flags=lanczos,split[s0][s1];"
+          f"[s0]palettegen=max_colors=64:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5")
+    await _run([FFMPEG, "-y", "-t", str(seconds), "-i", inp, "-vf", vf, "-loop", "0", out])
     if not os.path.exists(out):
         raise RuntimeError("GIF generation produced no output")
 

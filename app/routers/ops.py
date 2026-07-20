@@ -14,12 +14,15 @@ from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..cards import card_caption, meta_editor_view, set_card_note, update_card
-from ..callbacks import Act, Conv, Meta
+from ..callbacks import Act, Cmp, Conv, Meta
 from ..config import settings
 from ..crud import get_file_by_ref
 from ..filetypes import detect, suggested_name
 from ..i18n import t
-from ..keyboards import CONVERTIBLE, FIELD_LABEL, cancel_kb, collect_kb, convert_menu_kb, link_menu_kb
+from ..keyboards import (
+    CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_kb, collect_kb, compress_menu_kb,
+    convert_menu_kb, link_menu_kb,
+)
 from ..models import Job, User
 from ..states import Collect, MetaEdit, Rename, SetCover
 
@@ -123,7 +126,35 @@ async def op_compress(cq: CallbackQuery, callback_data: Act, session: AsyncSessi
     if _too_large(file.size):
         await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
         return
+    if file.kind == "video":  # منوی کیفیت (رزولوشن‌های پایین‌تر + تخمینِ حجم)
+        try:
+            await cq.message.edit_caption(
+                caption=card_caption(file, lang, note=t(lang, "compress_choose")),
+                reply_markup=compress_menu_kb(file.ref, file, lang),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        await cq.answer()
+        return
     await _start(cq, file, lang, arq_pool, session, "compress", {}, user)
+
+
+@router.callback_query(Cmp.filter())
+async def op_compress_pick(cq: CallbackQuery, callback_data: Cmp, session: AsyncSession, lang: str,
+                           arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+        return
+    if callback_data.res == "same":
+        args: dict = {}
+    else:
+        h = int(callback_data.res)
+        args = {"height": h, "kbps": VIDEO_KBPS.get(h)}
+    await _start(cq, file, lang, arq_pool, session, "compress", args, user)
 
 
 # ── اسکنِ امنیت ─────────────────────────────────────────────────

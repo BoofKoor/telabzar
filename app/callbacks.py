@@ -21,3 +21,8 @@ class Conv(CallbackData, prefix="cv"):
 class Meta(CallbackData, prefix="mt"):
     ref: str
     field: str
+
+
+class Cmp(CallbackData, prefix="cmp"):
+    ref: str
+    res: str  # ارتفاعِ هدف («720») یا «same»

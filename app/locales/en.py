@@ -87,6 +87,9 @@ MESSAGES: dict[str, str] = {
     "cover_ask": "🖼 Send the video cover image:",
     "cl_cover": "🖼 Cover set",
     "cl_extract_audio": "🎵 Audio extracted",
+    # smart compress
+    "compress_choose": "🗜 <b>Compress</b> — choose the output quality:",
+    "btn_same_res": "♻️ Same quality, smaller",
     # audio metadata editing
     "meta_edit_prompt": "🏷 <b>Edit music info</b> — pick a field to change:",
     "meta_current_header": "Current info:",

@@ -102,7 +102,7 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             await P.compress_image(inpath, out)
         elif file.kind == "video":
             out = os.path.join(workdir, f"{stem}-min.mp4")
-            await P.compress_video(inpath, out)
+            await P.compress_video(inpath, out, height=args.get("height"), kbps=args.get("kbps"))
         elif file.kind == "audio":
             out = os.path.join(workdir, f"{stem}-min.mp3")
             await P.compress_audio(inpath, out)
