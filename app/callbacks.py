@@ -16,3 +16,8 @@ class Act(CallbackData, prefix="act"):
 class Conv(CallbackData, prefix="cv"):
     ref: str
     fmt: str
+
+
+class Meta(CallbackData, prefix="mt"):
+    ref: str
+    field: str

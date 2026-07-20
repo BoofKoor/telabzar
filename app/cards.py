@@ -99,6 +99,20 @@ async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang:
         return msg
 
 
+async def move_card_below(bot: Bot, chat_id: int, old_message_id: int, file: File, lang: str) -> Message:
+    """کارتِ تازه پایینِ چت می‌فرستد و کارتِ قدیمی را پاک می‌کند.
+
+    برای عملیاتی که خروجیِ جدا می‌فرستند (استخراج/لیست/GIF/تامبنیل) تا منو
+    زیرِ خروجی بیاید و چت تمیز بماند.
+    """
+    new_msg = await send_card(bot, chat_id, file, lang)
+    try:
+        await bot.delete_message(chat_id, old_message_id)
+    except TelegramBadRequest:
+        pass
+    return new_msg
+
+
 async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, note: str | None = None, *, keyboard: bool) -> None:
     """فقط کپشن/کیبوردِ کارت را عوض کن (برای حالتِ «در حال پردازش» یا «خطا»)."""
     kb = file_card_kb(file.ref, file.kind, lang) if keyboard else None
