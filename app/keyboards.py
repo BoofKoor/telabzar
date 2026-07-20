@@ -7,11 +7,17 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from .callbacks import Act, Conv, Lang, Meta
 from .i18n import t
 
-# فیلدهای قابلِ‌ویرایشِ متادیتای صوت → (کلیدِ ffmpeg, کلیدِ ترجمهٔ دکمه)
+# فیلدهای متنیِ قابلِ‌ویرایشِ متادیتای صوت → (کلیدِ ffmpeg, کلیدِ ترجمهٔ دکمه)
 META_FIELDS: list[tuple[str, str]] = [
     ("title", "btn_f_title"), ("artist", "btn_f_artist"), ("album", "btn_f_album"),
     ("genre", "btn_f_genre"), ("date", "btn_f_year"),
 ]
+# برچسبِ نمایشیِ هر فیلد (شاملِ کاور که ورودی‌اش عکس است)
+FIELD_LABEL: dict[str, str] = {field: key for field, key in META_FIELDS}
+FIELD_LABEL["cover"] = "btn_f_cover"
+
+# نوع‌هایی که کلیدِ اولِ منویشان تمام‌عرض (ردیفِ جدا) نمایش داده می‌شود
+FEATURED_TOP = {"audio"}
 
 # عملیاتِ مرتبط با هر نوعِ فایل (فقط کلیدهایی که برای آن نوع معنا دارند).
 # ترتیب: عملیاتِ مختصِ نوع اول، بعد عمومی‌های مرتبط.
@@ -25,8 +31,8 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("compress", "btn_compress"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "audio": [
-        ("meta", "btn_meta"), ("transcribe", "btn_transcribe"), ("convert", "btn_convert"),
-        ("compress", "btn_compress"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+        ("meta", "btn_edit_music"), ("transcribe", "btn_transcribe"), ("convert", "btn_convert"),
+        ("compress", "btn_compress"), ("zip", "btn_zip"),
     ],
     "document": [
         ("to_pdf", "btn_to_pdf"), ("convert", "btn_convert"), ("compress", "btn_compress"),
@@ -71,10 +77,12 @@ def file_card_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
         b.button(text=t(lang, key), callback_data=Act(op=op, ref=ref))
     b.button(text=t(lang, "btn_close"), callback_data=Act(op="close", ref=ref))
 
-    n = len(ops)
-    sizes = [3] * (n // 3)
-    if n % 3:
-        sizes.append(n % 3)
+    featured = bool(ops) and kind in FEATURED_TOP  # کلیدِ اول تمام‌عرض
+    rest = len(ops) - 1 if featured else len(ops)
+    sizes: list[int] = [1] if featured else []
+    sizes += [3] * (rest // 3)
+    if rest % 3:
+        sizes.append(rest % 3)
     sizes.append(1)  # «بستن» در ردیفِ خودش
     b.adjust(*sizes)
     return b.as_markup()
@@ -98,9 +106,10 @@ def meta_edit_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for field, key in META_FIELDS:
         b.button(text=t(lang, key), callback_data=Meta(ref=ref, field=field))
+    b.button(text=t(lang, "btn_f_cover"), callback_data=Meta(ref=ref, field="cover"))
     b.button(text=t(lang, "btn_apply"), callback_data=Act(op="meta_apply", ref=ref))
     b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
-    b.adjust(3, 2, 2)  # فیلدها: ۳+۲ ، بعد اعمال+لغو
+    b.adjust(3, 3, 2)  # ۵ فیلد + کاور: ۳+۳ ، بعد اعمال+لغو
     return b.as_markup()
 
 

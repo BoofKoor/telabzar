@@ -20,7 +20,7 @@ from aiogram.types import FSInputFile
 
 from . import processing as P
 from .filetypes import human_size
-from .cards import message_media_id, move_card_below, set_card_note, update_card
+from .cards import message_media_id, meta_editor_view, move_card_below, set_card_note, update_card
 from .config import settings
 from .db import Sessionmaker
 from .i18n import t
@@ -124,14 +124,28 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         return {"path": out, "filename": "archive.zip",
                 "label": t(lang, "cl_zip_many", n=len(downloaded)), "kind": "archive"}
 
+    if op == "meta_read":
+        m = await P.audio_metadata(inpath)
+        tags = m.get("tags", {})
+        cur = {k: str(tags[k])[:120] for k in ("title", "artist", "album", "genre", "date") if tags.get(k)}
+        return {"editor": cur}
+
     if op == "meta_write":
         tags = {k: str(v) for k, v in (args.get("tags") or {}).items() if v}
-        if not tags:
+        cover_path = None
+        cover_id = args.get("cover_id")
+        if cover_id:
+            tgc = await bot.get_file(cover_id)
+            cp = tgc.file_path
+            if cp and os.path.exists(cp):
+                cover_path = cp
+        if not tags and not cover_path:
             raise RuntimeError("no metadata to write")
         ext = os.path.splitext(file.name or "audio.mp3")[1] or ".mp3"
         out = os.path.join(workdir, f"{stem}{ext}")
-        await P.write_audio_metadata(inpath, out, tags)
-        return {"path": out, "filename": f"{stem}{ext}", "label": t(lang, "cl_meta_edit"), "kind": "audio"}
+        await P.write_audio_metadata(inpath, out, tags, cover_path=cover_path)
+        return {"path": out, "filename": f"{stem}{ext}", "label": t(lang, "cl_meta_edit"),
+                "kind": "audio", "new_meta": tags}
 
     if op == "to_pdf":
         src = os.path.join(workdir, os.path.basename(file.name or "input"))
@@ -203,7 +217,17 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             job.error = str(exc)[:500]
             await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
         else:
-            if res.get("send_media") is not None:
+            if res.get("editor") is not None:
+                # خواندنِ متادیتای فعلی → ذخیره روی فایل و رندرِ ویرایشگر درجا
+                file.meta = res["editor"]
+                caption, kb = meta_editor_view(file, lang, {})
+                try:
+                    await bot.edit_message_caption(chat_id=chat_id, message_id=card_mid,
+                                                   caption=caption, reply_markup=kb)
+                except Exception:  # noqa: BLE001
+                    log.warning("meta_read caption update failed")
+                job.status = "done"
+            elif res.get("send_media") is not None:
                 # آرتیفکتِ رسانه‌ایِ جدا (GIF/تامبنیل) → خروجی بالا، کارتِ تازه پایین
                 sm = res["send_media"]
                 p = sm["path"]
@@ -264,6 +288,8 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                         file.file_id = fid
                     if fuid:
                         file.file_unique_id = fuid
+                    if res.get("new_meta"):  # متادیتای فعلی را با تگ‌های نوشته‌شده به‌روز کن
+                        file.meta = {**(file.meta or {}), **res["new_meta"]}
                     job.status = "done"
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ فایل را برگردان
                     log.exception("job %s delivery failed", job_id)

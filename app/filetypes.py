@@ -99,6 +99,25 @@ def detect(message: Message) -> FileInfo | None:
     return None
 
 
+_EXT_BY_MIME = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
+    "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov",
+    "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/ogg": ".ogg",
+    "audio/x-wav": ".wav", "audio/flac": ".flac",
+    "application/pdf": ".pdf", "application/zip": ".zip",
+}
+_EXT_BY_KIND = {"image": ".jpg", "video": ".mp4", "audio": ".mp3",
+                "document": ".bin", "archive": ".zip", "app": ".bin"}
+
+
+def suggested_name(name: str | None, kind: str, mime: str | None, idx: int = 1) -> str:
+    """نامِ فایل با پسوند؛ برای فایل‌های بی‌نام (مثلِ عکس‌های آلبوم) پسوند می‌سازد."""
+    if name:
+        return name
+    ext = _EXT_BY_MIME.get((mime or "").lower()) or _EXT_BY_KIND.get(kind, ".bin")
+    return f"{kind}{idx}{ext}"
+
+
 def human_size(n: int | None) -> str:
     if not n:
         return "—"
