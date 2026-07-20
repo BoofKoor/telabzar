@@ -47,17 +47,46 @@ def _format_label(file: File) -> str | None:
     return None
 
 
+def _quality_label(width: int | None, height: int | None) -> str | None:
+    """برچسبِ کیفیت از رویِ ضلعِ کوچک‌تر (720p/1080p/…)."""
+    if not width or not height:
+        return None
+    short = min(width, height)
+    if short >= 2160:
+        return "4K"
+    if short >= 1440:
+        return "2K"
+    if short >= 1080:
+        return "1080p FHD"
+    if short >= 720:
+        return "720p HD"
+    if short >= 480:
+        return "480p"
+    if short >= 360:
+        return "360p"
+    return "SD"
+
+
 def _info_line(file: File) -> str:
-    """خطِ اطلاعات: حجم · ابعاد · مدت · فرمت (فقط مواردِ موجود)."""
-    parts = [f"<code>{human_size(file.size)}</code>"]
-    if file.width and file.height:
-        parts.append(f"{file.width}×{file.height}")
-    dur = _fmt_dur(file.duration)
-    if dur:
-        parts.append(f"⏱ {dur}")
+    """خطِ اطلاعاتِ خواناـ بسته به نوعِ فایل (حجم · کیفیت/ابعاد · مدت · فرمت)."""
+    parts = [f"📦 <code>{human_size(file.size)}</code>"]
     fmt = _format_label(file)
+    if file.kind == "video":
+        q = _quality_label(file.width, file.height)
+        if q:
+            parts.append(f"🎞 {q}")
+        dur = _fmt_dur(file.duration)
+        if dur:
+            parts.append(f"⏱ {dur}")
+    elif file.kind == "image":
+        if file.width and file.height:
+            parts.append(f"🖼 {file.width}×{file.height}")
+    elif file.kind == "audio":
+        dur = _fmt_dur(file.duration)
+        if dur:
+            parts.append(f"⏱ {dur}")
     if fmt:
-        parts.append(fmt)
+        parts.append(f"<code>{escape(fmt)}</code>")
     return "  ·  ".join(parts)
 
 
@@ -96,7 +125,8 @@ async def _send_typed(bot: Bot, chat_id: int, file: File, media, caption, kb):
     if file.kind == "image":
         return await bot.send_photo(chat_id, media, caption=caption, reply_markup=kb)
     if file.kind == "video":
-        return await bot.send_video(chat_id, media, caption=caption, reply_markup=kb)
+        extra = {"cover": file.cover_id} if file.cover_id else {}
+        return await bot.send_video(chat_id, media, caption=caption, reply_markup=kb, **extra)
     if file.kind == "audio":
         return await bot.send_audio(chat_id, media, caption=caption, reply_markup=kb)
     return await bot.send_document(chat_id, media, caption=caption, reply_markup=kb)
@@ -118,11 +148,12 @@ async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang:
     caption = card_caption(file, lang)
     kb = file_card_kb(file.ref, file.kind, lang)
     im_cls = _INPUT_MEDIA.get(file.kind, InputMediaDocument)
+    extra = {"cover": file.cover_id} if file.kind == "video" and file.cover_id else {}
     try:
         return await bot.edit_message_media(
             chat_id=chat_id,
             message_id=message_id,
-            media=im_cls(media=_media_arg(file, path), caption=caption),
+            media=im_cls(media=_media_arg(file, path), caption=caption, **extra),
             reply_markup=kb,
         )
     except TelegramBadRequest:

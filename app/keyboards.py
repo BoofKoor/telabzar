@@ -1,7 +1,7 @@
 """کیبوردهای اینلاین."""
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import CopyTextButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .callbacks import Act, Conv, Lang, Meta
@@ -17,7 +17,7 @@ FIELD_LABEL: dict[str, str] = {field: key for field, key in META_FIELDS}
 FIELD_LABEL["cover"] = "btn_f_cover"
 
 # نوع‌هایی که کلیدِ اولِ منویشان تمام‌عرض (ردیفِ جدا) نمایش داده می‌شود
-FEATURED_TOP = {"audio"}
+FEATURED_TOP = {"audio", "video"}
 
 # عملیاتِ مرتبط با هر نوعِ فایل (فقط کلیدهایی که برای آن نوع معنا دارند).
 # ترتیب: عملیاتِ مختصِ نوع اول، بعد عمومی‌های مرتبط.
@@ -27,8 +27,9 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("link", "btn_link"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "video": [
-        ("to_gif", "btn_to_gif"), ("thumb", "btn_thumb"), ("convert", "btn_convert"),
-        ("compress", "btn_compress"), ("link", "btn_link"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+        ("link", "btn_link_stream"), ("cover", "btn_cover_v"), ("compress", "btn_compress"),
+        ("convert", "btn_convert"), ("extract_audio", "btn_extract_audio"), ("to_gif", "btn_to_gif"),
+        ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "audio": [
         ("meta", "btn_edit_music"), ("transcribe", "btn_transcribe"), ("convert", "btn_convert"),
@@ -96,6 +97,18 @@ def file_card_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
 def cancel_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
+    return b.as_markup()
+
+
+def link_menu_kb(ref: str, lang: str, dl_url: str, stream_url: str, streamable: bool) -> InlineKeyboardMarkup:
+    """زیرمنوی لینک: دانلود/پخش (URL) + کپیِ لینک (CopyTextButton) + بازگشت."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_dl"), url=dl_url)
+    if streamable:
+        b.button(text=t(lang, "btn_stream"), url=stream_url)
+    b.button(text=t(lang, "btn_copy_link"), copy_text=CopyTextButton(text=dl_url))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(2, 1, 1) if streamable else b.adjust(1, 1, 1)
     return b.as_markup()
 
 

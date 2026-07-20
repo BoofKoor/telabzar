@@ -52,6 +52,7 @@ class File(Base):
     changelog: Mapped[list | None] = mapped_column(JSON, default=list)
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # متادیتای فعلیِ صوت
     dl_token: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    cover_id: Mapped[str | None] = mapped_column(String(256), nullable=True)  # کاورِ ویدیو
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

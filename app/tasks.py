@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import secrets
 import shutil
 from datetime import datetime, timezone
 from html import escape
@@ -20,7 +21,9 @@ from aiogram.types import FSInputFile
 
 from . import processing as P
 from .filetypes import human_size
-from .cards import message_media_id, meta_editor_view, move_card_below, set_card_note, update_card
+from .cards import (
+    message_media_id, meta_editor_view, move_card_below, send_card, set_card_note, update_card,
+)
 from .config import settings
 from .db import Sessionmaker
 from .i18n import t
@@ -208,6 +211,12 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         )
         return {"note_only": True, "label": t(lang, "cl_extract", n=len(files)), "files": files}
 
+    if op == "extract_audio":
+        out = os.path.join(workdir, f"{stem}.mp3")
+        await P.extract_audio(inpath, out, "mp3")
+        return {"spawn": {"path": out, "name": f"{stem}.mp3", "kind": "audio"},
+                "label": t(lang, "cl_extract_audio")}
+
     if op == "to_gif":
         out = os.path.join(workdir, f"{stem}.gif")
         await P.video_to_gif(inpath, out)
@@ -257,7 +266,31 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             job.error = str(exc)[:500]
             await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
         else:
-            if res.get("editor") is not None:
+            if res.get("spawn") is not None:
+                # عملیاتی که یک فایلِ جدید می‌زاید (استخراجِ صدا) → کارتِ مستقلِ جدید
+                sp = res["spawn"]
+                p = sp["path"]
+                newf = File(
+                    ref=secrets.token_urlsafe(6)[:8], owner_id=file.owner_id,
+                    file_unique_id="", file_id="", kind=sp["kind"], mime=None,
+                    name=sp["name"], size=os.path.getsize(p) if os.path.exists(p) else None,
+                    changelog=[],
+                )
+                session.add(newf)
+                await session.commit()
+                try:
+                    sent = await send_card(bot, chat_id, newf, lang, path=p)
+                    fid, fuid = message_media_id(sent)
+                    if fid:
+                        newf.file_id = fid
+                    if fuid:
+                        newf.file_unique_id = fuid
+                except Exception:  # noqa: BLE001
+                    log.exception("job %s spawn-card send failed", job_id)
+                file.changelog = list(file.changelog or []) + [res["label"]]
+                await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+                job.status = "done"
+            elif res.get("editor") is not None:
                 # خواندنِ متادیتای فعلی → ذخیره روی فایل و رندرِ ویرایشگر درجا
                 file.meta = res["editor"]
                 caption, kb = meta_editor_view(file, lang, {})

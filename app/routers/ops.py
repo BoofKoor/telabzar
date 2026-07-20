@@ -10,19 +10,18 @@ from html import escape
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..cards import card_caption, meta_editor_view, set_card_note
+from ..cards import card_caption, meta_editor_view, set_card_note, update_card
 from ..callbacks import Act, Conv, Meta
 from ..config import settings
 from ..crud import get_file_by_ref
 from ..filetypes import detect, suggested_name
 from ..i18n import t
-from ..keyboards import CONVERTIBLE, FIELD_LABEL, cancel_kb, collect_kb, convert_menu_kb
+from ..keyboards import CONVERTIBLE, FIELD_LABEL, cancel_kb, collect_kb, convert_menu_kb, link_menu_kb
 from ..models import Job, User
-from ..states import Collect, MetaEdit, Rename
+from ..states import Collect, MetaEdit, Rename, SetCover
 
 router = Router(name="ops")
 
@@ -142,9 +141,9 @@ async def op_scan(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
 
 
 # ── عملیاتِ مستقیم (بدونِ منو/ورودی): enqueue و تمام ───────────
-# سند/آرشیو: to_pdf · list_zip · extract   ·   رسانه: to_gif · thumb (ویدیو)
-# نکته: zip و meta فلوی چندمرحله‌ای دارند (پایین‌تر).
-_DIRECT_OPS = {"to_pdf", "list_zip", "extract", "to_gif", "thumb"}
+# سند/آرشیو: to_pdf · list_zip · extract   ·   رسانه: to_gif · extract_audio
+# نکته: zip / meta / cover / link فلوی چندمرحله‌ای دارند (پایین‌تر).
+_DIRECT_OPS = {"to_pdf", "list_zip", "extract", "to_gif", "extract_audio"}
 
 
 @router.callback_query(Act.filter(F.op.in_(_DIRECT_OPS)))
@@ -504,7 +503,7 @@ async def op_meta_apply(cq: CallbackQuery, callback_data: Act, session: AsyncSes
                    cq.message.chat.id, cq.message.message_id, lang)
 
 
-# ── لینکِ دانلود/استریم ─────────────────────────────────────────
+# ── لینکِ دانلود/استریم: زیرمنوی درجا ───────────────────────────
 @router.callback_query(Act.filter(F.op == "link"))
 async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
     file = await get_file_by_ref(session, callback_data.ref)
@@ -518,19 +517,66 @@ async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
         file.dl_token = secrets.token_urlsafe(18)[:24]
         await session.commit()
     base = settings.public_base.rstrip("/")
-    b = InlineKeyboardBuilder()
-    b.button(text=t(lang, "btn_dl"), url=f"{base}/dl/{file.dl_token}")
-    if file.kind in ("video", "audio"):
-        b.button(text=t(lang, "btn_stream"), url=f"{base}/s/{file.dl_token}")
-    b.adjust(2)
+    dl, stream = f"{base}/dl/{file.dl_token}", f"{base}/s/{file.dl_token}"
     try:
-        await cq.message.answer(
-            t(lang, "link_ready", name=escape(file.name or "file")),
-            reply_markup=b.as_markup(),
+        await cq.message.edit_caption(
+            caption=card_caption(file, lang, note=t(lang, "link_ready_menu")),
+            reply_markup=link_menu_kb(file.ref, lang, dl, stream, file.kind in ("video", "audio")),
         )
     except Exception:  # noqa: BLE001
         pass
     await cq.answer()
+
+
+# ── ست‌کردنِ کاورِ ویدیو (FSM؛ درجا با editMessageMedia) ─────────
+@router.callback_query(Act.filter(F.op == "cover"))
+async def op_cover_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
+                         lang: str, state: FSMContext) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "video":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    await state.set_state(SetCover.waiting)
+    await state.update_data(ref=file.ref, card_chat=cq.message.chat.id, card_mid=cq.message.message_id)
+    try:
+        await cq.message.edit_caption(
+            caption=card_caption(file, lang, note=t(lang, "cover_ask")),
+            reply_markup=cancel_kb(file.ref, lang),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.message(SetCover.waiting)
+async def op_cover_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str) -> None:
+    if not message.photo:  # فقط عکس؛ بقیه را پاک کن و منتظر بمان
+        try:
+            await message.delete()
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    data = await state.get_data()
+    await state.clear()
+    cover_fid = message.photo[-1].file_id
+    ref, card_chat, card_mid = data.get("ref", ""), data.get("card_chat"), data.get("card_mid")
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    file = await get_file_by_ref(session, ref)
+    if file is None or card_chat is None:
+        return
+    file.cover_id = cover_fid
+    file.changelog = list(file.changelog or []) + [t(lang, "cl_cover")]
+    await session.commit()
+    try:
+        await update_card(message.bot, card_chat, card_mid, file, lang)
+    except Exception:  # noqa: BLE001
+        await set_card_note(message.bot, card_chat, card_mid, file, lang, keyboard=True)
 
 
 # ── بستن ───────────────────────────────────────────────────────

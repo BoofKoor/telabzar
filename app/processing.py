@@ -89,6 +89,14 @@ async def convert_audio(inp: str, out: str, fmt: str) -> None:
     await _run([FFMPEG, "-y", "-i", inp, "-vn", *codec, out])
 
 
+async def extract_audio(inp: str, out: str, fmt: str = "mp3") -> None:
+    """صدا را از ویدیو جدا می‌کند (بدونِ تصویر)."""
+    codec = _AUDIO_CODEC.get(fmt.lower(), ["-c:a", "libmp3lame", "-b:a", "192k"])
+    await _run([FFMPEG, "-y", "-i", inp, "-vn", *codec, out])
+    if not os.path.exists(out):
+        raise RuntimeError("no audio track extracted")
+
+
 # ── ویدیو (ffmpeg) ─────────────────────────────────────────────
 async def compress_video(inp: str, out: str) -> None:
     await _run([

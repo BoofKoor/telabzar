@@ -20,6 +20,7 @@ _MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS duration INTEGER",
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS dl_token VARCHAR(32)",
     "CREATE INDEX IF NOT EXISTS ix_files_dl_token ON files (dl_token)",
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS cover_id VARCHAR(256)",
 ]
 
 
