@@ -90,6 +90,17 @@ def _info_line(file: File) -> str:
     return "  ·  ".join(parts)
 
 
+def progress_note(label: str, percent: float, eta: float | None = None) -> str:
+    """نوارِ پیشرفتِ تمیز برای کپشن: ⚙️ برچسب / ▰▰▰▱▱ ۵۲٪ · ⏳ ~۰:۱۸."""
+    pct = max(0, min(100, int(percent)))
+    filled = round(pct / 10)
+    bar = "▰" * filled + "▱" * (10 - filled)
+    line = f"⚙️ {label}\n<code>{bar}</code>  <b>{pct}%</b>"
+    if eta and eta > 0:
+        line += f"  ·  ⏳ ~{_fmt_dur(int(eta))}"
+    return line
+
+
 def card_caption(file: File, lang: str, note: str | None = None) -> str:
     icon = _ICON.get(file.kind, "📄")
     lines = [
@@ -213,9 +224,15 @@ async def move_card_below(bot: Bot, chat_id: int, old_message_id: int, file: Fil
     return new_msg
 
 
-async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, note: str | None = None, *, keyboard: bool) -> None:
-    """فقط کپشن/کیبوردِ کارت را عوض کن (برای حالتِ «در حال پردازش» یا «خطا»)."""
-    kb = file_card_kb(file.ref, file.kind, lang) if keyboard else None
+async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, note: str | None = None, *, keyboard) -> None:
+    """فقط کپشن/کیبوردِ کارت را عوض کن. keyboard: True=منوی اصلی · False/None=بدون کیبورد
+    · یا یک InlineKeyboardMarkup دلخواه (مثلِ دکمهٔ لغوِ حین پردازش)."""
+    if keyboard is True:
+        kb = file_card_kb(file.ref, file.kind, lang)
+    elif not keyboard:
+        kb = None
+    else:
+        kb = keyboard  # markup دلخواه
     try:
         await bot.edit_message_caption(
             chat_id=chat_id, message_id=message_id,

@@ -20,7 +20,7 @@ from ..crud import get_file_by_ref
 from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
-    CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_kb, collect_kb, compress_menu_kb,
+    CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_job_kb, cancel_kb, collect_kb, compress_menu_kb,
     convert_menu_kb, link_menu_kb,
 )
 from ..models import Job, User
@@ -91,8 +91,20 @@ async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
     return None
 
 
-async def _enqueue(arq_pool: ArqRedis, session: AsyncSession, file_id: int, op: str,
+async def _enqueue(bot, arq_pool: ArqRedis, session: AsyncSession, file, op: str,
                    args: dict, chat_id: int, card_mid: int, lang: str) -> None:
+    """جاب می‌سازد، کارت را به حالتِ «پردازش + دکمهٔ لغو» می‌برد، و enqueue می‌کند."""
+    job = Job(file_id=file.id, op=op, args=args, status="queued")
+    session.add(job)
+    await session.commit()
+    await set_card_note(bot, chat_id, card_mid, file, lang,
+                        note=t(lang, "processing"), keyboard=cancel_job_kb(job.id, lang))
+    await arq_pool.enqueue_job("run_op", job.id, chat_id, card_mid, lang)
+
+
+async def _queue_quiet(arq_pool: ArqRedis, session: AsyncSession, file_id: int, op: str,
+                       args: dict, chat_id: int, card_mid: int, lang: str) -> None:
+    """enqueue بدونِ دست‌زدن به کپشن (برای meta_read که خودش ویرایشگر را رندر می‌کند)."""
     job = Job(file_id=file_id, op=op, args=args, status="queued")
     session.add(job)
     await session.commit()
@@ -100,16 +112,15 @@ async def _enqueue(arq_pool: ArqRedis, session: AsyncSession, file_id: int, op: 
 
 
 async def _start(cq: CallbackQuery, file, lang, arq_pool, session, op, args, user) -> None:
-    """چکِ محدودیت (پاپ‌آپ) → حالتِ پردازش → enqueue."""
+    """چکِ محدودیت (پاپ‌آپ) → حالتِ پردازش + دکمهٔ لغو → enqueue."""
     if user is not None:
         limit = await _check_limits(arq_pool, user.tg_user_id)
         if limit:
             await cq.answer(t(lang, f"limit_{limit}"), show_alert=True)
             return
     await cq.answer()
-    await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang,
-                        note=t(lang, "processing"), keyboard=False)
-    await _enqueue(arq_pool, session, file.id, op, args, cq.message.chat.id, cq.message.message_id, lang)
+    await _enqueue(cq.message.bot, arq_pool, session, file, op, args,
+                   cq.message.chat.id, cq.message.message_id, lang)
 
 
 # ── فشرده‌سازی ──────────────────────────────────────────────────
@@ -282,8 +293,7 @@ async def op_rename_recv(message: Message, state: FSMContext, session: AsyncSess
         if limit:
             await set_card_note(message.bot, card_chat, card_mid, file, lang, note=t(lang, f"limit_{limit}"), keyboard=True)
             return
-    await set_card_note(message.bot, card_chat, card_mid, file, lang, note=t(lang, "processing"), keyboard=False)
-    await _enqueue(arq_pool, session, file.id, "rename", {"new_name": new_name}, card_chat, card_mid, lang)
+    await _enqueue(message.bot, arq_pool, session, file, "rename", {"new_name": new_name}, card_chat, card_mid, lang)
 
 
 async def _collect_start(cq: CallbackQuery, file, lang: str, state: FSMContext, purpose: str) -> None:
@@ -398,10 +408,8 @@ async def op_collect_go(cq: CallbackQuery, callback_data: Act, session: AsyncSes
             await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang, keyboard=True)
             return
     await cq.answer()
-    await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang,
-                        note=t(lang, "processing"), keyboard=False)
     op = "pdf_merge" if purpose == "merge" else "zip_many"
-    await _enqueue(arq_pool, session, file.id, op, {"members": members},
+    await _enqueue(cq.message.bot, arq_pool, session, file, op, {"members": members},
                    cq.message.chat.id, cq.message.message_id, lang)
 
 
@@ -421,9 +429,9 @@ async def op_meta_start(cq: CallbackQuery, callback_data: Act, session: AsyncSes
         await cq.message.edit_caption(caption=caption, reply_markup=kb)
     except Exception:  # noqa: BLE001
         pass
-    # اطلاعاتِ فعلی را در پس‌زمینه بخوان و روی همین کارت پر کن
-    await _enqueue(arq_pool, session, file.id, "meta_read", {},
-                   cq.message.chat.id, cq.message.message_id, lang)
+    # اطلاعاتِ فعلی را در پس‌زمینه بخوان و روی همین کارت پر کن (بدونِ نوتِ پردازش)
+    await _queue_quiet(arq_pool, session, file.id, "meta_read", {},
+                       cq.message.chat.id, cq.message.message_id, lang)
     await cq.answer()
 
 
@@ -528,9 +536,7 @@ async def op_meta_apply(cq: CallbackQuery, callback_data: Act, session: AsyncSes
             await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang, keyboard=True)
             return
     await cq.answer()
-    await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang,
-                        note=t(lang, "processing"), keyboard=False)
-    await _enqueue(arq_pool, session, file.id, "meta_write", {"tags": tags, "cover_id": cover_id},
+    await _enqueue(cq.message.bot, arq_pool, session, file, "meta_write", {"tags": tags, "cover_id": cover_id},
                    cq.message.chat.id, cq.message.message_id, lang)
 
 
@@ -608,6 +614,18 @@ async def op_cover_recv(message: Message, state: FSMContext, session: AsyncSessi
         await update_card(message.bot, card_chat, card_mid, file, lang)
     except Exception:  # noqa: BLE001
         await set_card_note(message.bot, card_chat, card_mid, file, lang, keyboard=True)
+
+
+# ── لغوِ جابِ در حالِ اجرا ──────────────────────────────────────
+@router.callback_query(Act.filter(F.op == "canceljob"))
+async def op_cancel_job(cq: CallbackQuery, callback_data: Act, arq_pool: ArqRedis, lang: str) -> None:
+    job_id = callback_data.ref
+    if job_id.isdigit():
+        try:
+            await arq_pool.set(f"cancel:{job_id}", "1", ex=1200)
+        except Exception:  # noqa: BLE001
+            pass
+    await cq.answer(t(lang, "cancelling"))
 
 
 # ── بستن ───────────────────────────────────────────────────────

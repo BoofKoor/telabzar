@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import shutil
+import time
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
@@ -20,17 +21,25 @@ from aiogram import Bot
 from aiogram.types import FSInputFile
 
 from . import processing as P
-from .filetypes import human_size
 from .cards import (
-    message_media_id, meta_editor_view, move_card_below, send_card, set_card_note, update_card,
+    message_media_id, meta_editor_view, move_card_below, progress_note, send_card,
+    set_card_note, update_card,
 )
 from .config import settings
 from .db import Sessionmaker
+from .filetypes import human_size
 from .i18n import t
+from .keyboards import cancel_job_kb
 from .models import File, Job
 from .security import ScanUnavailable, scan_file
 
 log = logging.getLogger("telabzar.worker")
+
+# نگاشتِ عملیات → برچسبِ نوارِ پیشرفت
+_PROGRESS_LABEL = {
+    "compress": "pr_compress", "convert": "pr_convert",
+    "to_gif": "pr_gif", "extract_audio": "pr_extract",
+}
 
 
 def _safe_stem(name: str | None, default: str = "file") -> str:
@@ -75,9 +84,11 @@ async def _convert_pdf(fmt: str, stem: str, inpath: str, workdir: str, lang: str
     raise RuntimeError(f"unsupported pdf target: {fmt}")
 
 
-async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
+async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: str, workdir: str,
+                 lang: str, progress=None, cancel=None) -> dict[str, Any]:
     """پردازش → یا {path, filename, label} (رسانه‌ساز) یا {note_only, label} (بررسی)."""
     stem = _safe_stem(file.name)
+    dur = file.duration
 
     if op == "scan":
         try:
@@ -102,10 +113,11 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             await P.compress_image(inpath, out)
         elif file.kind == "video":
             out = os.path.join(workdir, f"{stem}-min.mp4")
-            await P.compress_video(inpath, out, height=args.get("height"), kbps=args.get("kbps"))
+            await P.compress_video(inpath, out, height=args.get("height"), kbps=args.get("kbps"),
+                                   progress=progress, duration=dur, cancel=cancel)
         elif file.kind == "audio":
             out = os.path.join(workdir, f"{stem}-min.mp3")
-            await P.compress_audio(inpath, out)
+            await P.compress_audio(inpath, out, progress=progress, duration=dur, cancel=cancel)
         else:
             raise RuntimeError("compress not supported for this type")
         return {"path": out, "filename": os.path.basename(out), "label": t(lang, "cl_compress")}
@@ -118,9 +130,9 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         if file.kind == "image":
             await P.convert_image(inpath, out, fmt)
         elif file.kind == "audio":
-            await P.convert_audio(inpath, out, fmt)
+            await P.convert_audio(inpath, out, fmt, progress=progress, duration=dur, cancel=cancel)
         elif file.kind == "video":
-            await P.convert_video(inpath, out, fmt)
+            await P.convert_video(inpath, out, fmt, progress=progress, duration=dur, cancel=cancel)
         else:
             raise RuntimeError("convert not supported for this type")
         return {"path": out, "filename": f"{stem}.{fmt}", "label": t(lang, "cl_convert", fmt=fmt.upper())}
@@ -213,13 +225,13 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
 
     if op == "extract_audio":
         out = os.path.join(workdir, f"{stem}.mp3")
-        await P.extract_audio(inpath, out, "mp3")
+        await P.extract_audio(inpath, out, "mp3", progress=progress, duration=dur, cancel=cancel)
         return {"spawn": {"path": out, "name": f"{stem}.mp3", "kind": "audio"},
                 "label": t(lang, "cl_extract_audio")}
 
     if op == "to_gif":
         out = os.path.join(workdir, f"{stem}.gif")
-        await P.video_to_gif(inpath, out)
+        await P.video_to_gif(inpath, out, progress=progress, duration=min(dur or 6, 6), cancel=cancel)
         return {"send_media": {"as": "animation", "path": out, "filename": f"{stem}.gif"},
                 "label": t(lang, "cl_gif")}
 
@@ -259,7 +271,43 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 # مسیر را در خطا بیاور تا ریشه فوراً معلوم شود:
                 # نسبی → سرور local نیست؛ مطلق → مشکلِ mount یا پرمیشن/capability
                 raise RuntimeError(f"input file not found on disk: {inpath or '(empty)'}"[:200])
-            res = await _do_op(bot, job.op, job.args or {}, file, inpath, workdir, lang)
+
+            # نوارِ پیشرفتِ زنده (throttle: هر ~۳ ثانیه و فقط با تغییرِ درصد)؛
+            # کیبوردِ لغو در تمامِ مدت حفظ می‌شود تا کاربر بتواند وسطِ کار لغو کند.
+            pstate = {"t": 0.0, "pct": -1}
+            pstart = time.monotonic()
+            plabel = t(lang, _PROGRESS_LABEL.get(job.op, "processing"))
+            cancel_kb = cancel_job_kb(job_id, lang)
+            redis = ctx.get("redis")
+
+            async def _on_progress(pct: float) -> None:
+                now = time.monotonic()
+                ip = int(pct)
+                if ip <= pstate["pct"] or (now - pstate["t"]) < 3.0:
+                    return
+                pstate["t"], pstate["pct"] = now, ip
+                elapsed = now - pstart
+                eta = (elapsed / pct * (100 - pct)) if pct > 3 else None
+                try:
+                    await set_card_note(bot, chat_id, card_mid, file, lang,
+                                        note=progress_note(plabel, pct, eta), keyboard=cancel_kb)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            async def _should_cancel() -> bool:
+                if redis is None:
+                    return False
+                try:
+                    return bool(await redis.exists(f"cancel:{job_id}"))
+                except Exception:  # noqa: BLE001
+                    return False
+
+            res = await _do_op(bot, job.op, job.args or {}, file, inpath, workdir, lang,
+                               progress=_on_progress, cancel=_should_cancel)
+        except P.ProcessingCancelled:
+            log.info("job %s cancelled by user", job_id)
+            job.status = "cancelled"
+            await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "cancelled"), keyboard=True)
         except Exception as exc:  # noqa: BLE001  — پردازش شکست خورد؛ فایل دست‌نخورده
             log.exception("job %s processing failed", job_id)
             job.status = "failed"
@@ -371,6 +419,12 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     job.error = str(exc)[:500]
                     await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
         finally:
+            redis = ctx.get("redis")
+            if redis is not None:
+                try:
+                    await redis.delete(f"cancel:{job_id}")  # پرچمِ لغو را پاک کن
+                except Exception:  # noqa: BLE001
+                    pass
             job.finished_at = datetime.now(timezone.utc)
             await session.commit()
             shutil.rmtree(workdir, ignore_errors=True)
