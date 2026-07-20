@@ -19,6 +19,26 @@ ARCHIVE_MIME = (
     "application/x-xz",
 )
 
+# فایل‌های نصبی/اجرایی — مقصدِ اصلیِ اسکنِ بدافزار (apk و مشابه)
+PACKAGE_EXT = (
+    ".apk", ".xapk", ".apks", ".aab", ".ipa", ".jar",
+    ".exe", ".msi", ".msix", ".appx", ".dmg", ".pkg",
+    ".deb", ".rpm", ".appimage", ".bat", ".cmd", ".com", ".scr",
+)
+PACKAGE_MIME = (
+    "application/vnd.android.package-archive",
+    "application/x-msdownload",
+    "application/x-msi",
+    "application/x-ms-installer",
+    "application/x-apple-diskimage",
+    "application/vnd.debian.binary-package",
+    "application/x-rpm",
+    "application/java-archive",
+    "application/x-executable",
+    "application/x-dosexec",
+    "application/x-elf",
+)
+
 
 @dataclass(slots=True)
 class FileInfo:
@@ -33,6 +53,9 @@ class FileInfo:
 def _document_kind(mime: str | None, name: str | None) -> str:
     m = (mime or "").lower()
     n = (name or "").lower()
+    # نصبی/اجرایی اول (apk هم فنی zip است ولی «app» طبقه‌بندی شود، نه archive)
+    if n.endswith(PACKAGE_EXT) or any(m.startswith(a) for a in PACKAGE_MIME):
+        return "app"
     if n.endswith(ARCHIVE_EXT) or any(m.startswith(a) for a in ARCHIVE_MIME):
         return "archive"
     if m.startswith("image/"):

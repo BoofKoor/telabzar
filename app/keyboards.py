@@ -30,6 +30,10 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("list_zip", "btn_list"), ("extract", "btn_extract"),
         ("scan", "btn_scan"), ("rename", "btn_rename"),
     ],
+    # فایلِ نصبی/اجرایی (apk و مشابه): اسکن مقدم و برجسته
+    "app": [
+        ("scan", "btn_scan"), ("zip", "btn_zip"), ("rename", "btn_rename"),
+    ],
 }
 _DEFAULT_OPS: list[tuple[str, str]] = [
     ("convert", "btn_convert"), ("compress", "btn_compress"),
