@@ -59,8 +59,10 @@ async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir
     if op == "scan":
         try:
             status, name = await scan_file(inpath)
-        except ScanUnavailable:
-            return {"note_only": True, "label": t(lang, "cl_scan_unavailable")}
+        except ScanUnavailable as exc:
+            reason = " ".join(str(exc).split())[:120]
+            label = t(lang, "cl_scan_unavailable")
+            return {"note_only": True, "label": f"{label} — {reason}" if reason else label}
         if status == "OK":
             return {"note_only": True, "label": t(lang, "cl_scan_clean")}
         return {"note_only": True, "label": t(lang, "cl_scan_infected", name=name or "?")}

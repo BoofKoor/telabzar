@@ -72,6 +72,14 @@ services:
     volumes:
       - clamav-data:/var/lib/clamav
     # اولین اجرا: freshclam دیتابیس امضاها (~۲۴۰MB) را می‌گیرد؛ چند دقیقه طول می‌کشد.
+    # healthcheck تا در `telabzar status` معلوم شود clamd واقعاً آماده است یا نه.
+    # start_period بلند = مهلتِ دانلودِ اولیهٔ دیتابیس بدونِ unhealthy شدن.
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 360s
 
   worker:
     build:
