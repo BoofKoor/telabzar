@@ -44,6 +44,9 @@ async def on_file(
         mime=info.mime,
         name=info.name,
         size=info.size,
+        width=info.width,
+        height=info.height,
+        duration=info.duration,
         changelog=[],
     )
     session.add(file)

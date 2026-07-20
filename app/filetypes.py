@@ -42,12 +42,15 @@ PACKAGE_MIME = (
 
 @dataclass(slots=True)
 class FileInfo:
-    kind: str  # document | image | video | audio | archive
+    kind: str  # document | image | video | audio | archive | pdf | app
     file_id: str
     file_unique_id: str
     name: str | None
     size: int | None
     mime: str | None
+    width: int | None = None
+    height: int | None = None
+    duration: int | None = None
 
 
 def _document_kind(mime: str | None, name: str | None) -> str:
@@ -78,26 +81,33 @@ def detect(message: Message) -> FileInfo | None:
         )
     if message.photo:
         p = message.photo[-1]
-        return FileInfo("image", p.file_id, p.file_unique_id, None, p.file_size, "image/jpeg")
+        return FileInfo("image", p.file_id, p.file_unique_id, None, p.file_size, "image/jpeg",
+                        width=p.width, height=p.height)
     if message.video:
         v = message.video
-        return FileInfo("video", v.file_id, v.file_unique_id, v.file_name, v.file_size, v.mime_type)
+        return FileInfo("video", v.file_id, v.file_unique_id, v.file_name, v.file_size, v.mime_type,
+                        width=v.width, height=v.height, duration=v.duration)
     if message.audio:
         a = message.audio
         name = a.file_name or " - ".join(x for x in (a.performer, a.title) if x) or None
-        return FileInfo("audio", a.file_id, a.file_unique_id, name, a.file_size, a.mime_type)
+        return FileInfo("audio", a.file_id, a.file_unique_id, name, a.file_size, a.mime_type,
+                        duration=a.duration)
     if message.voice:
         v = message.voice
-        return FileInfo("audio", v.file_id, v.file_unique_id, None, v.file_size, v.mime_type)
+        return FileInfo("audio", v.file_id, v.file_unique_id, None, v.file_size, v.mime_type,
+                        duration=v.duration)
     if message.animation:
         a = message.animation
-        return FileInfo("video", a.file_id, a.file_unique_id, a.file_name, a.file_size, a.mime_type)
+        return FileInfo("video", a.file_id, a.file_unique_id, a.file_name, a.file_size, a.mime_type,
+                        width=a.width, height=a.height, duration=a.duration)
     if message.video_note:
         v = message.video_note
-        return FileInfo("video", v.file_id, v.file_unique_id, None, v.file_size, "video/mp4")
+        return FileInfo("video", v.file_id, v.file_unique_id, None, v.file_size, "video/mp4",
+                        width=v.length, height=v.length, duration=v.duration)
     if message.sticker:
         s = message.sticker
-        return FileInfo("image", s.file_id, s.file_unique_id, None, s.file_size, "image/webp")
+        return FileInfo("image", s.file_id, s.file_unique_id, None, s.file_size, "image/webp",
+                        width=s.width, height=s.height)
     return None
 
 

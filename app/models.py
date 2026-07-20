@@ -46,8 +46,12 @@ class File(Base):
     mime: Mapped[str | None] = mapped_column(String(128), nullable=True)
     name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    width: Mapped[int | None] = mapped_column(nullable=True)
+    height: Mapped[int | None] = mapped_column(nullable=True)
+    duration: Mapped[int | None] = mapped_column(nullable=True)
     changelog: Mapped[list | None] = mapped_column(JSON, default=list)
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # متادیتای فعلیِ صوت
+    dl_token: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
