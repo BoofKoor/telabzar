@@ -13,9 +13,15 @@ FFPROBE = "ffprobe"
 SEVENZ = "7z"
 
 
-async def _run(cmd: list[str], timeout: float = 600, progress=None, duration: float | None = None) -> None:
-    """اجرای ffmpeg. اگر progress و duration بدهی، از خروجیِ ‎-progress درصد را
-    می‌خواند و progress(percent) را صدا می‌زند (برای نوارِ پیشرفتِ زنده)."""
+class ProcessingCancelled(Exception):
+    """کاربر عملیات را وسطِ کار لغو کرد."""
+
+
+async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: float | None = None,
+               cancel=None) -> None:
+    """اجرای ffmpeg. اگر progress و duration بدهی، از ‎-progress درصد را می‌خواند
+    و progress(percent) را صدا می‌زند. اگر cancel بدهی، هر چند ثانیه چکش می‌کند و
+    در صورتِ True فرایند را می‌کُشد (ProcessingCancelled)."""
     use_prog = progress is not None and bool(duration)
     if use_prog:
         cmd = [cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]]
@@ -27,12 +33,14 @@ async def _run(cmd: list[str], timeout: float = 600, progress=None, duration: fl
 
     if use_prog:
         err_chunks: list[bytes] = []
+        cancelled = False
 
         async def _drain_stderr() -> None:
             async for raw in proc.stderr:  # type: ignore[union-attr]
                 err_chunks.append(raw)
 
         async def _read_progress() -> None:
+            nonlocal cancelled
             async for raw in proc.stdout:  # type: ignore[union-attr]
                 line = raw.decode("utf-8", "ignore").strip()
                 if line.startswith("out_time_us="):
@@ -43,6 +51,14 @@ async def _run(cmd: list[str], timeout: float = 600, progress=None, duration: fl
                             await progress(pct)
                         except Exception:  # noqa: BLE001
                             pass
+                if cancel is not None and line.startswith("progress="):
+                    try:
+                        if await cancel():
+                            cancelled = True
+                            proc.kill()
+                            return
+                    except Exception:  # noqa: BLE001
+                        pass
 
         try:
             await asyncio.wait_for(asyncio.gather(_read_progress(), _drain_stderr()), timeout=timeout)
@@ -51,6 +67,8 @@ async def _run(cmd: list[str], timeout: float = 600, progress=None, duration: fl
             await proc.wait()
             raise RuntimeError("processing timed out") from None
         await proc.wait()
+        if cancelled:
+            raise ProcessingCancelled()
         err = b"".join(err_chunks)
     else:
         try:
@@ -115,27 +133,28 @@ _AUDIO_CODEC: dict[str, list[str]] = {
 }
 
 
-async def compress_audio(inp: str, out: str, progress=None, duration=None) -> None:
+async def compress_audio(inp: str, out: str, progress=None, duration=None, cancel=None) -> None:
     await _run([FFMPEG, "-y", "-i", inp, "-vn", "-c:a", "libmp3lame", "-b:a", "128k", out],
-               progress=progress, duration=duration)
+               progress=progress, duration=duration, cancel=cancel)
 
 
-async def convert_audio(inp: str, out: str, fmt: str, progress=None, duration=None) -> None:
+async def convert_audio(inp: str, out: str, fmt: str, progress=None, duration=None, cancel=None) -> None:
     codec = _AUDIO_CODEC.get(fmt.lower(), [])
-    await _run([FFMPEG, "-y", "-i", inp, "-vn", *codec, out], progress=progress, duration=duration)
+    await _run([FFMPEG, "-y", "-i", inp, "-vn", *codec, out], progress=progress, duration=duration, cancel=cancel)
 
 
-async def extract_audio(inp: str, out: str, fmt: str = "mp3", progress=None, duration=None) -> None:
+async def extract_audio(inp: str, out: str, fmt: str = "mp3", progress=None, duration=None, cancel=None) -> None:
     """صدا را از ویدیو جدا می‌کند (بدونِ تصویر)."""
     codec = _AUDIO_CODEC.get(fmt.lower(), ["-c:a", "libmp3lame", "-b:a", "192k"])
-    await _run([FFMPEG, "-y", "-i", inp, "-vn", *codec, out], progress=progress, duration=duration)
+    await _run([FFMPEG, "-y", "-i", inp, "-vn", *codec, out],
+               progress=progress, duration=duration, cancel=cancel)
     if not os.path.exists(out):
         raise RuntimeError("no audio track extracted")
 
 
 # ── ویدیو (ffmpeg) ─────────────────────────────────────────────
 async def compress_video(inp: str, out: str, height: int | None = None, kbps: int | None = None,
-                         progress=None, duration=None) -> None:
+                         progress=None, duration=None, cancel=None) -> None:
     """فشرده‌سازی؛ اگر height بدهی به آن رزولوشن اسکیل می‌کند و اگر kbps بدهی
     نرخِ هدف را می‌گیرد (برای تخمینِ حجمِ دقیق‌تر)، وگرنه CRF."""
     args = [FFMPEG, "-y", "-i", inp]
@@ -148,10 +167,10 @@ async def compress_video(inp: str, out: str, height: int | None = None, kbps: in
     else:
         args += ["-c:v", "libx264", "-crf", "30", "-preset", "veryfast"]
     args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out]
-    await _run(args, progress=progress, duration=duration)
+    await _run(args, progress=progress, duration=duration, cancel=cancel)
 
 
-async def convert_video(inp: str, out: str, fmt: str, progress=None, duration=None) -> None:
+async def convert_video(inp: str, out: str, fmt: str, progress=None, duration=None, cancel=None) -> None:
     args = [FFMPEG, "-y", "-i", inp]
     if fmt.lower() == "mp4":
         args += [
@@ -159,18 +178,18 @@ async def convert_video(inp: str, out: str, fmt: str, progress=None, duration=No
             "-c:a", "aac", "-movflags", "+faststart",
         ]
     args.append(out)
-    await _run(args, progress=progress, duration=duration)
+    await _run(args, progress=progress, duration=duration, cancel=cancel)
 
 
 # ── ویدیو → GIF (کم‌مصرف؛ پالت با max_colors محدود تا OOM/‏code -9 ندهد) ─
 # نکته: '-t' قبل از '-i' فقط چند ثانیهٔ اول را decode می‌کند (حافظهٔ کمتر)؛
 # max_colors + stats_mode=diff مصرفِ palettegen را پایین می‌آورد.
 async def video_to_gif(inp: str, out: str, seconds: int = 6, width: int = 360, fps: int = 10,
-                       progress=None, duration=None) -> None:
+                       progress=None, duration=None, cancel=None) -> None:
     vf = (f"fps={fps},scale={width}:-2:flags=lanczos,split[s0][s1];"
           f"[s0]palettegen=max_colors=64:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5")
     await _run([FFMPEG, "-y", "-t", str(seconds), "-i", inp, "-vf", vf, "-loop", "0", out],
-               progress=progress, duration=duration)
+               progress=progress, duration=duration, cancel=cancel)
     if not os.path.exists(out):
         raise RuntimeError("GIF generation produced no output")
 

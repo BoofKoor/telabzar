@@ -224,9 +224,15 @@ async def move_card_below(bot: Bot, chat_id: int, old_message_id: int, file: Fil
     return new_msg
 
 
-async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, note: str | None = None, *, keyboard: bool) -> None:
-    """فقط کپشن/کیبوردِ کارت را عوض کن (برای حالتِ «در حال پردازش» یا «خطا»)."""
-    kb = file_card_kb(file.ref, file.kind, lang) if keyboard else None
+async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, note: str | None = None, *, keyboard) -> None:
+    """فقط کپشن/کیبوردِ کارت را عوض کن. keyboard: True=منوی اصلی · False/None=بدون کیبورد
+    · یا یک InlineKeyboardMarkup دلخواه (مثلِ دکمهٔ لغوِ حین پردازش)."""
+    if keyboard is True:
+        kb = file_card_kb(file.ref, file.kind, lang)
+    elif not keyboard:
+        kb = None
+    else:
+        kb = keyboard  # markup دلخواه
     try:
         await bot.edit_message_caption(
             chat_id=chat_id, message_id=message_id,

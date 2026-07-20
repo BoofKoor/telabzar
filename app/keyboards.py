@@ -106,6 +106,13 @@ def cancel_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def cancel_job_kb(job_id: int, lang: str) -> InlineKeyboardMarkup:
+    """دکمهٔ لغوِ یک جابِ در حالِ اجرا (ref = شناسهٔ جاب)."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_cancel_job"), callback_data=Act(op="canceljob", ref=str(job_id)))
+    return b.as_markup()
+
+
 def link_menu_kb(ref: str, lang: str, dl_url: str, stream_url: str, streamable: bool) -> InlineKeyboardMarkup:
     """زیرمنوی لینک: دانلود/پخش (URL) + کپیِ لینک (CopyTextButton) + بازگشت."""
     b = InlineKeyboardBuilder()

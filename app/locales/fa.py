@@ -95,6 +95,9 @@ MESSAGES: dict[str, str] = {
     "pr_convert": "در حالِ تبدیلِ فرمت…",
     "pr_gif": "در حالِ ساختِ GIF…",
     "pr_extract": "در حالِ استخراجِ صدا…",
+    "btn_cancel_job": "✖ لغو",
+    "cancelling": "در حالِ لغو…",
+    "cancelled": "🚫 عملیات لغو شد.",
     # ویرایشِ متادیتای صوت
     "meta_edit_prompt": "🏷 <b>ویرایشِ اطلاعاتِ موزیک</b> — فیلدی را برای تغییر انتخاب کن:",
     "meta_current_header": "اطلاعاتِ فعلی:",

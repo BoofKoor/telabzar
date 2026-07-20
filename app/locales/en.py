@@ -95,6 +95,9 @@ MESSAGES: dict[str, str] = {
     "pr_convert": "Converting…",
     "pr_gif": "Making GIF…",
     "pr_extract": "Extracting audio…",
+    "btn_cancel_job": "✖ Cancel",
+    "cancelling": "Cancelling…",
+    "cancelled": "🚫 Operation cancelled.",
     # audio metadata editing
     "meta_edit_prompt": "🏷 <b>Edit music info</b> — pick a field to change:",
     "meta_current_header": "Current info:",
