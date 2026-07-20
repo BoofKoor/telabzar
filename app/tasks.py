@@ -43,6 +43,15 @@ def _fmt_dur(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def _fail_note(lang: str, exc: Exception) -> str:
+    """پیامِ شکست + دلیلِ کوتاهِ escape‌شده — تا کاربر (و ما) بدانیم چرا."""
+    reason = " ".join(str(exc).split())[:160]
+    note = t(lang, "failed")
+    if reason:
+        note += f"\n<code>{escape(reason)}</code>"
+    return note
+
+
 async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
     """پردازش → یا {path, filename, label} (رسانه‌ساز) یا {note_only, label} (بررسی)."""
     stem = _safe_stem(file.name)
@@ -184,7 +193,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             log.exception("job %s processing failed", job_id)
             job.status = "failed"
             job.error = str(exc)[:500]
-            await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
+            await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
         else:
             if res.get("send_media") is not None:
                 # آرتیفکتِ رسانه‌ایِ جدا (GIF/تامبنیل) → پیامِ جدا؛ کارت دست‌نخورده
@@ -205,7 +214,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     log.exception("job %s artifact delivery failed", job_id)
                     job.status = "failed"
                     job.error = str(exc)[:500]
-                    await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
+                    await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
             elif res.get("files") is not None:
                 # خروجیِ چندفایلی (استخراج) → هر کدام را جدا بفرست؛ کارت دست‌نخورده
                 for p in res["files"]:
@@ -253,7 +262,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     file.name, file.size, file.kind, file.changelog = orig
                     job.status = "failed"
                     job.error = str(exc)[:500]
-                    await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "failed"), keyboard=True)
+                    await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
         finally:
             job.finished_at = datetime.now(timezone.utc)
             await session.commit()

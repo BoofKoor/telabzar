@@ -26,7 +26,9 @@ async def startup(ctx: dict) -> None:
         except Exception as exc:  # noqa: BLE001
             log.warning("worker: DB not ready (%s/15): %s", i, exc)
             await asyncio.sleep(3)
-    ctx["bot"] = create_bot()
+    # تایم‌اوتِ بلند: getFile (دانلودِ کامل از تلگرام) و آپلودِ نتیجه برای
+    # فایل‌های بزرگ به‌راحتی از ۶۰ ثانیه می‌گذرد.
+    ctx["bot"] = create_bot(request_timeout=600.0)
     log.info("Worker ready.")
 
 

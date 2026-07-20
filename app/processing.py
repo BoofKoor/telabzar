@@ -27,8 +27,9 @@ async def _run(cmd: list[str], timeout: float = 600) -> None:
         raise RuntimeError("processing timed out") from None
     if proc.returncode != 0:
         lines = [ln for ln in (err or b"").decode("utf-8", "ignore").splitlines() if ln.strip()]
-        detail = " | ".join(lines[-3:]) if lines else "unknown error"
-        raise RuntimeError("ffmpeg failed: " + detail)
+        detail = " | ".join(lines[-3:]) if lines else "no stderr"
+        # کدِ منفی = kill با سیگنال (‎-9 ≈ OOM killer — کمبودِ RAM)
+        raise RuntimeError(f"ffmpeg failed (code {proc.returncode}): " + detail)
 
 
 # ── تصویر (Pillow) ─────────────────────────────────────────────
