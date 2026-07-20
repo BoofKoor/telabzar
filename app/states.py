@@ -8,8 +8,9 @@ class Rename(StatesGroup):
     waiting_name = State()
 
 
-class ZipCollect(StatesGroup):
-    # کاربر «زیپ» زده؛ فایل‌های بعدی جمع می‌شوند تا با هم آرشیو شوند.
+class Collect(StatesGroup):
+    # جمع‌کردنِ فایل‌های بعدی برای یک عملیاتِ گروهی (زیپ یا ادغامِ PDF).
+    # هدف (purpose) در دادهٔ state نگه‌داری می‌شود.
     collecting = State()
 
 

@@ -64,6 +64,15 @@ MESSAGES: dict[str, str] = {
     "zip_list_header": "📦 Files in archive ({n}):",
     "btn_zip_go": "🗜 Zip",
     "cl_zip_many": "🗜 Zipped {n} files",
+    # PDF merge & convert
+    "btn_merge": "📎 Merge PDFs",
+    "btn_merge_go": "📎 Merge",
+    "merge_collect_prompt": "📎 <b>Merge mode</b> — send the other PDFs you want appended to this one, then tap “Merge”.",
+    "merge_list_header": "📕 PDFs ({n}):",
+    "merge_only_pdf": "⚠️ Please send a PDF file only.",
+    "merge_need_more": "Merging needs at least two PDFs.",
+    "cl_merge": "📎 Merged {n} PDFs",
+    "cl_convert_pages": "🖼 Converted to {n} page images",
     # audio metadata editing
     "meta_edit_prompt": "🏷 <b>Edit music info</b> — pick a field to change:",
     "meta_current_header": "Current info:",
