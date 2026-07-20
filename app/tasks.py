@@ -52,6 +52,26 @@ def _fail_note(lang: str, exc: Exception) -> str:
     return note
 
 
+async def _convert_pdf(fmt: str, stem: str, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
+    """تبدیلِ PDF به docx (LibreOffice) / txt (pdftotext) / تصویرِ صفحات (pdftoppm)."""
+    # کپی با نامِ .pdf تا ابزارها فرمت را درست بشناسند
+    src = os.path.join(workdir, f"{stem}.pdf")
+    shutil.copyfile(inpath, src)
+    if fmt == "docx":
+        out = await P.office_convert(src, workdir, "docx")
+        return {"path": out, "filename": f"{stem}.docx", "label": t(lang, "cl_convert", fmt="DOCX"),
+                "kind": "document"}
+    if fmt == "txt":
+        out = os.path.join(workdir, f"{stem}.txt")
+        await P.pdf_to_text(src, out)
+        return {"path": out, "filename": f"{stem}.txt", "label": t(lang, "cl_convert", fmt="TXT"),
+                "kind": "document"}
+    if fmt in ("jpg", "jpeg", "png"):
+        files = await P.pdf_to_images(src, workdir, "png" if fmt == "png" else "jpg")
+        return {"note_only": True, "label": t(lang, "cl_convert_pages", n=len(files)), "files": files}
+    raise RuntimeError(f"unsupported pdf target: {fmt}")
+
+
 async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
     """پردازش → یا {path, filename, label} (رسانه‌ساز) یا {note_only, label} (بررسی)."""
     stem = _safe_stem(file.name)
@@ -89,6 +109,8 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
 
     if op == "convert":
         fmt = (args.get("target") or "").lower()
+        if file.kind == "pdf":
+            return await _convert_pdf(fmt, stem, inpath, workdir, lang)
         out = os.path.join(workdir, f"{stem}.{fmt}")
         if file.kind == "image":
             await P.convert_image(inpath, out, fmt)
@@ -99,6 +121,24 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         else:
             raise RuntimeError("convert not supported for this type")
         return {"path": out, "filename": f"{stem}.{fmt}", "label": t(lang, "cl_convert", fmt=fmt.upper())}
+
+    if op == "pdf_merge":
+        members = args.get("members") or []
+        paths: list[str] = []
+        for m in members:
+            fid = m.get("file_id")
+            if not fid:
+                continue
+            tg = await bot.get_file(fid)
+            p = tg.file_path
+            if not p or not os.path.exists(p):
+                raise RuntimeError(f"member not found on disk: {m.get('name') or fid}")
+            paths.append(p)
+        if len(paths) < 2:
+            raise RuntimeError("need at least two PDFs to merge")
+        out = os.path.join(workdir, "merged.pdf")
+        await P.pdf_merge(paths, out)
+        return {"path": out, "filename": "merged.pdf", "label": t(lang, "cl_merge", n=len(paths)), "kind": "pdf"}
 
     if op == "zip":
         out = os.path.join(workdir, f"{stem}.zip")

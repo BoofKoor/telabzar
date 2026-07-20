@@ -64,6 +64,8 @@ def _document_kind(mime: str | None, name: str | None) -> str:
         return "video"
     if m.startswith("audio/"):
         return "audio"
+    if m == "application/pdf" or n.endswith(".pdf"):
+        return "pdf"
     return "document"
 
 

@@ -23,7 +23,8 @@ from .i18n import t
 from .keyboards import file_card_kb
 from .models import File
 
-_ICON = {"document": "🗎", "image": "🖼", "video": "🎬", "audio": "🎵", "archive": "🗜", "app": "📦"}
+_ICON = {"document": "🗎", "image": "🖼", "video": "🎬", "audio": "🎵",
+         "archive": "🗜", "app": "📦", "pdf": "📕"}
 _INPUT_MEDIA = {"image": InputMediaPhoto, "video": InputMediaVideo, "audio": InputMediaAudio}
 
 

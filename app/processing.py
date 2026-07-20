@@ -201,17 +201,17 @@ async def write_audio_metadata(inp: str, out: str, tags: dict[str, str],
         raise RuntimeError("metadata write produced no output")
 
 
-# ── سند → PDF (LibreOffice headless) ───────────────────────────
+# ── تبدیلِ سند با LibreOffice headless (به PDF / DOCX / …) ──────
 # نکته: soffice حتی وقتی فایلِ ورودی را نمی‌تواند باز کند با کدِ 0 خارج
 # می‌شود؛ پس به‌جای اتکا به returncode، وجودِ خروجی را بررسی و در صورتِ
 # نبودِ آن، stderr را در پیامِ خطا می‌آوریم تا اشکال‌زدایی ممکن باشد.
-async def office_to_pdf(inp: str, outdir: str) -> str:
+async def office_convert(inp: str, outdir: str, target: str) -> str:
     profile = os.path.join(outdir, "_loprofile")
     proc = await asyncio.create_subprocess_exec(
         "soffice", "--headless", "--nologo", "--nofirststartwizard",
         "--nolockcheck", "--norestore",
         f"-env:UserInstallation=file://{profile}",
-        "--convert-to", "pdf", "--outdir", outdir, inp,
+        "--convert-to", target, "--outdir", outdir, inp,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -220,19 +220,53 @@ async def office_to_pdf(inp: str, outdir: str) -> str:
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
-        raise RuntimeError("PDF conversion timed out") from None
+        raise RuntimeError(f"{target} conversion timed out") from None
 
     base = os.path.splitext(os.path.basename(inp))[0]
-    out = os.path.join(outdir, base + ".pdf")
+    out = os.path.join(outdir, f"{base}.{target}")
     if os.path.exists(out):
         return out
-    pdfs = [f for f in os.listdir(outdir) if f.lower().endswith(".pdf")]
-    if pdfs:
-        return os.path.join(outdir, pdfs[0])
+    matches = [f for f in os.listdir(outdir) if f.lower().endswith(f".{target}")]
+    if matches:
+        return os.path.join(outdir, matches[0])
 
     lines = [ln for ln in (err or b"").decode("utf-8", "ignore").splitlines() if ln.strip()]
     detail = " | ".join(lines[-3:]) if lines else "no output"
-    raise RuntimeError("PDF conversion failed: " + detail)
+    raise RuntimeError(f"{target} conversion failed: " + detail)
+
+
+async def office_to_pdf(inp: str, outdir: str) -> str:
+    return await office_convert(inp, outdir, "pdf")
+
+
+# ── تبدیل و ادغامِ PDF (poppler-utils) ──────────────────────────
+async def pdf_to_text(inp: str, out: str) -> None:
+    await _run(["pdftotext", "-layout", inp, out], timeout=180)
+    if not os.path.exists(out):
+        raise RuntimeError("no text extracted from PDF")
+
+
+async def pdf_to_images(inp: str, outdir: str, fmt: str = "jpg", max_pages: int = 100) -> list[str]:
+    ext = "png" if fmt.lower() == "png" else "jpg"
+    flag = "-png" if ext == "png" else "-jpeg"
+    prefix = os.path.join(outdir, "page")
+    # -l محدودیتِ صفحه (دفاع در برابرِ PDFهای خیلی بزرگ)
+    await _run(["pdftoppm", flag, "-r", "150", "-l", str(max_pages), inp, prefix], timeout=300)
+    files = sorted(
+        os.path.join(outdir, f) for f in os.listdir(outdir)
+        if f.startswith("page") and f.lower().endswith(f".{ext}")
+    )
+    if not files:
+        raise RuntimeError("no pages rendered from PDF")
+    return files
+
+
+async def pdf_merge(inputs: list[str], out: str) -> None:
+    if len(inputs) < 2:
+        raise RuntimeError("need at least two PDFs to merge")
+    await _run(["pdfunite", *inputs, out], timeout=300)
+    if not os.path.exists(out):
+        raise RuntimeError("PDF merge produced no output")
 
 
 # ── آرشیو (7-Zip) ──────────────────────────────────────────────

@@ -1,5 +1,5 @@
-"""عملیاتِ روی کارت: enqueue، منوی تبدیل، اسکن، تغییرِ نام، جمعِ چندفایلی برای زیپ،
-ویرایشِ متادیتا (FSM)، و کنترلِ سوءاستفاده."""
+"""عملیاتِ روی کارت: enqueue، منوی تبدیل، اسکن، تغییرِ نام، جمعِ چندفایلی
+(زیپ / ادغامِ PDF)، ویرایشِ متادیتا (FSM)، و کنترلِ سوءاستفاده."""
 from __future__ import annotations
 
 import asyncio
@@ -18,22 +18,22 @@ from ..config import settings
 from ..crud import get_file_by_ref
 from ..filetypes import detect, suggested_name
 from ..i18n import t
-from ..keyboards import CONVERTIBLE, FIELD_LABEL, cancel_kb, convert_menu_kb, zip_collect_kb
+from ..keyboards import CONVERTIBLE, FIELD_LABEL, cancel_kb, collect_kb, convert_menu_kb
 from ..models import Job, User
-from ..states import MetaEdit, Rename, ZipCollect
+from ..states import Collect, MetaEdit, Rename
 
 router = Router(name="ops")
 
 # عملیاتی که واقعاً پردازش/فایل تولید می‌کنند (بقیه در M4)
 _PROCESSING_KINDS = {"image", "video", "audio"}
 
-# فیلترِ فایل (برای حالتِ جمع‌کردنِ زیپ)
+# فیلترِ فایل (برای حالتِ جمع‌کردن)
 _FILE_F = (
     F.document | F.photo | F.video | F.audio | F.voice
     | F.animation | F.video_note | F.sticker
 )
 
-# قفلِ هر-چت برای جمع‌کردنِ زیپ: آپدیت‌های آلبوم همزمان پردازش می‌شوند
+# قفلِ هر-چت برای جمع‌کردن: آپدیت‌های آلبوم همزمان پردازش می‌شوند
 # (aiogram با task)، و بدونِ قفل، read-modify-writeِ لیستِ اعضا دچارِ رقابت می‌شود.
 _collect_locks: dict[int, asyncio.Lock] = {}
 
@@ -45,14 +45,16 @@ def _collect_lock(chat_id: int) -> asyncio.Lock:
     return lock
 
 
-def _zip_note(lang: str, members: list[dict], last: str | None = None) -> str:
-    lines = [t(lang, "zip_collect_prompt")]
+def _collect_note(lang: str, purpose: str, members: list[dict], last: str | None = None) -> str:
+    prompt = "merge_collect_prompt" if purpose == "merge" else "zip_collect_prompt"
+    header = "merge_list_header" if purpose == "merge" else "zip_list_header"
+    lines = [t(lang, prompt)]
     if last:
         lines.append(t(lang, "zip_received", name=escape(last)))
     names = [str(m.get("name") or "file") for m in members]
     shown = names[-12:]
     body = "\n".join(f"• {escape(n[:48])}" for n in shown)
-    block = f"{t(lang, 'zip_list_header', n=len(names))}\n<blockquote>{body}"
+    block = f"{t(lang, header, n=len(names))}\n<blockquote>{body}"
     if len(names) > len(shown):
         block += f"\n… (+{len(names) - len(shown)})"
     block += "</blockquote>"
@@ -252,7 +254,22 @@ async def op_rename_recv(message: Message, state: FSMContext, session: AsyncSess
     await _enqueue(arq_pool, session, file.id, "rename", {"new_name": new_name}, card_chat, card_mid, lang)
 
 
-# ── زیپِ چندفایلی: شروعِ جمع‌کردن ───────────────────────────────
+async def _collect_start(cq: CallbackQuery, file, lang: str, state: FSMContext, purpose: str) -> None:
+    members = [{"file_id": file.file_id, "name": suggested_name(file.name, file.kind, file.mime)}]
+    await state.set_state(Collect.collecting)
+    await state.update_data(ref=file.ref, card_chat=cq.message.chat.id,
+                            card_mid=cq.message.message_id, members=members, purpose=purpose)
+    try:
+        await cq.message.edit_caption(
+            caption=card_caption(file, lang, note=_collect_note(lang, purpose, members)),
+            reply_markup=collect_kb(file.ref, lang, purpose),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+# ── زیپِ چندفایلی: شروع ─────────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "zip"))
 async def op_zip_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
                        lang: str, state: FSMContext) -> None:
@@ -260,29 +277,52 @@ async def op_zip_start(cq: CallbackQuery, callback_data: Act, session: AsyncSess
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    members = [{"file_id": file.file_id, "name": suggested_name(file.name, file.kind, file.mime)}]
-    await state.set_state(ZipCollect.collecting)
-    await state.update_data(ref=file.ref, card_chat=cq.message.chat.id,
-                            card_mid=cq.message.message_id, members=members)
-    try:
-        await cq.message.edit_caption(
-            caption=card_caption(file, lang, note=_zip_note(lang, members)),
-            reply_markup=zip_collect_kb(file.ref, lang),
-        )
-    except Exception:  # noqa: BLE001
-        pass
-    await cq.answer()
+    await _collect_start(cq, file, lang, state, "zip")
 
 
-# ── زیپِ چندفایلی: دریافتِ فایل‌های بعدی ─────────────────────────
-@router.message(ZipCollect.collecting, _FILE_F)
-async def zip_collect_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str) -> None:
+# ── ادغامِ PDF: شروع ────────────────────────────────────────────
+@router.callback_query(Act.filter(F.op == "merge"))
+async def op_merge_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
+                         lang: str, state: FSMContext) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "pdf":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    await _collect_start(cq, file, lang, state, "merge")
+
+
+# ── جمع‌کردن: دریافتِ فایل‌های بعدی ─────────────────────────────
+@router.message(Collect.collecting, _FILE_F)
+async def collect_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str) -> None:
     info = detect(message)
     try:
         await message.delete()  # آپلود را پاک کن تا چت تمیز و کارت پایین بماند
     except Exception:  # noqa: BLE001
         pass
     if info is None:
+        return
+    data = await state.get_data()
+    purpose = data.get("purpose", "zip")
+    card_chat, card_mid, ref = data.get("card_chat"), data.get("card_mid"), data.get("ref", "")
+    if card_chat is None:
+        return
+    file = await get_file_by_ref(session, ref)
+    if file is None:
+        return
+    # ادغامِ PDF فقط PDF می‌پذیرد
+    if purpose == "merge" and info.kind != "pdf":
+        try:
+            await message.bot.edit_message_caption(
+                chat_id=card_chat, message_id=card_mid,
+                caption=card_caption(file, lang, note=_collect_note(lang, purpose, list(data.get("members", [])))
+                                     + "\n" + t(lang, "merge_only_pdf")),
+                reply_markup=collect_kb(ref, lang, purpose),
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return
     # قفلِ هر-چت: افزودنِ همزمانِ عکس‌های آلبوم دچارِ رقابت نشود
     async with _collect_lock(message.chat.id):
@@ -291,29 +331,23 @@ async def zip_collect_recv(message: Message, state: FSMContext, session: AsyncSe
         name = suggested_name(info.name, info.kind, info.mime, idx=len(members) + 1)
         members.append({"file_id": info.file_id, "name": name})
         await state.update_data(members=members)
-    ref = data.get("ref", "")
-    card_chat, card_mid = data.get("card_chat"), data.get("card_mid")
-    if card_chat is None:
-        return
-    file = await get_file_by_ref(session, ref)
-    if file is None:
-        return
     try:
         await message.bot.edit_message_caption(
             chat_id=card_chat, message_id=card_mid,
-            caption=card_caption(file, lang, note=_zip_note(lang, members, last=name)),
-            reply_markup=zip_collect_kb(ref, lang),
+            caption=card_caption(file, lang, note=_collect_note(lang, purpose, members, last=name)),
+            reply_markup=collect_kb(ref, lang, purpose),
         )
     except Exception:  # noqa: BLE001
         pass
 
 
-# ── زیپِ چندفایلی: اجرا ─────────────────────────────────────────
-@router.callback_query(Act.filter(F.op == "zip_go"))
-async def op_zip_go(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
-                    state: FSMContext, arq_pool: ArqRedis, user: User | None) -> None:
+# ── جمع‌کردن: اجرا (زیپ یا ادغامِ PDF) ──────────────────────────
+@router.callback_query(Act.filter(F.op == "collect_go"))
+async def op_collect_go(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
+                        state: FSMContext, arq_pool: ArqRedis, user: User | None) -> None:
     data = await state.get_data()
     members = list(data.get("members", []))
+    purpose = data.get("purpose", "zip")
     await state.clear()
     file = await get_file_by_ref(session, callback_data.ref)
     if file is None or not isinstance(cq.message, Message):
@@ -321,6 +355,10 @@ async def op_zip_go(cq: CallbackQuery, callback_data: Act, session: AsyncSession
         return
     if not members:
         members = [{"file_id": file.file_id, "name": file.name or "file"}]
+    if purpose == "merge" and len(members) < 2:
+        await cq.answer(t(lang, "merge_need_more"), show_alert=True)
+        await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang, keyboard=True)
+        return
     if user is not None:
         limit = await _check_limits(arq_pool, user.tg_user_id)
         if limit:
@@ -330,7 +368,8 @@ async def op_zip_go(cq: CallbackQuery, callback_data: Act, session: AsyncSession
     await cq.answer()
     await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang,
                         note=t(lang, "processing"), keyboard=False)
-    await _enqueue(arq_pool, session, file.id, "zip_many", {"members": members},
+    op = "pdf_merge" if purpose == "merge" else "zip_many"
+    await _enqueue(arq_pool, session, file.id, op, {"members": members},
                    cq.message.chat.id, cq.message.message_id, lang)
 
 

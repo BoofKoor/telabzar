@@ -64,6 +64,15 @@ MESSAGES: dict[str, str] = {
     "zip_list_header": "📦 فایل‌های آرشیو ({n}):",
     "btn_zip_go": "🗜 زیپ کن",
     "cl_zip_many": "🗜 {n} فایل زیپ شد",
+    # ادغام و تبدیلِ PDF
+    "btn_merge": "📎 چسباندنِ PDF",
+    "btn_merge_go": "📎 بچسبان",
+    "merge_collect_prompt": "📎 <b>حالتِ ادغام</b> — PDFهای دیگری که می‌خواهی به انتهای این PDF بچسبند را همین‌جا بفرست، بعد «بچسبان» را بزن.",
+    "merge_list_header": "📕 PDFها ({n}):",
+    "merge_only_pdf": "⚠️ فقط فایلِ PDF بفرست.",
+    "merge_need_more": "برای ادغام حداقل دو PDF لازم است.",
+    "cl_merge": "📎 {n} PDF به‌هم چسبانده شد",
+    "cl_convert_pages": "🖼 به {n} صفحه‌تصویر تبدیل شد",
     # ویرایشِ متادیتای صوت
     "meta_edit_prompt": "🏷 <b>ویرایشِ اطلاعاتِ موزیک</b> — فیلدی را برای تغییر انتخاب کن:",
     "meta_current_header": "اطلاعاتِ فعلی:",

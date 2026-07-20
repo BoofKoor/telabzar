@@ -35,7 +35,10 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("compress", "btn_compress"), ("zip", "btn_zip"),
     ],
     "document": [
-        ("to_pdf", "btn_to_pdf"), ("convert", "btn_convert"), ("compress", "btn_compress"),
+        ("to_pdf", "btn_to_pdf"), ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+    ],
+    "pdf": [
+        ("convert", "btn_convert"), ("merge", "btn_merge"),
         ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "archive": [
@@ -58,6 +61,7 @@ CONVERT_FORMATS: dict[str, list[str]] = {
     "image": ["jpg", "png", "webp"],
     "video": ["mp4", "webm", "mkv"],
     "audio": ["mp3", "m4a", "ogg", "wav"],
+    "pdf": ["docx", "jpg", "txt"],
 }
 CONVERTIBLE = set(CONVERT_FORMATS)
 
@@ -94,9 +98,11 @@ def cancel_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def zip_collect_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+def collect_kb(ref: str, lang: str, purpose: str) -> InlineKeyboardMarkup:
+    """کیبوردِ جمع‌کردنِ فایل — دکمهٔ اجرا بسته به هدف (زیپ یا ادغامِ PDF)."""
+    go_key = "btn_merge_go" if purpose == "merge" else "btn_zip_go"
     b = InlineKeyboardBuilder()
-    b.button(text=t(lang, "btn_zip_go"), callback_data=Act(op="zip_go", ref=ref))
+    b.button(text=t(lang, go_key), callback_data=Act(op="collect_go", ref=ref))
     b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
     b.adjust(2)
     return b.as_markup()
