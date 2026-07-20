@@ -20,7 +20,7 @@ from aiogram.types import FSInputFile
 
 from . import processing as P
 from .filetypes import human_size
-from .cards import message_media_id, set_card_note, update_card
+from .cards import message_media_id, move_card_below, set_card_note, update_card
 from .config import settings
 from .db import Sessionmaker
 from .i18n import t
@@ -52,7 +52,7 @@ def _fail_note(lang: str, exc: Exception) -> str:
     return note
 
 
-async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
+async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
     """پردازش → یا {path, filename, label} (رسانه‌ساز) یا {note_only, label} (بررسی)."""
     stem = _safe_stem(file.name)
 
@@ -105,6 +105,34 @@ async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir
         await P.make_zip(inpath, out, file.name or stem)
         return {"path": out, "filename": f"{stem}.zip", "label": t(lang, "cl_zip"), "kind": "archive"}
 
+    if op == "zip_many":
+        members = args.get("members") or []
+        downloaded: list[tuple[str, str]] = []
+        for m in members:
+            fid = m.get("file_id")
+            if not fid:
+                continue
+            tg = await bot.get_file(fid)
+            p = tg.file_path
+            if not p or not os.path.exists(p):
+                raise RuntimeError(f"member not found on disk: {m.get('name') or fid}")
+            downloaded.append((p, m.get("name") or os.path.basename(p)))
+        if not downloaded:
+            raise RuntimeError("no files to zip")
+        out = os.path.join(workdir, "archive.zip")
+        await P.make_zip_many(downloaded, out)
+        return {"path": out, "filename": "archive.zip",
+                "label": t(lang, "cl_zip_many", n=len(downloaded)), "kind": "archive"}
+
+    if op == "meta_write":
+        tags = {k: str(v) for k, v in (args.get("tags") or {}).items() if v}
+        if not tags:
+            raise RuntimeError("no metadata to write")
+        ext = os.path.splitext(file.name or "audio.mp3")[1] or ".mp3"
+        out = os.path.join(workdir, f"{stem}{ext}")
+        await P.write_audio_metadata(inpath, out, tags)
+        return {"path": out, "filename": f"{stem}{ext}", "label": t(lang, "cl_meta_edit"), "kind": "audio"}
+
     if op == "to_pdf":
         src = os.path.join(workdir, os.path.basename(file.name or "input"))
         shutil.copyfile(inpath, src)
@@ -138,32 +166,6 @@ async def _do_op(op: str, args: dict[str, Any], file: File, inpath: str, workdir
         return {"send_media": {"as": "photo", "path": out, "filename": f"{stem}.jpg"},
                 "label": t(lang, "cl_thumb")}
 
-    if op == "meta":
-        m = await P.audio_metadata(inpath)
-        tags, fmt, st = m["tags"], m["format"], m["stream"]
-        rows: list[tuple[str, str]] = []
-        for key in ("title", "artist", "album", "album_artist", "date", "genre", "track"):
-            if tags.get(key):
-                rows.append((key, str(tags[key])))
-        dur = float(fmt.get("duration") or 0)
-        if dur:
-            rows.append(("duration", _fmt_dur(dur)))
-        br = str(fmt.get("bit_rate") or "")
-        if br.isdigit():
-            rows.append(("bitrate", f"{int(br) // 1000} kbps"))
-        if st.get("codec_name"):
-            rows.append(("codec", str(st["codec_name"])))
-        if st.get("sample_rate"):
-            rows.append(("sample rate", f"{st['sample_rate']} Hz"))
-        if st.get("channels"):
-            rows.append(("channels", str(st["channels"])))
-        lines = [t(lang, "meta_header")]
-        if rows:
-            lines += [f"• <b>{escape(k)}</b>: <code>{escape(v)}</code>" for k, v in rows]
-        else:
-            lines.append(t(lang, "meta_empty"))
-        return {"note_only": True, "label": t(lang, "cl_meta"), "message": "\n".join(lines)}
-
     raise RuntimeError(f"unknown op: {op}")
 
 
@@ -194,7 +196,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 # مسیر را در خطا بیاور تا ریشه فوراً معلوم شود:
                 # نسبی → سرور local نیست؛ مطلق → مشکلِ mount یا پرمیشن/capability
                 raise RuntimeError(f"input file not found on disk: {inpath or '(empty)'}"[:200])
-            res = await _do_op(job.op, job.args or {}, file, inpath, workdir, lang)
+            res = await _do_op(bot, job.op, job.args or {}, file, inpath, workdir, lang)
         except Exception as exc:  # noqa: BLE001  — پردازش شکست خورد؛ فایل دست‌نخورده
             log.exception("job %s processing failed", job_id)
             job.status = "failed"
@@ -202,7 +204,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
         else:
             if res.get("send_media") is not None:
-                # آرتیفکتِ رسانه‌ایِ جدا (GIF/تامبنیل) → پیامِ جدا؛ کارت دست‌نخورده
+                # آرتیفکتِ رسانه‌ایِ جدا (GIF/تامبنیل) → خروجی بالا، کارتِ تازه پایین
                 sm = res["send_media"]
                 p = sm["path"]
                 src = FSInputFile(p, filename=sm.get("filename") or os.path.basename(p))
@@ -214,7 +216,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     else:
                         await bot.send_document(chat_id, src)
                     file.changelog = list(file.changelog or []) + [res["label"]]
-                    await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+                    await move_card_below(bot, chat_id, card_mid, file, lang)
                     job.status = "done"
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ بدونِ بن‌بست
                     log.exception("job %s artifact delivery failed", job_id)
@@ -222,26 +224,26 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     job.error = str(exc)[:500]
                     await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
             elif res.get("files") is not None:
-                # خروجیِ چندفایلی (استخراج) → هر کدام را جدا بفرست؛ کارت دست‌نخورده
+                # خروجیِ چندفایلی (استخراج) → فایل‌ها بالا، کارتِ تازه پایین (چت تمیز)
                 for p in res["files"]:
                     try:
                         await bot.send_document(chat_id, FSInputFile(p, filename=os.path.basename(p)))
                     except Exception:  # noqa: BLE001
                         log.warning("sending extracted file failed: %s", p)
                 file.changelog = list(file.changelog or []) + [res["label"]]
-                await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+                await move_card_below(bot, chat_id, card_mid, file, lang)
                 job.status = "done"
             elif res.get("message") is not None:
-                # نتیجهٔ متنی (لیستِ آرشیو) → پیامِ جدا؛ کارت دست‌نخورده
+                # نتیجهٔ متنی (لیستِ آرشیو) → پیام بالا، کارتِ تازه پایین
                 try:
                     await bot.send_message(chat_id, res["message"])
                 except Exception:  # noqa: BLE001
                     log.warning("sending listing failed")
                 file.changelog = list(file.changelog or []) + [res["label"]]
-                await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+                await move_card_below(bot, chat_id, card_mid, file, lang)
                 job.status = "done"
             elif res.get("note_only"):
-                # عملیاتِ بررسی (اسکن) → فقط لاگ + کپشن؛ رسانه دست‌نخورده
+                # عملیاتِ بررسی (اسکن) → فقط لاگ + کپشن؛ رسانه دست‌نخورده، درجا
                 file.changelog = list(file.changelog or []) + [res["label"]]
                 await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
                 job.status = "done"

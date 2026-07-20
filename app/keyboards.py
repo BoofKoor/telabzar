@@ -4,8 +4,14 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .callbacks import Act, Conv, Lang
+from .callbacks import Act, Conv, Lang, Meta
 from .i18n import t
+
+# فیلدهای قابلِ‌ویرایشِ متادیتای صوت → (کلیدِ ffmpeg, کلیدِ ترجمهٔ دکمه)
+META_FIELDS: list[tuple[str, str]] = [
+    ("title", "btn_f_title"), ("artist", "btn_f_artist"), ("album", "btn_f_album"),
+    ("genre", "btn_f_genre"), ("date", "btn_f_year"),
+]
 
 # عملیاتِ مرتبط با هر نوعِ فایل (فقط کلیدهایی که برای آن نوع معنا دارند).
 # ترتیب: عملیاتِ مختصِ نوع اول، بعد عمومی‌های مرتبط.
@@ -77,6 +83,24 @@ def file_card_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
 def cancel_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
+    return b.as_markup()
+
+
+def zip_collect_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_zip_go"), callback_data=Act(op="zip_go", ref=ref))
+    b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
+    b.adjust(2)
+    return b.as_markup()
+
+
+def meta_edit_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for field, key in META_FIELDS:
+        b.button(text=t(lang, key), callback_data=Meta(ref=ref, field=field))
+    b.button(text=t(lang, "btn_apply"), callback_data=Act(op="meta_apply", ref=ref))
+    b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
+    b.adjust(3, 2, 2)  # فیلدها: ۳+۲ ، بعد اعمال+لغو
     return b.as_markup()
 
 

@@ -161,6 +161,36 @@ async def make_zip(inp: str, out: str, arcname: str) -> None:
     await asyncio.to_thread(_zip_sync, inp, out, arcname)
 
 
+def _zip_many_sync(members: list[tuple[str, str]], out: str) -> None:
+    used: set[str] = set()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path, arcname in members:
+            name = os.path.basename(arcname or path) or "file"
+            base, ext = os.path.splitext(name)
+            i = 1
+            while name in used:  # جلوگیری از هم‌نامیِ اعضا
+                name = f"{base}({i}){ext}"
+                i += 1
+            used.add(name)
+            zf.write(path, arcname=name)
+
+
+async def make_zip_many(members: list[tuple[str, str]], out: str) -> None:
+    """members: [(path, arcname), …] → یک آرشیوِ zip."""
+    await asyncio.to_thread(_zip_many_sync, members, out)
+
+
+# ── نوشتنِ متادیتای صوت (ffmpeg -metadata؛ بدونِ رمزگذاریِ دوباره) ─
+async def write_audio_metadata(inp: str, out: str, tags: dict[str, str]) -> None:
+    args = [FFMPEG, "-y", "-i", inp, "-map", "0", "-c", "copy"]
+    for key, val in tags.items():
+        args += ["-metadata", f"{key}={val}"]
+    args.append(out)
+    await _run(args)
+    if not os.path.exists(out):
+        raise RuntimeError("metadata write produced no output")
+
+
 # ── سند → PDF (LibreOffice headless) ───────────────────────────
 # نکته: soffice حتی وقتی فایلِ ورودی را نمی‌تواند باز کند با کدِ 0 خارج
 # می‌شود؛ پس به‌جای اتکا به returncode، وجودِ خروجی را بررسی و در صورتِ
