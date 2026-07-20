@@ -90,6 +90,11 @@ MESSAGES: dict[str, str] = {
     # smart compress
     "compress_choose": "🗜 <b>Compress</b> — choose the output quality:",
     "btn_same_res": "♻️ Same quality, smaller",
+    # progress-bar labels
+    "pr_compress": "Compressing…",
+    "pr_convert": "Converting…",
+    "pr_gif": "Making GIF…",
+    "pr_extract": "Extracting audio…",
     # audio metadata editing
     "meta_edit_prompt": "🏷 <b>Edit music info</b> — pick a field to change:",
     "meta_current_header": "Current info:",

@@ -90,6 +90,17 @@ def _info_line(file: File) -> str:
     return "  ·  ".join(parts)
 
 
+def progress_note(label: str, percent: float, eta: float | None = None) -> str:
+    """نوارِ پیشرفتِ تمیز برای کپشن: ⚙️ برچسب / ▰▰▰▱▱ ۵۲٪ · ⏳ ~۰:۱۸."""
+    pct = max(0, min(100, int(percent)))
+    filled = round(pct / 10)
+    bar = "▰" * filled + "▱" * (10 - filled)
+    line = f"⚙️ {label}\n<code>{bar}</code>  <b>{pct}%</b>"
+    if eta and eta > 0:
+        line += f"  ·  ⏳ ~{_fmt_dur(int(eta))}"
+    return line
+
+
 def card_caption(file: File, lang: str, note: str | None = None) -> str:
     icon = _ICON.get(file.kind, "📄")
     lines = [
