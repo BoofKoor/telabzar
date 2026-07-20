@@ -14,9 +14,16 @@ from .middlewares import DataMiddleware
 from .routers import files, ops, start
 
 
-def create_bot() -> Bot:
+def create_bot(request_timeout: float = 60.0) -> Bot:
+    """ساختِ Bot متصل به سرورِ محلی.
+
+    request_timeout: برای ورکر باید بزرگ باشد — getFile روی سرورِ محلی یعنی
+    دانلودِ کاملِ فایل از تلگرام، و آپلودِ خروجی هم برای فایل‌های بزرگ از
+    ۶۰ ثانیهٔ پیش‌فرضِ aiogram رد می‌شود.
+    """
     session = AiohttpSession(
-        api=TelegramAPIServer.from_base(settings.local_api_base, is_local=True)
+        api=TelegramAPIServer.from_base(settings.local_api_base, is_local=True),
+        timeout=request_timeout,
     )
     return Bot(
         token=settings.bot_token,
