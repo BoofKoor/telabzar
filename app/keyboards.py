@@ -23,31 +23,32 @@ FEATURED_TOP = {"audio"}
 # ترتیب: عملیاتِ مختصِ نوع اول، بعد عمومی‌های مرتبط.
 OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
     "image": [
-        ("bg_remove", "btn_bg_remove"), ("convert", "btn_convert"),
-        ("compress", "btn_compress"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+        ("bg_remove", "btn_bg_remove"), ("convert", "btn_convert"), ("compress", "btn_compress"),
+        ("link", "btn_link"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "video": [
         ("to_gif", "btn_to_gif"), ("thumb", "btn_thumb"), ("convert", "btn_convert"),
-        ("compress", "btn_compress"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+        ("compress", "btn_compress"), ("link", "btn_link"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "audio": [
         ("meta", "btn_edit_music"), ("transcribe", "btn_transcribe"), ("convert", "btn_convert"),
-        ("compress", "btn_compress"), ("zip", "btn_zip"),
+        ("compress", "btn_compress"), ("link", "btn_link"), ("zip", "btn_zip"),
     ],
     "document": [
-        ("to_pdf", "btn_to_pdf"), ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+        ("to_pdf", "btn_to_pdf"), ("link", "btn_link"),
+        ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "pdf": [
-        ("convert", "btn_convert"), ("merge", "btn_merge"),
+        ("convert", "btn_convert"), ("merge", "btn_merge"), ("link", "btn_link"),
         ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "archive": [
-        ("list_zip", "btn_list"), ("extract", "btn_extract"),
+        ("list_zip", "btn_list"), ("extract", "btn_extract"), ("link", "btn_link"),
         ("scan", "btn_scan"), ("rename", "btn_rename"),
     ],
     # فایلِ نصبی/اجرایی (apk و مشابه): اسکن مقدم و برجسته
     "app": [
-        ("scan", "btn_scan"), ("zip", "btn_zip"), ("rename", "btn_rename"),
+        ("scan", "btn_scan"), ("link", "btn_link"), ("zip", "btn_zip"), ("rename", "btn_rename"),
     ],
 }
 _DEFAULT_OPS: list[tuple[str, str]] = [

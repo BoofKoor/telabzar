@@ -73,6 +73,12 @@ MESSAGES: dict[str, str] = {
     "merge_need_more": "Merging needs at least two PDFs.",
     "cl_merge": "📎 Merged {n} PDFs",
     "cl_convert_pages": "🖼 Converted to {n} page images",
+    # download / stream links
+    "btn_link": "🔗 Link",
+    "btn_dl": "⬇️ Download",
+    "btn_stream": "▶️ Stream",
+    "link_ready": "🔗 Link for “{name}” is ready:",
+    "link_unconfigured": "Links aren't configured yet (no domain set at install).",
     # audio metadata editing
     "meta_edit_prompt": "🏷 <b>Edit music info</b> — pick a field to change:",
     "meta_current_header": "Current info:",

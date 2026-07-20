@@ -23,6 +23,21 @@ ask() { # ask <var> <prompt> [default]
   printf -v "$__var" '%s' "$__ans"
 }
 
+read_pem() { # read_pem <outfile> <label>
+  local out=$1 label=$2 line
+  say ""
+  say "${BOLD}${label}${RESET}"
+  say "${DIM}کلِ متن (شاملِ خطوطِ BEGIN/END) را بچسبان، بعد در یک خطِ جدا فقط ${RESET}${BOLD}EOF${RESET}${DIM} بنویس و Enter بزن:${RESET}"
+  : > "$out"; chmod 600 "$out"
+  while IFS= read -r line; do
+    [[ "$line" == "EOF" ]] && break
+    printf '%s\n' "$line" >> "$out"
+  done
+  if ! grep -q "BEGIN" "$out"; then
+    warn "به‌نظر PEM معتبری وارد نشد (خطِ BEGIN پیدا نشد)."
+  fi
+}
+
 require_docker() {
   command -v docker >/dev/null 2>&1 || die "Docker نصب نیست. اول Docker را نصب کن: https://docs.docker.com/engine/install/"
   if docker compose version >/dev/null 2>&1; then COMPOSE="docker compose";
@@ -55,7 +70,25 @@ install_master() {
   ask ADMIN_IDS "شناسهٔ عددی ادمین‌ها (با کاما جدا کن)"
   ask DEFAULT_LANG "زبان پیش‌فرض (fa/en)" "fa"
   ask MAX_FILE_MB "سقف حجم هر فایل (مگابایت)" "2000"
-  ask DOMAIN "دامنه برای لینک/استریم (اختیاری — Enter برای رد شدن)" ""
+
+  # ── دامنه و TLS برای لینکِ دانلود/استریم (اختیاری) ──
+  say ""
+  say "${BOLD}لینکِ دانلود/استریم${RESET} ${DIM}(اختیاری — برای دادنِ لینک به فایل‌ها)${RESET}"
+  say "${DIM}دامنه پشتِ Cloudflare (پروکسی روشن) و یک Origin Certificate از پنلِ Cloudflare لازم است.${RESET}"
+  ask DOMAIN "دامنه (مثلِ files.example.com — Enter برای رد شدن)" ""
+
+  local PUBLIC_BASE="" TLS_CERT="" TLS_KEY="" GW_PORT="8080"
+  if [[ -n "$DOMAIN" ]]; then
+    PUBLIC_BASE="https://${DOMAIN}"
+    ask GW_PORT "پورتِ HTTPS روی سرور (Cloudflare معمولاً ۴۴۳)" "443"
+    mkdir -p certs
+    read_pem certs/cert.pem "۱) سرتیفیکیتِ Origin کلودفلر (Origin Certificate)"
+    read_pem certs/key.pem  "۲) کلیدِ خصوصیِ Origin (Private Key)"
+    TLS_CERT="/certs/cert.pem"; TLS_KEY="/certs/key.pem"
+    ok "دامنه و سرتیفیکیت تنظیم شد → ${PUBLIC_BASE}"
+  else
+    warn "بدونِ دامنه؛ دکمهٔ «لینک» تا تنظیمِ دامنه (telabzar reconfigure) غیرفعال است."
+  fi
 
   local PG_PASS WH_SECRET
   PG_PASS=$(rand 18)
@@ -75,13 +108,20 @@ POSTGRES_USER=telabzar
 POSTGRES_PASSWORD=${PG_PASS}
 POSTGRES_DB=telabzar
 DOMAIN=${DOMAIN}
+PUBLIC_BASE=${PUBLIC_BASE}
+GATEWAY_HTTPS_PORT=${GW_PORT}
+TLS_CERT=${TLS_CERT}
+TLS_KEY=${TLS_KEY}
 EOF
   ok ".env ساخته شد (اسرار تصادفی تولید شدند)."
 
   say ""
   say "${BOLD}خلاصه:${RESET}"
-  say "  • ربات با ${BOLD}وبهوکِ داخلی${RESET} بالا می‌آید (از طریق local-bot-api)."
-  say "  • سرویس‌ها: local-bot-api · postgres · redis · bot"
+  say "  • ربات با ${BOLD}long-polling${RESET} به local-bot-api وصل می‌شود."
+  say "  • سرویس‌ها: local-bot-api · postgres · redis · bot · worker · clamav · gateway"
+  if [[ -n "$DOMAIN" ]]; then
+    say "  • لینک/استریم روی ${BOLD}${PUBLIC_BASE}${RESET} (پورتِ ${GW_PORT})."
+  fi
   local CONFIRM
   ask CONFIRM "شروع نصب و بالا آوردن استک؟ (y/n)" "y"
   [[ "$CONFIRM" =~ ^[Yy]$ ]] || { warn "لغو شد. .env ساخته شد؛ بعداً 'telabzar up' را بزن."; exit 0; }

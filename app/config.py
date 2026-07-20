@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     daily_op_quota: int = 0
     rate_per_min: int = 0
 
+    # لینک دانلود/استریم (سرویسِ gateway؛ فایل از دیسکِ local-bot-api سرو می‌شود)
+    public_base: str = ""          # پایهٔ عمومی، مثل https://files.example.com
+    gateway_port: int = 8080       # پورتِ داخلِ کانتینر (بدونِ نیاز به cap)
+    tls_cert: str = ""             # مسیرِ سرتیفیکیتِ Origin کلودفلر (PEM)
+    tls_key: str = ""              # مسیرِ کلیدِ خصوصیِ Origin (PEM)
+
     @property
     def admin_id_set(self) -> set[int]:
         out: set[int] = set()
