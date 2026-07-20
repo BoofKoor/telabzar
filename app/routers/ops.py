@@ -29,21 +29,23 @@ def _too_large(size: int | None) -> bool:
 
 
 async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
-    """None اگر مجاز؛ وگرنه 'rate' یا 'quota'."""
-    rkey = f"rate:{user_id}"
-    r = await pool.incr(rkey)
-    if r == 1:
-        await pool.expire(rkey, 60)
-    if r > settings.rate_per_min:
-        return "rate"
+    """None اگر مجاز؛ وگرنه 'rate' یا 'quota'. سقفِ ≤۰ یعنی نامحدود (خاموش)."""
+    if settings.rate_per_min > 0:
+        rkey = f"rate:{user_id}"
+        r = await pool.incr(rkey)
+        if r == 1:
+            await pool.expire(rkey, 60)
+        if r > settings.rate_per_min:
+            return "rate"
 
-    day = datetime.now(timezone.utc).strftime("%Y%m%d")
-    qkey = f"quota:{user_id}:{day}"
-    q = await pool.incr(qkey)
-    if q == 1:
-        await pool.expire(qkey, 90000)  # ~۲۵ ساعت
-    if q > settings.daily_op_quota:
-        return "quota"
+    if settings.daily_op_quota > 0:
+        day = datetime.now(timezone.utc).strftime("%Y%m%d")
+        qkey = f"quota:{user_id}:{day}"
+        q = await pool.incr(qkey)
+        if q == 1:
+            await pool.expire(qkey, 90000)  # ~۲۵ ساعت
+        if q > settings.daily_op_quota:
+            return "quota"
     return None
 
 
