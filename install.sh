@@ -111,7 +111,7 @@ case "\${1:-}" in
   status|ps)   ${COMPOSE} ps ;;
   logs)        ${COMPOSE} logs --tail=200 \${2:-} ;;
   logf)        ${COMPOSE} logs -f --tail=100 \${2:-} ;;
-  update)      git pull --ff-only && ${COMPOSE} up -d --build ;;
+  update)      git fetch origin main && git checkout -f -B main origin/main && ${COMPOSE} up -d --build ;;
   reconfigure) exec bash "$here/install.sh" ;;
   *) echo "استفاده: telabzar {up|down|status|logs|update|reconfigure}" ;;
 esac
