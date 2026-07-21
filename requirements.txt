@@ -1,6 +1,6 @@
-aiogram==3.30.0
+aiogram>=3.30,<4
 SQLAlchemy[asyncio]>=2.0,<2.1
-asyncpg>=0.30,<0.31
+asyncpg>=0.30,<0.32
 redis>=5.2,<6
 pydantic-settings>=2.5,<3
 arq>=0.26,<1

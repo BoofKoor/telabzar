@@ -13,6 +13,7 @@ from aiogram.types import BotCommand
 from arq import create_pool
 from arq.connections import RedisSettings
 
+from . import settings_store
 from .bot import create_bot, create_dispatcher
 from .config import settings
 from .db import init_models
@@ -58,6 +59,7 @@ async def _run() -> None:
     dp = create_dispatcher()
 
     await _wait_db()
+    settings_store.init_store(settings.redis_url)  # تنظیماتِ زمانِ‌اجرا (سقف‌ها و…)
     await _init_arq(dp)
     await _set_commands(bot)
 

@@ -21,6 +21,7 @@ from aiogram import Bot
 from aiogram.types import FSInputFile
 
 from . import processing as P
+from . import settings_store
 from .cards import (
     message_media_id, meta_editor_view, move_card_below, progress_note, send_card,
     set_card_note, update_card,
@@ -308,7 +309,8 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
 
     if op == "transcribe":
         mode = "srt" if args.get("mode") == "srt" else "txt"
-        text = (await P.transcribe_audio(inpath, settings.whisper_model, mode)).strip()
+        model = await settings_store.get_str("whisper_model", settings.whisper_model)
+        text = (await P.transcribe_audio(inpath, model, mode)).strip()
         if not text:
             return {"note_only": True, "label": t(lang, "asr_empty")}
         if mode == "srt":  # زیرنویس همیشه به‌صورتِ فایلِ .srt

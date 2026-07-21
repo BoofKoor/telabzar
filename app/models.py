@@ -58,6 +58,19 @@ class File(Base):
     )
 
 
+class Setting(Base):
+    """تنظیماتِ زمانِ‌اجرا (admin-lite). Postgres = منبعِ ماندگار؛ Redis = منبعِ زنده.
+    نبودِ کلید یعنی «از پیش‌فرضِ env (config.Settings) استفاده کن»."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Job(Base):
     __tablename__ = "jobs"
 
