@@ -41,9 +41,13 @@
 | `dl_op_daily_min` | `0` | عدد | سقفِ دقیقهٔ **پردازشِ** رسانهٔ دانلودی per-user (opهای گران) |
 | `dl_min_free_gb` | `3` | عدد | گاردِ فضای دیسکِ `/work` |
 | `proxy_url` | `` | env/پنل | egressِ تمیزِ خودت (`socks5h://…`) — برای یوتیوب توصیه می‌شود |
+| `dl_sponsorblock` | `` | پنل | دسته‌های SponsorBlock برای حذف (مثل `sponsor,selfpromo,intro`)؛ خالی=خاموش |
+| `dl_subs` | `off` | پنل | جاسازیِ زیرنویسِ خودکار (en+fa) در ویدیو |
 
 **فقط env (نه پنل):** `COOKIES_DIR` (پوشهٔ کوکی‌های چرخشیِ اینستا/X — فایل‌های
-`*.txt`، ترجیحاً نامِ پلتفرم در نام)، `POT_PROVIDER_URL` (سرویسِ bgutil برای یوتیوب).
+`*.txt`، ترجیحاً نامِ پلتفرم در نام)، `POT_PROVIDER_URL` (سرویسِ bgutil برای یوتیوب)،
+`COBALT_URL` + `COBALT_API_KEY` (نمونهٔ self-hostedِ Cobalt — fallback وقتی extractorِ
+yt-dlp می‌شکند؛ خالی=خاموش).
 
 **سلامتِ per-host:** شمارنده‌های Redis `dlstat:{platform}:{ok|fail}:{yyyymmdd}` نرخِ
 موفقیت/شکست را نگه می‌دارند (هشدارِ زودهنگام برای شکستنِ یوتیوب/اینستاگرام).

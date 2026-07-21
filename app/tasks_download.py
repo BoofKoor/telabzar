@@ -108,6 +108,9 @@ async def _opts(redis, platform: str) -> dict:
         "pot_provider": settings.pot_provider_url or None,
         "cookies": await _pick_cookies(redis, platform),
         "max_mb": await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb),
+        "sponsorblock": await settings_store.get_str("dl_sponsorblock", settings.dl_sponsorblock) or None,
+        "subs": await settings_store.get_bool("dl_subs", settings.dl_subs),
+        "cobalt_key": settings.cobalt_api_key or None,
     }
 
 
@@ -317,8 +320,20 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 files = await D.download_gallerydl(url, workdir, opts, progress=_progress, cancel=_cancelled)
                 paths = [(p, {}, None) for p in files]
             else:
-                path, info, thumb = await D.download_ytdlp(url, workdir, selector, opts,
-                                                           progress=_progress, cancel=_cancelled)
+                try:
+                    path, info, thumb = await D.download_ytdlp(url, workdir, selector, opts,
+                                                               progress=_progress, cancel=_cancelled)
+                except P.ProcessingCancelled:
+                    raise
+                except Exception as ytdlp_exc:  # noqa: BLE001
+                    # fallback به Cobalt فقط روی شکستِ extractor (نه login/ban که کوکی می‌خواهد)
+                    cobalt = settings.cobalt_url
+                    if cobalt and not any(h in str(ytdlp_exc).lower() for h in _LOGIN_HINTS):
+                        log.info("yt-dlp failed, trying cobalt: %s", str(ytdlp_exc)[:100])
+                        path, info, thumb = await D.download_cobalt(url, workdir, cobalt, opts,
+                                                                    progress=_progress, cancel=_cancelled)
+                    else:
+                        raise
                 paths = [(path, info, thumb)]
         except P.ProcessingCancelled:
             await _edit(bot, chat_id, status_mid, t(lang, "cancelled"))

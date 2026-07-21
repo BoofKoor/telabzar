@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     dl_cooldown_sec: int = 0       # فاصلهٔ حداقلی بینِ دو دانلودِ هر کاربر
     dl_op_daily_min: int = 0       # سقفِ دقیقهٔ رسانهٔ دانلودی که هر کاربر می‌تواند «پردازش» کند
     dl_min_free_gb: int = 3        # اگر فضای آزادِ /work کمتر از این بود، دانلود را رد کن
+    # فاز C — اکسترا/سختی‌سازی
+    dl_sponsorblock: str = ""      # دسته‌های SponsorBlock برای حذف (مثل sponsor,selfpromo)؛ خالی=خاموش
+    dl_subs: bool = False          # جاسازیِ زیرنویسِ خودکار (en+fa) در ویدیو
+    cobalt_url: str = ""           # نمونهٔ self-hostedِ Cobalt به‌عنوان fallback؛ خالی=خاموش
+    cobalt_api_key: str = ""       # کلیدِ API نمونهٔ Cobalt (در صورتِ نیاز)
 
     @property
     def admin_id_set(self) -> set[int]:
