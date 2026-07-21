@@ -2,3 +2,5 @@
 -r requirements.txt
 Pillow>=10,<12
 clamd>=1.0,<2
+arabic-reshaper>=3.0,<4    # شکل‌دهیِ حروفِ فارسی برای واترمارکِ متنی
+python-bidi>=0.4,<1        # ترتیبِ راست‌به‌چپ
