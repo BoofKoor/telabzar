@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     cobalt_url: str = ""           # نمونهٔ self-hostedِ Cobalt به‌عنوان fallback؛ خالی=خاموش
     cobalt_api_key: str = ""       # کلیدِ API نمونهٔ Cobalt (در صورتِ نیاز)
 
+    # پنلِ ادمینِ وب (فاز D) — سرویسِ جدا، احراز با کدِ تلگرام
+    admin_port: int = 8080         # پورتِ داخلِ کانتینر (میزبان → 2083)
+    admin_base: str = ""           # URL عمومیِ پنل (برای دستورِ /panel)؛ مثل https://panel.example.com:2083
+    admin_secret: str = ""         # کلیدِ رمزِ سشن؛ خالی = از bot_token مشتق می‌شود
+
     @property
     def admin_id_set(self) -> set[int]:
         out: set[int] = set()
