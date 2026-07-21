@@ -53,6 +53,7 @@ class File(Base):
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # متادیتای فعلیِ صوت
     dl_token: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     cover_id: Mapped[str | None] = mapped_column(String(256), nullable=True)  # کاورِ ویدیو
+    source: Mapped[str | None] = mapped_column(String(16), nullable=True)  # None/tg=آپلود · dl=دانلودی
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

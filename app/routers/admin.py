@@ -16,7 +16,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import settings_store
-from ..settings_store import RUNTIME_KEYS
+from ..settings_store import ENUM_VALUES, RUNTIME_KEYS
 
 router = Router(name="admin")
 
@@ -41,6 +41,12 @@ def _validate(key: str, value: str) -> str | None:
             int(value)
         except ValueError:
             return f"مقدارِ «{escape(key)}» باید عدد باشد."
+    elif kind == "bool":
+        if value.strip().lower() not in ("0", "1", "true", "false", "yes", "no", "on", "off"):
+            return f"مقدارِ «{escape(key)}» باید بولی باشد (on/off)."
+    if key in ENUM_VALUES and value not in ENUM_VALUES[key]:
+        allowed = " / ".join(v or "«خالی»" for v in ENUM_VALUES[key])
+        return f"مقدارِ «{escape(key)}» باید یکی از این‌ها باشد: {allowed}"
     return None
 
 

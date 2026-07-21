@@ -4,7 +4,7 @@ from __future__ import annotations
 from aiogram.types import CopyTextButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .callbacks import Act, Cmp, Conv, Lang, Meta, Rot, Rsz, Spd, Tr, Wm
+from .callbacks import Act, Cmp, Conv, Dl, Lang, Meta, Rot, Rsz, Spd, Tr, Wm
 from .i18n import t
 
 # رزولوشن‌های هدفِ کاهشِ حجمِ ویدیو → (ارتفاع, بیت‌ریتِ ویدیو kbps)
@@ -181,6 +181,28 @@ def cancel_job_kb(job_id: int, lang: str) -> InlineKeyboardMarkup:
     """دکمهٔ لغوِ یک جابِ در حالِ اجرا (ref = شناسهٔ جاب)."""
     b = InlineKeyboardBuilder()
     b.button(text=t(lang, "btn_cancel_job"), callback_data=Act(op="canceljob", ref=str(job_id)))
+    return b.as_markup()
+
+
+def download_menu_kb(ref: str, options: list[dict], lang: str) -> InlineKeyboardMarkup:
+    """منوی کیفیتِ دانلود: بهترین/صوت + ارتفاع‌های موجود (با تخمینِ حجم)."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_dl_best"), callback_data=Dl(ref=ref, sel="best"))
+    b.button(text=t(lang, "btn_dl_audio"), callback_data=Dl(ref=ref, sel="audio"))
+    opts = options[:6]
+    for o in opts:
+        b.button(text=f"🔻 {o['label']}", callback_data=Dl(ref=ref, sel=str(o["sel"])))
+    b.button(text=t(lang, "btn_cancel"), callback_data=Dl(ref=ref, sel="cancel"))
+    n = len(opts)
+    sizes = [2] + [2] * (n // 2) + ([1] if n % 2 else []) + [1]
+    b.adjust(*sizes)
+    return b.as_markup()
+
+
+def download_cancel_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    """دکمهٔ لغوِ دانلودِ در حالِ اجرا (ref = توکنِ دانلود)."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_cancel_job"), callback_data=Dl(ref=ref, sel="cancel"))
     return b.as_markup()
 
 

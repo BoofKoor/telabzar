@@ -130,12 +130,42 @@ async def _queue_quiet(arq_pool: ArqRedis, session: AsyncSession, file_id: int, 
     await arq_pool.enqueue_job("run_op", job.id, chat_id, card_mid, lang)
 
 
+# عملیاتِ گران که وقتی روی یک فایلِ «دانلودی» اجرا شوند، در بودجهٔ روزانه حساب می‌شوند
+# (نقدِ طراحی: دانلود ارزان است ولی رونویسی/فشرده‌سازیِ یک ویدیوی ۲ساعته گران).
+_EXPENSIVE_OPS = {"transcribe", "compress", "convert", "scan", "bg_remove", "to_gif"}
+
+
+async def _check_dl_op_budget(pool: ArqRedis, user_id: int, file, op: str) -> bool:
+    """True اگر کاربر سقفِ روزانهٔ «دقیقه‌پردازشِ رسانهٔ دانلودی» را رد کند."""
+    if getattr(file, "source", None) != "dl" or op not in _EXPENSIVE_OPS:
+        return False
+    cap = await settings_store.get_int("dl_op_daily_min", settings.dl_op_daily_min)
+    if cap <= 0:
+        return False
+    minutes = max(1, round((file.duration or 60) / 60))
+    day = datetime.now(timezone.utc).strftime("%Y%m%d")
+    key = f"dlop:{user_id}:{day}"
+    try:
+        used = await pool.incrby(key, minutes)  # INCRBY یک عددِ int می‌دهد (نه bytes)
+        if used == minutes:
+            await pool.expire(key, 90000)
+        if used > cap:
+            await pool.decrby(key, minutes)  # ردشد → بازپرداخت تا بودجه دقیق بماند
+            return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
 async def _start(cq: CallbackQuery, file, lang, arq_pool, session, op, args, user) -> None:
     """چکِ محدودیت (پاپ‌آپ) → حالتِ پردازش + دکمهٔ لغو → enqueue."""
     if user is not None:
         limit = await _check_limits(arq_pool, user.tg_user_id)
         if limit:
             await cq.answer(t(lang, f"limit_{limit}"), show_alert=True)
+            return
+        if await _check_dl_op_budget(arq_pool, user.tg_user_id, file, op):
+            await cq.answer(t(lang, "dl_op_limit"), show_alert=True)
             return
     await cq.answer()
     await _enqueue(cq.message.bot, arq_pool, session, file, op, args,

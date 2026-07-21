@@ -11,6 +11,7 @@ from .bot import create_bot
 from .config import settings
 from .db import init_models
 from .tasks import run_op
+from .tasks_download import run_download
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,3 +49,18 @@ class WorkerSettings:
     max_jobs = 4
     job_timeout = 2000  # ویدیوی سنگین روی VPS ضعیف ممکن است طول بکشد (نوار+لغو داریم)
     keep_result = 3600
+
+
+class DownloadWorkerSettings:
+    """ورکرِ اختصاصیِ دانلود (صفِ جدا). دانلودهای طولانی، opهای سریعِ ربات را
+    مسدود نمی‌کنند و تایم‌اوتِ جدای خودشان را دارند. این ورکر همان seedِ «نود»ِ
+    آینده است: یک نود = همین ورکر روی IP تمیز که صفِ dl را برمی‌دارد."""
+
+    functions = [run_download]
+    queue_name = "arq:queue:dl"
+    on_startup = startup
+    on_shutdown = shutdown
+    redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    max_jobs = 3          # سقفِ سختِ هم‌زمانی (علاوه بر گاردِ runtimeِ dl_concurrency)
+    job_timeout = 5400    # دانلودِ بزرگ ممکن است طول بکشد (۱.۵ ساعت)
+    keep_result = 600

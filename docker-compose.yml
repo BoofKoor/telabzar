@@ -147,6 +147,48 @@ services:
     cap_add:
       - DAC_READ_SEARCH
 
+  # سرویسِ توکنِ PO یوتیوب (yt-dlp روی IP دیتاسنتر بدونِ این بلاک می‌شود).
+  bgutil-pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    restart: unless-stopped
+    init: true
+    expose:
+      - "4416"
+
+  # ورکرِ اختصاصیِ دانلود (صفِ dl). دانلودهای طولانی، opهای ربات را مسدود نمی‌کنند.
+  # همان seedِ «نود»ِ آینده: یک نود = همین سرویس روی IP تمیز.
+  download-worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    command: ["arq", "app.worker.DownloadWorkerSettings"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LOCAL_API_BASE: http://local-bot-api:8081
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      WORK_DIR: /work
+      POT_PROVIDER_URL: http://bgutil-pot-provider:4416
+      COOKIES_DIR: /cookies
+      # PROXY_URL را در .env بگذار (egressِ تمیزِ خودت) — خالی = مستقیم
+    depends_on:
+      local-bot-api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      bgutil-pot-provider:
+        condition: service_started
+    volumes:
+      - work-data:/work            # دانلود + آپلودِ خروجی (multipart به Bot API محلی)
+      - ./cookies:/cookies:ro      # کوکی‌های چرخشیِ اینستا/X (اختیاری)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
 volumes:
   tg-bot-api-data:
   pg-data:
