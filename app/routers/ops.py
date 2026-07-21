@@ -14,14 +14,15 @@ from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..cards import card_caption, meta_editor_view, set_card_note, update_card
-from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Wm
+from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Spd, Tr, Wm
 from ..config import settings
 from ..crud import get_file_by_ref
 from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
     CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_job_kb, cancel_kb, collect_kb, compress_menu_kb,
-    convert_menu_kb, link_menu_kb, resize_menu_kb, rotate_menu_kb, watermark_pos_kb,
+    convert_menu_kb, link_menu_kb, resize_menu_kb, rotate_menu_kb, speed_menu_kb,
+    transcribe_menu_kb, watermark_pos_kb,
 )
 from ..models import Job, User
 from ..states import Collect, MetaEdit, Rename, Screenshot, SetCover, Trim, Watermark
@@ -686,6 +687,87 @@ async def op_meta_apply(cq: CallbackQuery, callback_data: Act, session: AsyncSes
                    cq.message.chat.id, cq.message.message_id, lang)
 
 
+# ── صوتِ عمیق: رونویسی / نرمال‌سازی / سرعت ──────────────────────
+@router.callback_query(Act.filter(F.op == "transcribe"))
+async def op_transcribe(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "audio":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    try:
+        await cq.message.edit_caption(
+            caption=card_caption(file, lang, note=t(lang, "tr_choose")),
+            reply_markup=transcribe_menu_kb(file.ref, lang),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.callback_query(Tr.filter())
+async def op_transcribe_pick(cq: CallbackQuery, callback_data: Tr, session: AsyncSession, lang: str,
+                             arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+        return
+    await _start(cq, file, lang, arq_pool, session, "transcribe", {"mode": callback_data.mode}, user)
+
+
+@router.callback_query(Act.filter(F.op == "normalize"))
+async def op_normalize(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
+                       arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "audio":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    if _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+        return
+    await _start(cq, file, lang, arq_pool, session, "normalize", {}, user)
+
+
+@router.callback_query(Act.filter(F.op == "speed"))
+async def op_speed(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "audio":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    try:
+        await cq.message.edit_caption(
+            caption=card_caption(file, lang, note=t(lang, "speed_choose")),
+            reply_markup=speed_menu_kb(file.ref, lang),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.callback_query(Spd.filter())
+async def op_speed_pick(cq: CallbackQuery, callback_data: Spd, session: AsyncSession, lang: str,
+                        arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+        return
+    await _start(cq, file, lang, arq_pool, session, "speed", {"rate": callback_data.rate}, user)
+
+
 # ── لینکِ دانلود/استریم: زیرمنوی درجا ───────────────────────────
 @router.callback_query(Act.filter(F.op == "link"))
 async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
@@ -837,7 +919,7 @@ async def op_trim_start(cq: CallbackQuery, callback_data: Act, session: AsyncSes
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if file.kind != "video":
+    if file.kind not in ("video", "audio"):
         await cq.answer(t(lang, "coming_soon"), show_alert=True)
         return
     await state.set_state(Trim.waiting)
