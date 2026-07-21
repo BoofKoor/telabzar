@@ -12,7 +12,7 @@ RUN apt-get update \
         p7zip-full unrar-free \
         libreoffice-writer libreoffice-calc libreoffice-impress \
         poppler-utils \
-        fonts-liberation fonts-dejavu fonts-noto-core \
+        fonts-liberation fonts-dejavu fonts-noto-core fonts-hosny-amiri \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv

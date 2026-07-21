@@ -14,17 +14,17 @@ from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..cards import card_caption, meta_editor_view, set_card_note, update_card
-from ..callbacks import Act, Cmp, Conv, Meta
+from ..callbacks import Act, Cmp, Conv, Meta, Wm
 from ..config import settings
 from ..crud import get_file_by_ref
 from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
     CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_job_kb, cancel_kb, collect_kb, compress_menu_kb,
-    convert_menu_kb, link_menu_kb,
+    convert_menu_kb, link_menu_kb, watermark_pos_kb,
 )
 from ..models import Job, User
-from ..states import Collect, MetaEdit, Rename, SetCover
+from ..states import Collect, MetaEdit, Rename, Screenshot, SetCover, Trim, Watermark
 
 router = Router(name="ops")
 
@@ -183,9 +183,41 @@ async def op_scan(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
 
 
 # ── عملیاتِ مستقیم (بدونِ منو/ورودی): enqueue و تمام ───────────
-# سند/آرشیو: to_pdf · list_zip · extract   ·   رسانه: to_gif · extract_audio
-# نکته: zip / meta / cover / link فلوی چندمرحله‌ای دارند (پایین‌تر).
-_DIRECT_OPS = {"to_pdf", "list_zip", "extract", "to_gif", "extract_audio"}
+# سند/آرشیو: to_pdf · list_zip · extract   ·   رسانه: to_gif · extract_audio · mute
+# نکته: zip / meta / cover / link / watermark / trim / screenshot فلوی چندمرحله‌ای دارند.
+_DIRECT_OPS = {"to_pdf", "list_zip", "extract", "to_gif", "extract_audio", "mute"}
+
+
+def _parse_time(s: str) -> float | None:
+    """'1:23' یا '0:01:05' یا '83' → ثانیه."""
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        parts = [float(p) for p in s.split(":")]
+    except ValueError:
+        return None
+    if len(parts) == 1:
+        sec = parts[0]
+    elif len(parts) == 2:
+        sec = parts[0] * 60 + parts[1]
+    elif len(parts) == 3:
+        sec = parts[0] * 3600 + parts[1] * 60 + parts[2]
+    else:
+        return None
+    return sec if sec >= 0 else None
+
+
+def _parse_range(s: str) -> tuple[float, float] | None:
+    """'0:10-0:45' یا '0:10 تا 0:45' → (start, end)."""
+    s = (s or "").strip()
+    for sep in ("-", "تا", " to ", "–"):
+        if sep in s:
+            a, b = s.split(sep, 1)
+            ta, tb = _parse_time(a), _parse_time(b)
+            if ta is not None and tb is not None and tb > ta:
+                return ta, tb
+    return None
 
 
 @router.callback_query(Act.filter(F.op.in_(_DIRECT_OPS)))
@@ -614,6 +646,168 @@ async def op_cover_recv(message: Message, state: FSMContext, session: AsyncSessi
         await update_card(message.bot, card_chat, card_mid, file, lang)
     except Exception:  # noqa: BLE001
         await set_card_note(message.bot, card_chat, card_mid, file, lang, keyboard=True)
+
+
+# ── واترمارک: انتخابِ موقعیت ────────────────────────────────────
+@router.callback_query(Act.filter(F.op == "watermark"))
+async def op_watermark_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "video":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    try:
+        await cq.message.edit_caption(caption=card_caption(file, lang, note=t(lang, "wm_choose_pos")),
+                                      reply_markup=watermark_pos_kb(file.ref, lang))
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.callback_query(Wm.filter())
+async def op_watermark_pos(cq: CallbackQuery, callback_data: Wm, session: AsyncSession,
+                           lang: str, state: FSMContext) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    await state.set_state(Watermark.waiting)
+    await state.update_data(ref=file.ref, card_chat=cq.message.chat.id,
+                            card_mid=cq.message.message_id, pos=callback_data.pos)
+    try:
+        await cq.message.edit_caption(caption=card_caption(file, lang, note=t(lang, "wm_ask_content")),
+                                      reply_markup=cancel_kb(file.ref, lang))
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.message(Watermark.waiting)
+async def op_watermark_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str,
+                            arq_pool: ArqRedis, user: User | None) -> None:
+    data = await state.get_data()
+    if message.photo:
+        args = {"pos": data.get("pos", "br"), "logo": message.photo[-1].file_id}
+    elif message.text and message.text.strip():
+        args = {"pos": data.get("pos", "br"), "text": message.text.strip()[:80]}
+    else:
+        try:
+            await message.delete()
+        except Exception:  # noqa: BLE001
+            pass
+        return  # نه متن نه عکس؛ منتظر بمان
+    ref, card_chat, card_mid = data.get("ref", ""), data.get("card_chat"), data.get("card_mid")
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    await state.clear()
+    file = await get_file_by_ref(session, ref)
+    if file is None or card_chat is None:
+        return
+    if user is not None:
+        limit = await _check_limits(arq_pool, user.tg_user_id)
+        if limit:
+            await set_card_note(message.bot, card_chat, card_mid, file, lang, note=t(lang, f"limit_{limit}"), keyboard=True)
+            return
+    await _enqueue(message.bot, arq_pool, session, file, "watermark", args, card_chat, card_mid, lang)
+
+
+# ── برش: دریافتِ بازه ───────────────────────────────────────────
+@router.callback_query(Act.filter(F.op == "trim"))
+async def op_trim_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
+                        lang: str, state: FSMContext) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "video":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    await state.set_state(Trim.waiting)
+    await state.update_data(ref=file.ref, card_chat=cq.message.chat.id, card_mid=cq.message.message_id)
+    try:
+        await cq.message.edit_caption(caption=card_caption(file, lang, note=t(lang, "trim_ask")),
+                                      reply_markup=cancel_kb(file.ref, lang))
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.message(Trim.waiting, F.text)
+async def op_trim_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str,
+                       arq_pool: ArqRedis, user: User | None) -> None:
+    data = await state.get_data()
+    ref, card_chat, card_mid = data.get("ref", ""), data.get("card_chat"), data.get("card_mid")
+    rng = _parse_range(message.text or "")
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    file = await get_file_by_ref(session, ref)
+    if file is None or card_chat is None:
+        return
+    if rng is None:  # نامعتبر → همان‌جا بمان و دوباره بپرس
+        await set_card_note(message.bot, card_chat, card_mid, file, lang,
+                            note=t(lang, "trim_bad"), keyboard=cancel_kb(file.ref, lang))
+        return
+    await state.clear()
+    if user is not None:
+        limit = await _check_limits(arq_pool, user.tg_user_id)
+        if limit:
+            await set_card_note(message.bot, card_chat, card_mid, file, lang, note=t(lang, f"limit_{limit}"), keyboard=True)
+            return
+    await _enqueue(message.bot, arq_pool, session, file, "trim", {"start": rng[0], "end": rng[1]},
+                   card_chat, card_mid, lang)
+
+
+# ── اسکرین‌شات: دریافتِ لحظه ────────────────────────────────────
+@router.callback_query(Act.filter(F.op == "screenshot"))
+async def op_screenshot_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
+                              lang: str, state: FSMContext) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "video":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    await state.set_state(Screenshot.waiting)
+    await state.update_data(ref=file.ref, card_chat=cq.message.chat.id, card_mid=cq.message.message_id)
+    try:
+        await cq.message.edit_caption(caption=card_caption(file, lang, note=t(lang, "shot_ask")),
+                                      reply_markup=cancel_kb(file.ref, lang))
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.message(Screenshot.waiting, F.text)
+async def op_screenshot_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str,
+                             arq_pool: ArqRedis, user: User | None) -> None:
+    data = await state.get_data()
+    ref, card_chat, card_mid = data.get("ref", ""), data.get("card_chat"), data.get("card_mid")
+    ts = _parse_time(message.text or "")
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    file = await get_file_by_ref(session, ref)
+    if file is None or card_chat is None:
+        return
+    if ts is None:
+        await set_card_note(message.bot, card_chat, card_mid, file, lang,
+                            note=t(lang, "shot_bad"), keyboard=cancel_kb(file.ref, lang))
+        return
+    await state.clear()
+    if user is not None:
+        limit = await _check_limits(arq_pool, user.tg_user_id)
+        if limit:
+            await set_card_note(message.bot, card_chat, card_mid, file, lang, note=t(lang, f"limit_{limit}"), keyboard=True)
+            return
+    await _enqueue(message.bot, arq_pool, session, file, "screenshot", {"ts": ts}, card_chat, card_mid, lang)
 
 
 # ── لغوِ جابِ در حالِ اجرا ──────────────────────────────────────

@@ -4,7 +4,7 @@ from __future__ import annotations
 from aiogram.types import CopyTextButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .callbacks import Act, Cmp, Conv, Lang, Meta
+from .callbacks import Act, Cmp, Conv, Lang, Meta, Wm
 from .i18n import t
 
 # رزولوشن‌های هدفِ کاهشِ حجمِ ویدیو → (ارتفاع, بیت‌ریتِ ویدیو kbps)
@@ -33,8 +33,10 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("link", "btn_link"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "video": [
-        ("link", "btn_link_stream"), ("cover", "btn_cover_v"), ("compress", "btn_compress"),
-        ("convert", "btn_convert"), ("extract_audio", "btn_extract_audio"), ("to_gif", "btn_to_gif"),
+        ("link", "btn_link_stream"),
+        ("cover", "btn_cover_v"), ("compress", "btn_compress"), ("convert", "btn_convert"),
+        ("watermark", "btn_watermark"), ("extract_audio", "btn_extract_audio"), ("to_gif", "btn_to_gif"),
+        ("trim", "btn_trim"), ("screenshot", "btn_screenshot"), ("mute", "btn_mute"),
         ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "audio": [
@@ -103,6 +105,18 @@ def file_card_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
 def cancel_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
+    return b.as_markup()
+
+
+def watermark_pos_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    """انتخابِ گوشهٔ واترمارک."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "wm_tl"), callback_data=Wm(ref=ref, pos="tl"))
+    b.button(text=t(lang, "wm_tr"), callback_data=Wm(ref=ref, pos="tr"))
+    b.button(text=t(lang, "wm_bl"), callback_data=Wm(ref=ref, pos="bl"))
+    b.button(text=t(lang, "wm_br"), callback_data=Wm(ref=ref, pos="br"))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(2, 2, 1)
     return b.as_markup()
 
 

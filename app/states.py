@@ -22,3 +22,15 @@ class MetaEdit(StatesGroup):
 
 class SetCover(StatesGroup):
     waiting = State()         # منتظرِ عکسِ کاورِ ویدیو
+
+
+class Watermark(StatesGroup):
+    waiting = State()         # منتظرِ متن یا لوگو (بعد از انتخابِ موقعیت)
+
+
+class Trim(StatesGroup):
+    waiting = State()         # منتظرِ بازهٔ برش
+
+
+class Screenshot(StatesGroup):
+    waiting = State()         # منتظرِ لحظهٔ اسکرین‌شات

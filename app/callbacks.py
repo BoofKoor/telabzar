@@ -26,3 +26,8 @@ class Meta(CallbackData, prefix="mt"):
 class Cmp(CallbackData, prefix="cmp"):
     ref: str
     res: str  # ارتفاعِ هدف («720») یا «same»
+
+
+class Wm(CallbackData, prefix="wm"):
+    ref: str
+    pos: str  # tl | tr | bl | br

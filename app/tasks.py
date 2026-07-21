@@ -39,6 +39,7 @@ log = logging.getLogger("telabzar.worker")
 _PROGRESS_LABEL = {
     "compress": "pr_compress", "convert": "pr_convert",
     "to_gif": "pr_gif", "extract_audio": "pr_extract",
+    "watermark": "pr_watermark", "trim": "pr_trim",
 }
 
 
@@ -240,6 +241,42 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         await P.video_thumbnail(inpath, out)
         return {"send_media": {"as": "photo", "path": out, "filename": f"{stem}.jpg"},
                 "label": t(lang, "cl_thumb")}
+
+    if op == "watermark":
+        pos = args.get("pos", "br")
+        out = os.path.join(workdir, f"{stem}-wm.mp4")
+        if args.get("text"):
+            wm = os.path.join(workdir, "wm.png")
+            await P.render_text_watermark(args["text"], wm, file.height or 480)
+            await P.watermark_video(inpath, out, wm, pos, progress=progress, duration=dur, cancel=cancel)
+        elif args.get("logo"):
+            tg = await bot.get_file(args["logo"])
+            lp = tg.file_path
+            if not lp or not os.path.exists(lp):
+                raise RuntimeError("logo not found on disk")
+            scale_w = max(80, (file.width or 640) // 5)
+            await P.watermark_video(inpath, out, lp, pos, scale_w=scale_w,
+                                    progress=progress, duration=dur, cancel=cancel)
+        else:
+            raise RuntimeError("no watermark content")
+        return {"path": out, "filename": f"{stem}.mp4", "label": t(lang, "cl_watermark")}
+
+    if op == "mute":
+        out = os.path.join(workdir, f"{stem}-mute.mp4")
+        await P.mute_video(inpath, out)
+        return {"path": out, "filename": f"{stem}.mp4", "label": t(lang, "cl_mute")}
+
+    if op == "trim":
+        out = os.path.join(workdir, f"{stem}-cut.mp4")
+        await P.trim_video(inpath, out, float(args.get("start", 0)), float(args.get("end", 0)),
+                           progress=progress, cancel=cancel)
+        return {"path": out, "filename": f"{stem}-cut.mp4", "label": t(lang, "cl_trim")}
+
+    if op == "screenshot":
+        out = os.path.join(workdir, f"{stem}-shot.jpg")
+        await P.screenshot_video(inpath, out, float(args.get("ts", 0)))
+        return {"send_media": {"as": "photo", "path": out, "filename": f"{stem}.jpg"},
+                "label": t(lang, "cl_screenshot")}
 
     raise RuntimeError(f"unknown op: {op}")
 

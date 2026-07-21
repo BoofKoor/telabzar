@@ -6,11 +6,26 @@ import json
 import os
 import zipfile
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
 SEVENZ = "7z"
+
+# فونت‌های کاندید برای واترمارکِ متنی (اولی فارسی/عربی، آخری فالبکِ لاتین)
+_FONT_CANDIDATES = (
+    "/usr/share/fonts/opentype/fonts-hosny-amiri/Amiri-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+)
+
+# موقعیتِ واترمارک → عبارتِ overlay (حاشیهٔ ۲۴ پیکسل)
+_WM_POS = {
+    "tl": "24:24",
+    "tr": "main_w-overlay_w-24:24",
+    "bl": "24:main_h-overlay_h-24",
+    "br": "main_w-overlay_w-24:main_h-overlay_h-24",
+}
 
 
 class ProcessingCancelled(Exception):
@@ -202,6 +217,83 @@ async def video_thumbnail(inp: str, out: str) -> None:
     ])
     if not os.path.exists(out):
         raise RuntimeError("thumbnail extraction produced no output")
+
+
+# ── واترمارک / برش / بی‌صدا / اسکرین‌شاتِ ویدیو ─────────────────
+def _font_path() -> str | None:
+    for p in _FONT_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _render_text_watermark_sync(text: str, out_png: str, video_h: int) -> None:
+    """متن (فارسی/انگلیسی) را به PNGِ شفاف رِندر می‌کند — با شکل‌دهیِ درستِ فارسی."""
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+        shaped = get_display(arabic_reshaper.reshape(text))
+    except Exception:  # noqa: BLE001  — اگر کتابخانه‌ها نبودند، خامِ متن
+        shaped = text
+    size = max(18, int((video_h or 480) / 14))
+    fp = _font_path()
+    font = ImageFont.truetype(fp, size) if fp else ImageFont.load_default()
+    tmp = ImageDraw.Draw(Image.new("RGBA", (4, 4)))
+    box = tmp.textbbox((0, 0), shaped, font=font)
+    pad = max(8, size // 3)
+    w, h = box[2] - box[0] + pad * 2, box[3] - box[1] + pad * 2
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(im)
+    ox, oy = pad - box[0], pad - box[1]
+    dr.text((ox + 2, oy + 2), shaped, font=font, fill=(0, 0, 0, 150))   # سایه
+    dr.text((ox, oy), shaped, font=font, fill=(255, 255, 255, 235))     # متن
+    im.save(out_png)
+
+
+async def render_text_watermark(text: str, out_png: str, video_h: int) -> None:
+    await asyncio.to_thread(_render_text_watermark_sync, text, out_png, video_h)
+
+
+async def watermark_video(inp: str, out: str, wm: str, position: str, scale_w: int | None = None,
+                          progress=None, duration=None, cancel=None) -> None:
+    pos = _WM_POS.get(position, _WM_POS["br"])
+    if scale_w:  # لوگو را نسبت به عرضِ ویدیو کوچک کن
+        fc = f"[1:v]scale={scale_w}:-1[wm];[0:v][wm]overlay={pos}"
+    else:        # PNGِ متنی از قبل اندازه‌شده است
+        fc = f"[0:v][1:v]overlay={pos}"
+    await _run([
+        FFMPEG, "-y", "-i", inp, "-i", wm, "-filter_complex", fc,
+        "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
+        "-c:a", "copy", "-movflags", "+faststart", out,
+    ], progress=progress, duration=duration, cancel=cancel)
+    if not os.path.exists(out):
+        raise RuntimeError("watermark produced no output")
+
+
+async def mute_video(inp: str, out: str) -> None:
+    """صدا را حذف می‌کند (بدونِ رمزگذاریِ دوباره)."""
+    await _run([FFMPEG, "-y", "-i", inp, "-c", "copy", "-an", "-movflags", "+faststart", out])
+    if not os.path.exists(out):
+        raise RuntimeError("mute produced no output")
+
+
+async def trim_video(inp: str, out: str, start: float, end: float,
+                     progress=None, cancel=None) -> None:
+    """برشِ دقیق [start, end] با رمزگذاریِ دوباره."""
+    await _run([
+        FFMPEG, "-y", "-i", inp, "-ss", f"{start}", "-to", f"{end}",
+        "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
+        "-c:a", "aac", "-movflags", "+faststart", out,
+    ], progress=progress, duration=max(0.1, end - start), cancel=cancel)
+    if not os.path.exists(out):
+        raise RuntimeError("trim produced no output")
+
+
+async def screenshot_video(inp: str, out: str, ts: float) -> None:
+    """فریمِ لحظهٔ ts را به‌صورتِ عکس می‌گیرد."""
+    await _run([FFMPEG, "-y", "-ss", f"{ts}", "-i", inp, "-frames:v", "1", "-q:v", "2", out], timeout=120)
+    if not os.path.exists(out):
+        raise RuntimeError("screenshot produced no output")
 
 
 # ── متادیتای صوت (ffprobe؛ بدونِ وابستگیِ جدید) ─────────────────
