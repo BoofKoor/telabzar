@@ -172,15 +172,17 @@ async def send_card(bot: Bot, chat_id: int, file: File, lang: str, *,
         return await bot.send_document(chat_id, _media_arg(file, path), caption=caption, reply_markup=kb)
 
 
-async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, *, path: str | None = None) -> Message:
-    """به‌روزرسانیِ درجای کارت با فایلِ جدید (editMessageMedia). در صورت ناتوانی،
-    کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند."""
+async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, *,
+                      path: str | None = None, thumb=None) -> Message:
+    """به‌روزرسانیِ درجای کارت با فایلِ جدید (editMessageMedia). در صورت ناتوانی
+    (مثلاً پیامِ لنگرگاه متنی بود)، کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند.
+    این تابع برای «ارسالِ درجای» دانلود هم استفاده می‌شود (عکسِ منو → ویدیو)."""
     caption = card_caption(file, lang)
     kb = file_card_kb(file.ref, file.kind, lang)
     im_cls = _INPUT_MEDIA.get(file.kind, InputMediaDocument)
     extra: dict = {}
     if file.kind == "video":
-        extra = _video_extra(file)  # مدت/ابعاد/کاور تا کارتِ ویدیو خام نیفتد
+        extra = _video_extra(file, thumb)  # مدت/ابعاد/کاور/تامبنیل تا خام نیفتد
     try:
         return await bot.edit_message_media(
             chat_id=chat_id,
@@ -190,7 +192,7 @@ async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang:
         )
     except TelegramBadRequest:
         # تغییرِ نوعِ رسانه یا محدودیت → کارتِ تازه + حذفِ قدیمی
-        msg = await send_card(bot, chat_id, file, lang, path=path)
+        msg = await send_card(bot, chat_id, file, lang, path=path, thumb=thumb)
         try:
             await bot.delete_message(chat_id, message_id)
         except TelegramBadRequest:

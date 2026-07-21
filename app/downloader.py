@@ -228,6 +228,7 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
     outtmpl = os.path.join(workdir, "%(title).80B [%(id)s].%(ext)s")
     audio_only = selector == "audio"
     cmd = [YTDLP, "--newline", "--progress-template", "dl:%(progress._percent_str)s",
+           "--concurrent-fragments", "4",  # دانلودِ موازیِ قطعه‌های DASH → سریع‌تر
            "--write-info-json", "--write-thumbnail", "--convert-thumbnails", "jpg",
            "-o", outtmpl, "-f", _selector_to_format(selector)]
     if audio_only:

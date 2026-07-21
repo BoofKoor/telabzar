@@ -20,10 +20,11 @@ from datetime import datetime, timezone
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
+from . import dl_cache
 from . import downloader as D
 from . import processing as P
 from . import settings_store
-from .cards import message_media_id, send_card
+from .cards import message_media_id, send_card, update_card
 from .config import settings
 from .db import Sessionmaker
 from .i18n import t
@@ -111,8 +112,14 @@ async def _opts(redis, platform: str) -> dict:
 
 
 async def _edit(bot: Bot, chat_id: int, mid: int, text: str, kb=None) -> None:
+    """پیامِ وضعیت را ویرایش می‌کند — چه متنی باشد چه رسانه‌ای (عکسِ منو)."""
     try:
         await bot.edit_message_text(text=text, chat_id=chat_id, message_id=mid, reply_markup=kb)
+        return
+    except Exception:  # noqa: BLE001
+        pass
+    try:  # لنگرگاه عکس است → کپشن را ویرایش کن
+        await bot.edit_message_caption(chat_id=chat_id, message_id=mid, caption=text, reply_markup=kb)
     except Exception:  # noqa: BLE001
         pass
 
@@ -177,6 +184,41 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
         await s.commit()
 
 
+async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int, p: str,
+                          name: str, kind: str, info: dict, lang: str, thumb_path: str | None,
+                          url: str, selector: str) -> None:
+    """تک‌فایل را **درجا** روی پیامِ لنگرگاه تحویل می‌دهد (عکسِ منو → ویدیو) و
+    file_id را برای دفعهٔ بعد کش می‌کند. اگر لنگرگاه متنی بود، update_card خودش
+    کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند."""
+    thumb = None
+    if kind == "video" and thumb_path:
+        prepped = _prep_thumb(thumb_path)
+        if prepped:
+            thumb = FSInputFile(prepped)
+    async with Sessionmaker() as s:
+        f = File(
+            ref=secrets.token_urlsafe(6)[:8], owner_id=owner_id, file_unique_id="", file_id="",
+            kind=kind, mime=None, name=name,
+            size=os.path.getsize(p) if os.path.exists(p) else None,
+            width=info.get("width"), height=info.get("height"),
+            duration=int(info["duration"]) if info.get("duration") else None,
+            changelog=[], source="dl",
+        )
+        s.add(f)
+        await s.commit()
+        try:
+            sent = await update_card(bot, chat_id, anchor_mid, f, lang, path=p, thumb=thumb)
+            fid, fuid = message_media_id(sent)
+            if fid:
+                f.file_id = fid
+            if fuid:
+                f.file_unique_id = fuid
+            await s.commit()
+            await dl_cache.put_cached(s, url, selector, f)  # دفعهٔ بعد آنی
+        except Exception:  # noqa: BLE001
+            log.exception("dl in-place delivery failed")
+
+
 async def run_download(ctx: dict, payload: dict) -> None:
     bot: Bot = ctx["bot"]
     redis = ctx.get("redis")
@@ -216,9 +258,22 @@ async def run_download(ctx: dict, payload: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass
         title = (info.get("title") or "")[:80]
-        await _edit(bot, chat_id, status_mid,
-                    t(lang, "dl_pick_quality", title=title),
-                    kb=download_menu_kb(ref, opts, lang))
+        caption = t(lang, "dl_pick_quality", title=title)
+        kb = download_menu_kb(ref, opts, lang)
+        thumb_url = info.get("thumbnail")
+        # منو را روی عکسِ تامبنیل بفرست تا هنگامِ انتخاب، همان پیام درجا به ویدیو
+        # تبدیل شود (editMessageMedia فقط روی پیامِ رسانه‌ای کار می‌کند، نه متن).
+        if thumb_url:
+            try:
+                await bot.send_photo(chat_id, thumb_url, caption=caption, reply_markup=kb)
+                try:
+                    await bot.delete_message(chat_id, status_mid)
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+            except Exception:  # noqa: BLE001
+                pass  # تامبنیل نشد → منوی متنی
+        await _edit(bot, chat_id, status_mid, caption, kb=kb)
         return
 
     # ── فازِ fetch: دانلود + spawn ──
@@ -298,23 +353,30 @@ async def run_download(ctx: dict, payload: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass
 
-        for p, info, thumb in paths:
-            kind = _kind_from_info(info, p)
-            name = os.path.basename(p)
-            if kind == "image" and not info.get("width"):
-                try:
-                    from PIL import Image
-                    with Image.open(p) as im:
-                        info = {**info, "width": im.width, "height": im.height}
-                except Exception:  # noqa: BLE001
-                    pass
-            await _spawn(bot, chat_id, owner_id, p, name, kind, info, lang, thumb_path=thumb)
+        if engine != "gallerydl" and len(paths) == 1:
+            # تک‌فایل → تحویلِ درجا روی همان پیامِ لنگرگاه + کش
+            p, info, thumb = paths[0]
+            await _deliver_single(bot, chat_id, status_mid, owner_id, p, os.path.basename(p),
+                                  _kind_from_info(info, p), info, lang, thumb, url, selector)
+        else:
+            # چندفایلی (گالری) → کارتِ جدا برای هرکدام + حذفِ لنگرگاه
+            for p, info, thumb in paths:
+                kind = _kind_from_info(info, p)
+                name = os.path.basename(p)
+                if kind == "image" and not info.get("width"):
+                    try:
+                        from PIL import Image
+                        with Image.open(p) as im:
+                            info = {**info, "width": im.width, "height": im.height}
+                    except Exception:  # noqa: BLE001
+                        pass
+                await _spawn(bot, chat_id, owner_id, p, name, kind, info, lang, thumb_path=thumb)
+            try:
+                await bot.delete_message(chat_id, status_mid)  # کارت‌ها جایگزینش شدند
+            except Exception:  # noqa: BLE001
+                pass
 
         await _metric(redis, platform, ok=True)
-        try:
-            await bot.delete_message(chat_id, status_mid)  # کارت جایگزینش شد
-        except Exception:  # noqa: BLE001
-            pass
     finally:
         if redis is not None:
             try:

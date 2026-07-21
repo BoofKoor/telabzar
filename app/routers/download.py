@@ -13,8 +13,9 @@ from datetime import datetime, timezone
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 from arq import ArqRedis
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import settings_store
+from .. import dl_cache, settings_store
 from ..callbacks import Dl
 from ..config import settings
 from ..downloader import engine_for, find_url, is_safe_url, platform_of
@@ -75,7 +76,8 @@ async def _charge(pool: ArqRedis, uid: int) -> None:
 
 
 @router.message(F.text.regexp(r"https?://"))
-async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | None) -> None:
+async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | None,
+                  session: AsyncSession) -> None:
     if not await settings_store.get_bool("downloader_enabled", settings.downloader_enabled):
         return  # کلیدِ خاموشیِ دانلودر
     url = find_url(message.text)
@@ -93,8 +95,22 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
 
     platform = platform_of(url)
     engine = engine_for(url, platform)
+    ux = await _resolve_ux(platform)
+    quick = not (ux == "probe" and engine == "ytdlp")
+
+    # کشِ آنی (quick-grab، کیفیتِ best) — بدونِ دانلودِ دوباره
+    if quick:
+        cache = await dl_cache.get_cached(session, url, "best")
+        if cache is not None:
+            await _charge(arq_pool, uid)
+            try:
+                await message.delete()
+            except Exception:  # noqa: BLE001
+                pass
+            await dl_cache.deliver_from_cache(message.bot, session, message.chat.id, owner_id, cache, lang)
+            return
+
     ref = secrets.token_urlsafe(6)[:8]
-    # زمینهٔ دانلود را برای فازِ pick/cancel نگه دار
     ctx = {"url": url, "platform": platform, "engine": engine,
            "owner_id": owner_id, "tg_user_id": uid}
     try:
@@ -108,22 +124,21 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     except Exception:  # noqa: BLE001
         pass
 
-    ux = await _resolve_ux(platform)
     base = {"ref": ref, "chat_id": message.chat.id, "status_mid": status.message_id,
             "lang": lang, "url": url, "platform": platform, "engine": engine,
             "owner_id": owner_id, "tg_user_id": uid}
 
-    if ux == "probe" and engine == "ytdlp":
-        await arq_pool.enqueue_job("run_download", {**base, "phase": "probe"}, _queue_name=_DL_QUEUE)
-    else:  # quick-grab: بهترین کیفیت
+    if quick:  # quick-grab: بهترین کیفیت
         await _charge(arq_pool, uid)
         await arq_pool.enqueue_job(
             "run_download", {**base, "phase": "fetch", "selector": "best"}, _queue_name=_DL_QUEUE)
+    else:
+        await arq_pool.enqueue_job("run_download", {**base, "phase": "probe"}, _queue_name=_DL_QUEUE)
 
 
 @router.callback_query(Dl.filter())
 async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
-                     arq_pool: ArqRedis, user: User | None) -> None:
+                     arq_pool: ArqRedis, user: User | None, session: AsyncSession) -> None:
     ref, sel = callback_data.ref, callback_data.sel
     if sel == "cancel":
         try:
@@ -152,6 +167,17 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
     if block:
         await cq.answer(block, show_alert=True)
         return
+
+    # کشِ آنی — عکسِ منو را درجا به ویدیوی کش‌شده تبدیل کن (بدونِ دانلود)
+    cache = await dl_cache.get_cached(session, ctx["url"], sel)
+    if cache is not None:
+        await _charge(arq_pool, uid)
+        await cq.answer()
+        await dl_cache.deliver_from_cache(cq.message.bot, session, cq.message.chat.id,
+                                          ctx["owner_id"], cache, lang,
+                                          anchor_mid=cq.message.message_id)
+        return
+
     await _charge(arq_pool, uid)
     payload = {"ref": ref, "chat_id": cq.message.chat.id, "status_mid": cq.message.message_id,
                "lang": lang, "url": ctx["url"], "platform": ctx["platform"],
