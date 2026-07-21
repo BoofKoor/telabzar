@@ -51,6 +51,22 @@ class Settings(BaseSettings):
     tls_cert: str = ""             # مسیرِ سرتیفیکیتِ Origin کلودفلر (PEM)
     tls_key: str = ""              # مسیرِ کلیدِ خصوصیِ Origin (PEM)
 
+    # دانلودرِ رسانه (لینک → دانلود → همان pipeline). همهٔ سقف‌ها از پنلِ ادمین
+    # قابلِ‌تغییرند (settings_store)؛ مقادیرِ زیر پیش‌فرضِ env‌اند. ۰ = نامحدود.
+    downloader_enabled: bool = True
+    proxy_url: str = ""            # egressِ تمیزِ خودت، مثل socks5h://host:1080 (خالی = مستقیم)
+    cookies_dir: str = ""          # پوشهٔ کوکی‌ها (چرخشِ اکانت برای اینستا/X)
+    pot_provider_url: str = ""     # http://bgutil-pot-provider:4416 (توکنِ یوتیوب)
+    dl_default_ux: str = "quick"   # probe | quick — پیش‌فرضِ رفتارِ لینک
+    dl_max_size_mb: int = 2000     # ≤ سقفِ آپلودِ Bot API (فایلِ بزرگ‌تر تحویل‌شدنی نیست)
+    dl_max_duration_min: int = 0   # ردِ رسانهٔ خیلی بلند در probe
+    dl_daily_count: int = 0        # سقفِ تعدادِ دانلودِ روزانهٔ هر کاربر
+    dl_daily_mb: int = 0           # سقفِ حجمِ دانلودِ روزانهٔ هر کاربر
+    dl_concurrency: int = 3        # حداکثر دانلودِ هم‌زمان (کلِ سیستم)
+    dl_cooldown_sec: int = 0       # فاصلهٔ حداقلی بینِ دو دانلودِ هر کاربر
+    dl_op_daily_min: int = 0       # سقفِ دقیقهٔ رسانهٔ دانلودی که هر کاربر می‌تواند «پردازش» کند
+    dl_min_free_gb: int = 3        # اگر فضای آزادِ /work کمتر از این بود، دانلود را رد کن
+
     @property
     def admin_id_set(self) -> set[int]:
         out: set[int] = set()

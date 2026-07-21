@@ -22,3 +22,7 @@ data/
 # Cloudflare origin cert material (never commit)
 certs/*.pem
 certs/*.key
+
+# downloader cookie files (throwaway-account sessions — never commit)
+cookies/*.txt
+cookies/*

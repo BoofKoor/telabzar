@@ -15,7 +15,13 @@ RUN apt-get update \
         tesseract-ocr tesseract-ocr-fas tesseract-ocr-eng \
         libgomp1 libglib2.0-0 \
         fonts-liberation fonts-dejavu fonts-noto-core fonts-hosny-amiri \
+        curl ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Deno — رانتایمِ JS که yt-dlp از ۲۰۲۵.۱۱ برای امضا/nsigِ یوتیوب لازم دارد.
+ENV DENO_INSTALL=/usr/local
+RUN curl -fsSL https://deno.land/install.sh | sh -s -- -y \
+    && /usr/local/bin/deno --version
 
 WORKDIR /srv
 

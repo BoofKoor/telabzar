@@ -51,3 +51,8 @@ class Spd(CallbackData, prefix="spd"):
 class Tr(CallbackData, prefix="tr"):
     ref: str
     mode: str  # txt | srt
+
+
+class Dl(CallbackData, prefix="dl"):
+    ref: str
+    sel: str  # توکنِ کوتاهِ کیفیت (best/audio/شاخصِ فرمت) یا cancel

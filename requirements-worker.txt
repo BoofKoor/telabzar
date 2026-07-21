@@ -7,3 +7,7 @@ python-bidi>=0.4,<1        # ترتیبِ راست‌به‌چپ
 rembg>=2.0,<3              # حذفِ پس‌زمینهٔ تصویر (مدلِ u2net)
 onnxruntime>=1.16,<2       # موتورِ اجرای مدلِ rembg + VADِ whisper (CPU)
 faster-whisper>=1.0,<2     # رونویسیِ صوت (Whisper روی CTranslate2)
+# دانلودر (ورکرِ dl). yt-dlp تگِ CalVer دارد → سقف نمی‌گذاریم، مرتب آپدیت.
+yt-dlp[default]            # موتورِ اصلی (ویدیو/صوت) + yt-dlp-ejs برای رانتایمِ JS
+gallery-dl                 # گالری/کاروسلِ عکس (اینستاگرام/X)
+bgutil-ytdlp-pot-provider  # پلاگینِ PO Token یوتیوب (به سرویسِ bgutil وصل می‌شود)

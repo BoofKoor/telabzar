@@ -21,12 +21,38 @@ _PREFIX = "cfg:"
 _MISSING = "\x00"  # نشانهٔ negative-cache: «در DB نیست → از پیش‌فرضِ env استفاده کن»
 
 # کلیدهای قابلِ‌تنظیم از پنل → (نوع, پیش‌فرضِ env). مرجعِ /admin و اعتبارسنجی.
-# با گسترشِ فازها (دانلودر) اینجا پر می‌شود — همگام با docs/ADMIN_PANEL.md.
+# همگام با docs/ADMIN_PANEL.md.
 RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "rate_per_min": ("int", settings.rate_per_min),
     "daily_op_quota": ("int", settings.daily_op_quota),
     "whisper_model": ("str", settings.whisper_model),
     "max_file_mb": ("int", settings.max_file_mb),
+    # ── دانلودر ──
+    "downloader_enabled": ("bool", settings.downloader_enabled),
+    "proxy_url": ("str", settings.proxy_url),
+    "dl_default_ux": ("str", settings.dl_default_ux),
+    "dl_ux_youtube": ("str", ""),      # خالی = ارث از dl_default_ux
+    "dl_ux_instagram": ("str", ""),
+    "dl_ux_twitter": ("str", ""),
+    "dl_ux_tiktok": ("str", ""),
+    "dl_max_size_mb": ("int", settings.dl_max_size_mb),
+    "dl_max_duration_min": ("int", settings.dl_max_duration_min),
+    "dl_daily_count": ("int", settings.dl_daily_count),
+    "dl_daily_mb": ("int", settings.dl_daily_mb),
+    "dl_concurrency": ("int", settings.dl_concurrency),
+    "dl_cooldown_sec": ("int", settings.dl_cooldown_sec),
+    "dl_op_daily_min": ("int", settings.dl_op_daily_min),
+    "dl_min_free_gb": ("int", settings.dl_min_free_gb),
+}
+
+# کلیدهایی با مقادیرِ مجازِ محدود (اعتبارسنجیِ /admin).
+ENUM_VALUES: dict[str, tuple[str, ...]] = {
+    "whisper_model": ("tiny", "base", "small", "medium", "large-v3"),
+    "dl_default_ux": ("probe", "quick"),
+    "dl_ux_youtube": ("probe", "quick", ""),
+    "dl_ux_instagram": ("probe", "quick", ""),
+    "dl_ux_twitter": ("probe", "quick", ""),
+    "dl_ux_tiktok": ("probe", "quick", ""),
 }
 
 
