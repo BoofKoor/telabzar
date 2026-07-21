@@ -7,9 +7,9 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# ffmpeg (merge/‏-x برای yt-dlp) + curl برای نصبِ Deno
+# ffmpeg (merge/‏-x برای yt-dlp) + curl/unzip برای نصبِ Deno (اسکریپتش unzip می‌خواهد)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates \
+    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Deno — رانتایمِ JS که yt-dlp از ۲۰۲۵.۱۱ برای امضا/nsigِ یوتیوب لازم دارد.
