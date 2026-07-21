@@ -228,12 +228,18 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
     outtmpl = os.path.join(workdir, "%(title).80B [%(id)s].%(ext)s")
     audio_only = selector == "audio"
     cmd = [YTDLP, "--newline", "--progress-template", "dl:%(progress._percent_str)s",
+           "--concurrent-fragments", "4",  # دانلودِ موازیِ قطعه‌های DASH → سریع‌تر
            "--write-info-json", "--write-thumbnail", "--convert-thumbnails", "jpg",
            "-o", outtmpl, "-f", _selector_to_format(selector)]
     if audio_only:
         cmd += ["-x", "--audio-format", "mp3"]
     else:
         cmd += ["--merge-output-format", "mp4"]
+    cmd += ["--embed-metadata"]  # عنوان/هنرمند و… داخلِ فایل
+    if opts.get("sponsorblock"):  # حذفِ اسپانسر/اینترو (یوتیوب)
+        cmd += ["--sponsorblock-remove", opts["sponsorblock"]]
+    if opts.get("subs") and not audio_only:  # زیرنویسِ خودکار (en+fa)
+        cmd += ["--write-subs", "--write-auto-subs", "--sub-langs", "en.*,fa.*", "--embed-subs"]
     if opts.get("max_mb"):
         cmd += ["--max-filesize", f"{int(opts['max_mb'])}M"]
     cmd += [*_common_flags(opts), url]
@@ -256,6 +262,39 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
         except Exception:  # noqa: BLE001
             pass
     return path, info, thumb
+
+
+async def download_cobalt(url: str, workdir: str, cobalt_url: str, opts: dict,
+                          progress=None, cancel=None) -> tuple[str, dict, str | None]:
+    """Fallback: نمونهٔ self-hostedِ Cobalt وقتی extractorِ yt-dlp می‌شکند.
+    API‌اش JSON POST است؛ پاسخِ tunnel/redirect یک فایل می‌دهد."""
+    import aiohttp
+
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if opts.get("cobalt_key"):
+        headers["Authorization"] = f"Api-Key {opts['cobalt_key']}"
+    base = cobalt_url.rstrip("/")
+    timeout = aiohttp.ClientTimeout(total=opts.get("timeout", 1800))
+    async with aiohttp.ClientSession(timeout=timeout) as sess:
+        async with sess.post(base + "/", json={"url": url}, headers=headers) as r:
+            data = await r.json(content_type=None)
+        status = data.get("status")
+        if status not in ("tunnel", "redirect"):
+            raise RuntimeError(f"cobalt: {data.get('error') or status or 'no media'}")
+        file_url = data["url"]
+        filename = data.get("filename") or "cobalt.mp4"
+        out = os.path.join(workdir, os.path.basename(filename))
+        async with sess.get(file_url) as fr:
+            if fr.status != 200:
+                raise RuntimeError(f"cobalt download HTTP {fr.status}")
+            with open(out, "wb") as fh:
+                async for chunk in fr.content.iter_chunked(1 << 16):
+                    if cancel is not None and await cancel():
+                        raise ProcessingCancelled()
+                    fh.write(chunk)
+    if not os.path.exists(out) or os.path.getsize(out) == 0:
+        raise RuntimeError("cobalt produced no file")
+    return out, {}, None
 
 
 async def download_gallerydl(url: str, workdir: str, opts: dict,
