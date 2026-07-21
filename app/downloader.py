@@ -18,7 +18,7 @@ import os
 import re
 from urllib.parse import urlparse
 
-from .processing import ProcessingCancelled
+from .exceptions import ProcessingCancelled
 
 YTDLP = "yt-dlp"
 GALLERY_DL = "gallery-dl"

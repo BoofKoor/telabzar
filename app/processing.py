@@ -8,6 +8,8 @@ import zipfile
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
+from .exceptions import ProcessingCancelled  # re-export (P.ProcessingCancelled)
+
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
 SEVENZ = "7z"
@@ -26,10 +28,6 @@ _WM_POS = {
     "bl": "24:main_h-overlay_h-24",
     "br": "main_w-overlay_w-24:main_h-overlay_h-24",
 }
-
-
-class ProcessingCancelled(Exception):
-    """کاربر عملیات را وسطِ کار لغو کرد."""
 
 
 async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: float | None = None,
