@@ -160,8 +160,7 @@ services:
   download-worker:
     build:
       context: .
-      dockerfile: docker/worker.Dockerfile
-    command: ["arq", "app.worker.DownloadWorkerSettings"]
+      dockerfile: docker/download-worker.Dockerfile   # ایمیجِ لاغر (بدونِ استکِ سنگینِ پردازش)
     restart: unless-stopped
     env_file: .env
     environment:

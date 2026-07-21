@@ -1,0 +1,8 @@
+# وابستگی‌های ورکرِ دانلود = وابستگی‌های ربات + ابزارهای دانلود (بدونِ استکِ سنگینِ
+# پردازش: LibreOffice/rembg/onnxruntime/faster-whisper/tesseract اینجا لازم نیستند).
+-r requirements.txt
+Pillow>=10,<12             # processing.py در import لازمش دارد (ابعادِ عکس)
+clamd>=1.0,<2              # importِ تنبل؛ سبک است، برای اطمینان
+yt-dlp[default]            # موتورِ اصلی + yt-dlp-ejs (رانتایمِ JS)
+gallery-dl                 # گالری/کاروسلِ عکس
+bgutil-ytdlp-pot-provider  # پلاگینِ PO Token یوتیوب
