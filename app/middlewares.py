@@ -47,7 +47,9 @@ class DataMiddleware(BaseMiddleware):
                 user = await get_or_create_user(session, tg_user)
             data["user"] = user
             data["lang"] = (user.lang if user and user.lang else settings.default_lang)
-            data["is_admin"] = bool(
-                tg_user and tg_user.id in settings.admin_id_set
-            )
+            is_admin = bool(tg_user and tg_user.id in settings.admin_id_set)
+            data["is_admin"] = is_admin
+            # کاربرِ بلاک‌شده: هیچ پاسخی نمی‌گیرد (ادمین هرگز بلاک نمی‌شود تا خودش را قفل نکند).
+            if user is not None and user.is_blocked and not is_admin:
+                return None
             return await handler(event, data)
