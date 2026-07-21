@@ -6,6 +6,7 @@ import logging
 
 from arq.connections import RedisSettings
 
+from . import settings_store
 from .bot import create_bot
 from .config import settings
 from .db import init_models
@@ -29,6 +30,7 @@ async def startup(ctx: dict) -> None:
     # تایم‌اوتِ بلند: getFile (دانلودِ کامل از تلگرام) و آپلودِ نتیجه برای
     # فایل‌های بزرگ به‌راحتی از ۶۰ ثانیه می‌گذرد.
     ctx["bot"] = create_bot(request_timeout=600.0)
+    settings_store.init_store(settings.redis_url)  # تنظیماتِ زمانِ‌اجرا (مثلِ whisper_model)
     log.info("Worker ready.")
 
 

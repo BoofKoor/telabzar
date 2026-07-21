@@ -1,10 +1,10 @@
-# تل‌ابزار — Master stack (Milestone 1)
-# سرویس‌ها: local-bot-api · postgres · redis · bot (webhook)
+# تل‌ابزار — استکِ اصلی
+# سرویس‌ها: local-bot-api · postgres · redis · bot · worker · gateway · clamav
 name: telabzar
 
 services:
   local-bot-api:
-    image: aiogram/telegram-bot-api:latest
+    image: aiogram/telegram-bot-api:10.2   # تگِ ثابت (نه latest) برای بیلدِ تکرارپذیر
     restart: unless-stopped
     environment:
       TELEGRAM_API_ID: ${TG_API_ID}

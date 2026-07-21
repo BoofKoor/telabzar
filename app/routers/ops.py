@@ -13,6 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import settings_store
 from ..cards import card_caption, meta_editor_view, set_card_note, update_card
 from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Spd, Tr, Wm
 from ..config import settings
@@ -84,22 +85,27 @@ def _too_large(size: int | None) -> bool:
 
 
 async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
-    """None اگر مجاز؛ وگرنه 'rate' یا 'quota'. سقفِ ≤۰ یعنی نامحدود (خاموش)."""
-    if settings.rate_per_min > 0:
+    """None اگر مجاز؛ وگرنه 'rate' یا 'quota'. سقفِ ≤۰ یعنی نامحدود (خاموش).
+
+    سقف‌ها از فروشگاهِ تنظیمات خوانده می‌شوند (قابلِ‌تغییر از /admin بدونِ ری‌استارت)؛
+    اگر تنظیم نشده باشد، پیش‌فرضِ env به‌کار می‌رود."""
+    rate = await settings_store.get_int("rate_per_min", settings.rate_per_min)
+    quota = await settings_store.get_int("daily_op_quota", settings.daily_op_quota)
+    if rate > 0:
         rkey = f"rate:{user_id}"
         r = await pool.incr(rkey)
         if r == 1:
             await pool.expire(rkey, 60)
-        if r > settings.rate_per_min:
+        if r > rate:
             return "rate"
 
-    if settings.daily_op_quota > 0:
+    if quota > 0:
         day = datetime.now(timezone.utc).strftime("%Y%m%d")
         qkey = f"quota:{user_id}:{day}"
         q = await pool.incr(qkey)
         if q == 1:
             await pool.expire(qkey, 90000)  # ~۲۵ ساعت
-        if q > settings.daily_op_quota:
+        if q > quota:
             return "quota"
     return None
 
