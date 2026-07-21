@@ -19,7 +19,7 @@ import secrets
 import shutil
 import ssl
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 import redis.asyncio as aioredis
@@ -27,11 +27,12 @@ from aiohttp import web
 from cryptography.fernet import Fernet, InvalidToken
 from jinja2 import Environment, DictLoader, select_autoescape
 from markupsafe import Markup
-from sqlalchemy import text as sql_text
+from sqlalchemy import func, select, text as sql_text
 
 from . import settings_store
 from .config import settings
 from .db import Sessionmaker
+from .models import File, Job, User
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
 
 log = logging.getLogger("telabzar.admin")
@@ -172,6 +173,25 @@ a{text-decoration:none;color:inherit}
 .up .sel{width:100%}
 .up button{height:38px;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff;border:0;border-radius:10px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer}
 .empty{font-size:13px;color:#94a3b8;padding:18px;text-align:center}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
+@media(max-width:760px){.kpis{grid-template-columns:repeat(2,1fr)}}
+.kpi2{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.kpi2 b{font-size:26px;color:var(--ink);display:block;line-height:1.2}
+.kpi2 span{font-size:12px;color:var(--muted)}.kpi2 .up{display:inline;padding:0;color:var(--green);font-size:11.5px;font-weight:700}
+.bar-row{display:flex;align-items:center;gap:10px;margin:11px 0;font-size:13px}
+.bar-row b{width:96px;color:#475569;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar-row .meter{flex:1}.bar-row .num{min-width:44px;text-align:left;color:#94a3b8;font-size:12px}
+.hist{display:flex;align-items:flex-end;gap:9px;height:130px;padding:14px 18px 6px}
+.hist .b{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px;height:100%}
+.hist .b i{width:66%;min-height:3px;background:linear-gradient(180deg,var(--teal2),var(--teal));border-radius:6px 6px 0 0}
+.hist .b em{font-size:11px;color:#475569;font-style:normal;font-weight:700}.hist .b span{font-size:10px;color:#94a3b8}
+.pager{display:flex;align-items:center;justify-content:center;gap:14px;padding:16px;font-size:13px;color:var(--muted)}
+.pager a{padding:8px 14px;border:1px solid #cbd5e1;border-radius:9px;color:#334155;font-size:12.5px}
+.pager a:hover{background:#f8fafc}.pager .off{opacity:.4;pointer-events:none}
+.search{display:flex;gap:10px;margin-bottom:16px}
+.search input{height:38px;border:1px solid #cbd5e1;border-radius:9px;padding:0 12px;font-size:13px;font-family:inherit;width:220px;color:var(--ink)}
+.search button{height:38px;padding:0 16px;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff;border:0;border-radius:9px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+.tag2{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:7px;background:#eef2ff;color:#4338ca}
 """
 
 
@@ -185,10 +205,10 @@ _BASE = """<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
   <a class="{{'on' if active=='settings'}}" href=/>⚙️ تنظیمات</a>
   <a class="{{'on' if active=='cookies'}}" href=/cookies>🍪 کوکی‌ها</a>
   <a class="{{'on' if active=='health'}}" href=/health>🩺 سلامت</a>
-  <a class=soon>👤 کاربران</a>
-  <a class=soon>📊 آمار</a>
+  <a class="{{'on' if active=='users'}}" href=/users>👤 کاربران</a>
+  <a class="{{'on' if active=='stats'}}" href=/stats>📊 آمار</a>
 </nav>
-<div class=foot>نسخهٔ ۱.۰ · D2</div></aside>
+<div class=foot>نسخهٔ ۱.۰ · D3</div></aside>
 <div class=main><div class=top><h1>{% block heading %}{% endblock %}</h1><div class=who>
 <span class="pill {{'' if pill_ok else 'bad'}}"><span class=dot></span> {{'همه سرویس‌ها آنلاین' if pill_ok else 'بررسیِ سرویس‌ها'}}</span>
 <span>ادمین · {{admin_id}}</span><a href=/logout class=lo>خروج ↩</a></div></div>
@@ -301,6 +321,79 @@ _HEALTH = """{% extends 'base' %}{% block title %}سلامت{% endblock %}{% blo
 </div>
 </div>{% endblock %}"""
 
+_USERS = """{% extends 'base' %}{% block title %}کاربران{% endblock %}{% block heading %}کاربران{% endblock %}
+{% block body %}
+{% if done %}<div class=saved>✅ {{done}}</div>{% endif %}
+<form class=search method=get action=/users>
+  <input name=q value="{{q}}" inputmode=numeric placeholder="جستجو با شناسهٔ عددی">
+  <button>جستجو</button>
+  {% if q %}<a class=btn-sm style="display:flex;align-items:center" href=/users>پاک‌کردن</a>{% endif %}
+</form>
+<div class=card><h3>👤 کاربران <span class=tag>{{total}} کل{% if blocked %} · {{blocked}} بلاک{% endif %}</span></h3>
+{% if users %}
+<table class=tbl><thead><tr><th>شناسهٔ تلگرام</th><th>نقش</th><th>فایل‌ها</th><th>ثبت‌نام</th><th>آخرین بازدید</th><th>وضعیت</th><th style=text-align:left>عملیات</th></tr></thead><tbody>
+{% for u in users %}
+<tr>
+  <td class=mono>{{u.tg}}{% if u.is_admin %} <span class=tag2>ادمین</span>{% endif %}</td>
+  <td><span class=chip>{{u.role}}</span></td>
+  <td class=num>{{u.files}}</td>
+  <td class=num style=color:#64748b>{{u.created}}</td>
+  <td class=num style=color:#64748b>{{u.seen}}</td>
+  <td>{% if u.blocked %}<span class="badge warn" style=margin:0>بلاک</span>{% else %}<span class="badge ok" style=margin:0>فعال</span>{% endif %}</td>
+  <td style=text-align:left>
+    {% if u.is_admin %}<span class=num style=color:#cbd5e1>—</span>
+    {% else %}<form class=inline method=post action=/users/block>
+      <input type=hidden name=id value="{{u.id}}"><input type=hidden name=page value="{{page}}"><input type=hidden name=q value="{{q}}">
+      <input type=hidden name=action value="{{'unblock' if u.blocked else 'block'}}">
+      <button class="btn-sm {{'' if u.blocked else 'btn-danger'}}">{{'رفعِ بلاک' if u.blocked else 'بلاک'}}</button></form>{% endif %}
+  </td>
+</tr>
+{% endfor %}
+</tbody></table>
+<div class=pager>
+  <a class="{{'off' if page<=0}}" href="/users?page={{page-1}}{% if q %}&q={{q}}{% endif %}">→ قبلی</a>
+  <span>صفحهٔ {{page+1}} از {{pages}}</span>
+  <a class="{{'off' if page+1>=pages}}" href="/users?page={{page+1}}{% if q %}&q={{q}}{% endif %}">بعدی ←</a>
+</div>
+{% else %}<div class=empty>کاربری یافت نشد.</div>{% endif %}
+</div>
+{% endblock %}"""
+
+_STATS = """{% extends 'base' %}{% block title %}آمار{% endblock %}{% block heading %}آمار{% endblock %}
+{% block body %}
+<div class=kpis>
+  <div class=kpi2><b>{{s.users}}</b><span>کاربر {% if s.new7 %}<span class=up>+{{s.new7}} این هفته</span>{% endif %}</span></div>
+  <div class=kpi2><b>{{s.active7}}</b><span>فعال (۷ روز)</span></div>
+  <div class=kpi2><b>{{s.files}}</b><span>فایل</span></div>
+  <div class=kpi2><b>{{s.storage_h}}</b><span>فضای پردازش‌شده</span></div>
+  <div class=kpi2><b>{{s.dl_files}}</b><span>دانلود از لینک</span></div>
+  <div class=kpi2><b>{{s.ops}}</b><span>عملیات {% if s.success_rate is not none %}<span class=up>{{s.success_rate}}٪ موفق</span>{% endif %}</span></div>
+</div>
+<div class=grid2>
+<div class=col>
+  <div class=card><h3>🗂 فایل‌ها بر اساسِ نوع</h3><div class=rows>
+    {% if s.by_kind %}{% for r in s.by_kind %}
+    <div class=bar-row><b>{{ kindfa.get(r.k, r.k) }}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--teal2)"></i></div><span class=num>{{r.n}}</span></div>
+    {% endfor %}{% else %}<div class=empty>هنوز فایلی نیست.</div>{% endif %}
+  </div></div>
+  <div class=card><h3>🔗 منبعِ فایل</h3><div class=rows>
+    <div class=bar-row><b>آپلودِ کاربر</b><div class=meter><i style="width:{{s.src_up_pct}}%;background:var(--teal)"></i></div><span class=num>{{s.src_up}}</span></div>
+    <div class=bar-row><b>دانلود از لینک</b><div class=meter><i style="width:{{s.src_dl_pct}}%;background:var(--amber)"></i></div><span class=num>{{s.dl_files}}</span></div>
+  </div></div>
+</div>
+<div class=col>
+  <div class=card><h3>⚙️ پرکاربردترین عملیات</h3><div class=rows>
+    {% if s.by_op %}{% for r in s.by_op %}
+    <div class=bar-row><b>{{ opfa.get(r.k, r.k) }}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--green)"></i></div><span class=num>{{r.n}}</span></div>
+    {% endfor %}{% else %}<div class=empty>هنوز عملیاتی اجرا نشده.</div>{% endif %}
+  </div></div>
+  <div class=card><h3>📅 ثبت‌نامِ ۷ روزِ اخیر</h3>
+    <div class=hist>{% for d in s.signups %}<div class=b><em>{{d.n}}</em><i style="height:{{d.pct}}%"></i><span>{{d.day}}</span></div>{% endfor %}</div>
+  </div>
+</div>
+</div>
+{% endblock %}"""
+
 _LOGIN = """<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>ورود · پنلِ تل‌ابزار</title>
 <style>{{css}}
@@ -348,7 +441,7 @@ border-radius:12px;font-size:15px;font-weight:700;font-family:inherit;box-shadow
 ENV = Environment(
     loader=DictLoader({
         "base": _BASE, "settings": _SETTINGS, "cookies": _COOKIES,
-        "health": _HEALTH, "login": _LOGIN,
+        "health": _HEALTH, "users": _USERS, "stats": _STATS, "login": _LOGIN,
     }),
     autoescape=select_autoescape(default=True, default_for_string=True),
 )
@@ -447,6 +540,97 @@ async def _effective() -> dict:
         else:
             vals[k] = ov
     return vals
+
+
+# ── کاربران و آمار ──────────────────────────────────────────────
+_KIND_FA = {"image": "تصویر", "video": "ویدیو", "audio": "صوت", "voice": "ویس",
+            "document": "سند", "pdf": "PDF", "archive": "آرشیو", "animation": "گیف"}
+_OP_FA = {"compress": "فشرده‌سازی", "convert": "تبدیلِ فرمت", "transcribe": "رونویسی",
+          "scan": "اسکنِ ویروس", "bg_remove": "حذفِ پس‌زمینه", "watermark": "واترمارک",
+          "trim": "برش", "screenshot": "اسکرین‌شات", "mute": "بی‌صداکردن", "to_gif": "به گیف",
+          "ocr": "OCR", "resize": "تغییرِ اندازه", "rotate": "چرخش", "enhance": "بهبود",
+          "to_pdf": "به PDF", "merge": "ادغام", "link": "لینکِ دانلود", "zip": "زیپ",
+          "extract_audio": "جداسازیِ صوت", "normalize": "نرمال‌سازی", "speed": "تغییرِ سرعت"}
+
+
+def _human_size(n) -> str:
+    n = int(n or 0)
+    for unit, div in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
+        if n >= div:
+            return f"{n / div:.1f} {unit}"
+    return f"{n} B"
+
+
+async def _stats() -> dict:
+    now = datetime.now(timezone.utc)
+    week = now - timedelta(days=7)
+    s: dict = {}
+    async with Sessionmaker() as db:
+        s["users"] = await db.scalar(select(func.count(User.id))) or 0
+        s["active7"] = await db.scalar(select(func.count(User.id)).where(User.last_seen >= week)) or 0
+        s["new7"] = await db.scalar(select(func.count(User.id)).where(User.created_at >= week)) or 0
+        s["files"] = await db.scalar(select(func.count(File.id))) or 0
+        storage = await db.scalar(select(func.coalesce(func.sum(File.size), 0))) or 0
+        s["dl_files"] = await db.scalar(select(func.count(File.id)).where(File.source == "dl")) or 0
+        s["ops"] = await db.scalar(select(func.count(Job.id))) or 0
+        kind_rows = (await db.execute(select(File.kind, func.count(File.id))
+                     .group_by(File.kind).order_by(func.count(File.id).desc()))).all()
+        op_rows = (await db.execute(select(Job.op, func.count(Job.id))
+                   .group_by(Job.op).order_by(func.count(Job.id).desc()).limit(8))).all()
+        status_rows = {st: c for st, c in (await db.execute(
+            select(Job.status, func.count(Job.id)).group_by(Job.status))).all()}
+        signup_ts = (await db.execute(
+            select(User.created_at).where(User.created_at >= week))).scalars().all()
+    s["storage_h"] = _human_size(storage)
+    s["src_dl"] = s["dl_files"]
+    s["src_up"] = max(0, s["files"] - s["dl_files"])
+    s["src_up_pct"] = round(s["src_up"] / s["files"] * 100) if s["files"] else 0
+    s["src_dl_pct"] = round(s["src_dl"] / s["files"] * 100) if s["files"] else 0
+    kmax = max((c for _, c in kind_rows), default=1) or 1
+    s["by_kind"] = [{"k": k, "n": c, "pct": round(c / kmax * 100)} for k, c in kind_rows]
+    omax = max((c for _, c in op_rows), default=1) or 1
+    s["by_op"] = [{"k": k, "n": c, "pct": round(c / omax * 100)} for k, c in op_rows]
+    done, failed = status_rows.get("done", 0), status_rows.get("failed", 0)
+    s["success_rate"] = round(done / (done + failed) * 100) if (done + failed) else None
+    keys = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
+    buckets = {k: 0 for k in keys}
+    for ts in signup_ts:
+        k = str(ts)[:10]
+        if k in buckets:
+            buckets[k] += 1
+    smax = max(buckets.values(), default=1) or 1
+    s["signups"] = [{"day": k[5:], "n": buckets[k], "pct": round(buckets[k] / smax * 100)} for k in keys]
+    return s
+
+
+async def _users_list(page: int, q: str) -> dict:
+    per = 40
+    q = (q or "").strip()
+    async with Sessionmaker() as db:
+        base = select(User)
+        if q.isdigit():
+            base = base.where(User.tg_user_id == int(q))
+        total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+        blocked = await db.scalar(select(func.count(User.id)).where(User.is_blocked.is_(True))) or 0
+        rows = (await db.execute(
+            base.order_by(User.last_seen.desc()).limit(per).offset(page * per))).scalars().all()
+        ids = [u.id for u in rows]
+        counts: dict[int, int] = {}
+        if ids:
+            cres = await db.execute(select(File.owner_id, func.count(File.id))
+                                    .where(File.owner_id.in_(ids)).group_by(File.owner_id))
+            counts = {oid: c for oid, c in cres.all()}
+    admins = settings.admin_id_set
+    users = [{
+        "id": u.id, "tg": u.tg_user_id, "role": u.role, "blocked": bool(u.is_blocked),
+        "is_admin": u.tg_user_id in admins,
+        "created": str(u.created_at)[:10] if u.created_at else "",
+        "seen": str(u.last_seen)[:16].replace("T", " ") if u.last_seen else "",
+        "files": counts.get(u.id, 0),
+    } for u in rows]
+    pages = max(1, (total + per - 1) // per)
+    return {"users": users, "page": page, "pages": pages, "total": total,
+            "blocked": blocked, "q": q}
 
 
 # ── کوکی‌ها ─────────────────────────────────────────────────────
@@ -600,6 +784,55 @@ async def health_page(request: web.Request) -> web.Response:
     pool = _cookie_pool_summary(await _list_cookies(request.app["redis"]))
     return _render("health", admin_id=_session_admin(request), active="health",
                    pill_ok=health["all_ok"], health=health, pool=pool)
+
+
+async def users_page(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    try:
+        page = max(0, int(request.query.get("page", "0")))
+    except ValueError:
+        page = 0
+    data = await _users_list(page, request.query.get("q", ""))
+    done = {"block": "کاربر بلاک شد.", "unblock": "بلاکِ کاربر برداشته شد."}.get(
+        request.query.get("done", ""), "")
+    return _render("users", admin_id=_session_admin(request), active="users",
+                   pill_ok=await _pill_ok(request.app), done=done, **data)
+
+
+async def users_block(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    uid = (form.get("id") or "").strip()
+    action = (form.get("action") or "").strip()
+    page = (form.get("page") or "0").strip()
+    q = (form.get("q") or "").strip()
+    outcome = ""
+    if uid.isdigit() and action in ("block", "unblock"):
+        async with Sessionmaker() as db:
+            u = await db.get(User, int(uid))
+            if u and u.tg_user_id not in settings.admin_id_set:  # ادمین را نمی‌شود بلاک کرد
+                u.is_blocked = (action == "block")
+                await db.commit()
+                outcome = action
+    # بازسازیِ URL از فیلدهای امن (نه ret کاربر → بدونِ open-redirect)
+    params = []
+    if page.isdigit() and int(page):
+        params.append(f"page={int(page)}")
+    if q.isdigit():
+        params.append(f"q={int(q)}")
+    if outcome:
+        params.append(f"done={outcome}")
+    raise web.HTTPFound("/users" + ("?" + "&".join(params) if params else ""))
+
+
+async def stats_page(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    return _render("stats", admin_id=_session_admin(request), active="stats",
+                   pill_ok=await _pill_ok(request.app), s=await _stats(),
+                   kindfa=_KIND_FA, opfa=_OP_FA)
 
 
 async def cookies_page(request: web.Request) -> web.Response:
@@ -764,6 +997,9 @@ def build_app() -> web.Application:
     app.router.add_post("/cookies/delete", cookies_delete)
     app.router.add_post("/cookies/cooldown", cookies_cooldown)
     app.router.add_get("/health", health_page)
+    app.router.add_get("/users", users_page)
+    app.router.add_post("/users/block", users_block)
+    app.router.add_get("/stats", stats_page)
     app.router.add_get("/healthz", healthz)
     if os.path.isdir(_STATIC_DIR):
         app.router.add_static("/static", _STATIC_DIR)
