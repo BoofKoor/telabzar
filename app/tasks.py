@@ -49,6 +49,12 @@ def _safe_stem(name: str | None, default: str = "file") -> str:
     return stem or default
 
 
+def _img_ext(name: str | None, default: str = ".jpg") -> str:
+    """پسوندِ تصویرِ خروجی — پسوندِ اصلی را نگه می‌دارد وگرنه پیش‌فرض."""
+    ext = (os.path.splitext(name or "")[1] or default).lower()
+    return ext if ext in (".jpg", ".jpeg", ".png", ".webp") else default
+
+
 def _fmt_dur(seconds: float) -> str:
     s = int(seconds)
     h, s = divmod(s, 3600)
@@ -242,6 +248,23 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         return {"send_media": {"as": "photo", "path": out, "filename": f"{stem}.jpg"},
                 "label": t(lang, "cl_thumb")}
 
+    if op == "watermark" and file.kind == "image":
+        pos = args.get("pos", "br")
+        out = os.path.join(workdir, f"{stem}-wm{_img_ext(file.name)}")
+        if args.get("text"):
+            wm = os.path.join(workdir, "wm.png")
+            await P.render_text_watermark(args["text"], wm, file.height or 720)
+            await P.watermark_image(inpath, out, wm, pos, is_logo=False)
+        elif args.get("logo"):
+            tg = await bot.get_file(args["logo"])
+            lp = tg.file_path
+            if not lp or not os.path.exists(lp):
+                raise RuntimeError("logo not found on disk")
+            await P.watermark_image(inpath, out, lp, pos, is_logo=True)
+        else:
+            raise RuntimeError("no watermark content")
+        return {"path": out, "filename": os.path.basename(out), "label": t(lang, "cl_watermark")}
+
     if op == "watermark":
         pos = args.get("pos", "br")
         out = os.path.join(workdir, f"{stem}-wm.mp4")
@@ -277,6 +300,61 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         await P.screenshot_video(inpath, out, float(args.get("ts", 0)))
         return {"send_media": {"as": "photo", "path": out, "filename": f"{stem}.jpg"},
                 "label": t(lang, "cl_screenshot")}
+
+    if op == "ocr":
+        text = (await P.ocr_image(inpath, workdir)).strip()
+        if not text:
+            return {"note_only": True, "label": t(lang, "ocr_empty")}
+        if len(text) > 3000:  # متنِ بلند → فایلِ txt (سقفِ پیامِ تلگرام)
+            txt = os.path.join(workdir, f"{stem}-ocr.txt")
+            with open(txt, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            return {"files": [txt], "label": t(lang, "cl_ocr")}
+        body = escape(text)
+        return {"message": f"{t(lang, 'ocr_header')}\n<blockquote expandable>{body}</blockquote>",
+                "label": t(lang, "cl_ocr")}
+
+    if op == "resize":
+        out = os.path.join(workdir, f"{stem}-resized{_img_ext(file.name)}")
+        w = await P.resize_image(inpath, out, args.get("w", "half"))
+        return {"path": out, "filename": os.path.basename(out), "label": t(lang, "cl_resize", w=w)}
+
+    if op == "rotate":
+        out = os.path.join(workdir, f"{stem}-rot{_img_ext(file.name)}")
+        await P.rotate_image(inpath, out, args.get("mode", "cw"))
+        return {"path": out, "filename": os.path.basename(out), "label": t(lang, "cl_rotate")}
+
+    if op == "enhance":
+        out = os.path.join(workdir, f"{stem}-hd{_img_ext(file.name)}")
+        await P.enhance_image(inpath, out)
+        return {"path": out, "filename": os.path.basename(out), "label": t(lang, "cl_enhance")}
+
+    if op == "bg_remove":
+        # خروجی PNGِ شفاف است؛ به‌صورتِ «سند» تحویل می‌دهیم تا آلفا حفظ شود
+        # (کارتِ عکس آن را به JPEG تخت می‌کرد).
+        out = os.path.join(workdir, f"{stem}-nobg.png")
+        await P.remove_background(inpath, out)
+        return {"send_media": {"as": "document", "path": out, "filename": f"{stem}-nobg.png"},
+                "label": t(lang, "cl_bg_remove")}
+
+    if op == "images_to_pdf":
+        members = args.get("members") or []
+        paths: list[str] = []
+        for m in members:
+            fid = m.get("file_id")
+            if not fid:
+                continue
+            tg = await bot.get_file(fid)
+            p = tg.file_path
+            if not p or not os.path.exists(p):
+                raise RuntimeError(f"member not found on disk: {m.get('name') or fid}")
+            paths.append(p)
+        if not paths:
+            raise RuntimeError("no images for PDF")
+        out = os.path.join(workdir, f"{stem}.pdf")
+        await P.images_to_pdf(paths, out)
+        return {"path": out, "filename": f"{stem}.pdf",
+                "label": t(lang, "cl_img_pdf", n=len(paths)), "kind": "pdf"}
 
     raise RuntimeError(f"unknown op: {op}")
 
