@@ -161,6 +161,8 @@ services:
       WORK_DIR: /work
       ADMIN_PORT: 8080
       ADMIN_BASE: ${ADMIN_BASE:-}
+      COOKIES_DIR: /cookies
+      POT_PROVIDER_URL: http://bgutil-pot-provider:4416
       TLS_CERT: ${TLS_CERT:-}
       TLS_KEY: ${TLS_KEY:-}
     depends_on:
@@ -174,6 +176,7 @@ services:
       - "${ADMIN_HTTPS_PORT:-2083}:8080"
     volumes:
       - work-data:/work:ro     # فقط برای نمایشِ فضای دیسک در هلث
+      - ./cookies:/cookies     # مدیریتِ کوکی‌ها (نوشتنی)؛ ورکرِ دانلود همین را :ro می‌خواند
       - ./certs:/certs:ro      # همان سرتیفیکیتِ Origin کلودفلر
     security_opt:
       - no-new-privileges:true
