@@ -14,14 +14,14 @@ from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..cards import card_caption, meta_editor_view, set_card_note, update_card
-from ..callbacks import Act, Cmp, Conv, Meta, Wm
+from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Wm
 from ..config import settings
 from ..crud import get_file_by_ref
 from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
     CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_job_kb, cancel_kb, collect_kb, compress_menu_kb,
-    convert_menu_kb, link_menu_kb, watermark_pos_kb,
+    convert_menu_kb, link_menu_kb, resize_menu_kb, rotate_menu_kb, watermark_pos_kb,
 )
 from ..models import Job, User
 from ..states import Collect, MetaEdit, Rename, Screenshot, SetCover, Trim, Watermark
@@ -49,9 +49,21 @@ def _collect_lock(chat_id: int) -> asyncio.Lock:
     return lock
 
 
+# هدفِ جمع‌کردن → (کلیدِ راهنما, کلیدِ سرآیندِ لیست)
+_COLLECT_TEXT = {
+    "merge": ("merge_collect_prompt", "merge_list_header"),
+    "img_pdf": ("img_pdf_collect_prompt", "img_pdf_list_header"),
+    "zip": ("zip_collect_prompt", "zip_list_header"),
+}
+# هدف‌هایی که فقط یک نوعِ خاص می‌پذیرند → (نوعِ مجاز, کلیدِ هشدار)
+_COLLECT_ONLY = {
+    "merge": ("pdf", "merge_only_pdf"),
+    "img_pdf": ("image", "img_pdf_only_image"),
+}
+
+
 def _collect_note(lang: str, purpose: str, members: list[dict], last: str | None = None) -> str:
-    prompt = "merge_collect_prompt" if purpose == "merge" else "zip_collect_prompt"
-    header = "merge_list_header" if purpose == "merge" else "zip_list_header"
+    prompt, header = _COLLECT_TEXT.get(purpose, _COLLECT_TEXT["zip"])
     lines = [t(lang, prompt)]
     if last:
         lines.append(t(lang, "zip_received", name=escape(last)))
@@ -233,6 +245,107 @@ async def op_direct(cq: CallbackQuery, callback_data: Act, session: AsyncSession
     await _start(cq, file, lang, arq_pool, session, callback_data.op, {}, user)
 
 
+# ── جعبه‌ابزارِ تصویر ───────────────────────────────────────────
+# عملیاتِ مستقیمِ تصویر (بدونِ ورودی): متن (OCR) · بهبود · حذفِ پس‌زمینه
+_IMG_OPS = {"ocr", "enhance", "bg_remove"}
+
+
+@router.callback_query(Act.filter(F.op.in_(_IMG_OPS)))
+async def op_image_direct(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
+                          arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "image":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    if _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+        return
+    await _start(cq, file, lang, arq_pool, session, callback_data.op, {}, user)
+
+
+# ── تغییرِ اندازهٔ تصویر: منو → انتخاب ──────────────────────────
+@router.callback_query(Act.filter(F.op == "resize"))
+async def op_resize(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "image":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    try:
+        await cq.message.edit_caption(
+            caption=card_caption(file, lang, note=t(lang, "resize_choose")),
+            reply_markup=resize_menu_kb(file.ref, file, lang),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.callback_query(Rsz.filter())
+async def op_resize_pick(cq: CallbackQuery, callback_data: Rsz, session: AsyncSession, lang: str,
+                         arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+        return
+    await _start(cq, file, lang, arq_pool, session, "resize", {"w": callback_data.w}, user)
+
+
+# ── چرخش/آینهٔ تصویر: منو → انتخاب ──────────────────────────────
+@router.callback_query(Act.filter(F.op == "rotate"))
+async def op_rotate(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "image":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    try:
+        await cq.message.edit_caption(
+            caption=card_caption(file, lang, note=t(lang, "rotate_choose")),
+            reply_markup=rotate_menu_kb(file.ref, lang),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.callback_query(Rot.filter())
+async def op_rotate_pick(cq: CallbackQuery, callback_data: Rot, session: AsyncSession, lang: str,
+                         arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+        return
+    await _start(cq, file, lang, arq_pool, session, "rotate", {"mode": callback_data.mode}, user)
+
+
+# ── عکس‌ها به PDF: شروع (جمع‌آوریِ چند تصویر) ───────────────────
+@router.callback_query(Act.filter(F.op == "img_pdf"))
+async def op_img_pdf_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
+                           lang: str, state: FSMContext) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "image":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    await _collect_start(cq, file, lang, state, "img_pdf")
+
+
 # ── تبدیلِ فرمت: منو ────────────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "convert"))
 async def op_convert_menu(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
@@ -386,13 +499,14 @@ async def collect_recv(message: Message, state: FSMContext, session: AsyncSessio
     file = await get_file_by_ref(session, ref)
     if file is None:
         return
-    # ادغامِ PDF فقط PDF می‌پذیرد
-    if purpose == "merge" and info.kind != "pdf":
+    # هدف‌های نوع‌مقید (ادغامِ PDF → فقط PDF · عکس‌ها به PDF → فقط تصویر)
+    only = _COLLECT_ONLY.get(purpose)
+    if only and info.kind != only[0]:
         try:
             await message.bot.edit_message_caption(
                 chat_id=card_chat, message_id=card_mid,
                 caption=card_caption(file, lang, note=_collect_note(lang, purpose, list(data.get("members", [])))
-                                     + "\n" + t(lang, "merge_only_pdf")),
+                                     + "\n" + t(lang, only[1])),
                 reply_markup=collect_kb(ref, lang, purpose),
             )
         except Exception:  # noqa: BLE001
@@ -440,7 +554,7 @@ async def op_collect_go(cq: CallbackQuery, callback_data: Act, session: AsyncSes
             await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang, keyboard=True)
             return
     await cq.answer()
-    op = "pdf_merge" if purpose == "merge" else "zip_many"
+    op = {"merge": "pdf_merge", "img_pdf": "images_to_pdf"}.get(purpose, "zip_many")
     await _enqueue(cq.message.bot, arq_pool, session, file, op, {"members": members},
                    cq.message.chat.id, cq.message.message_id, lang)
 
@@ -655,7 +769,7 @@ async def op_watermark_start(cq: CallbackQuery, callback_data: Act, session: Asy
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if file.kind != "video":
+    if file.kind not in ("video", "image"):
         await cq.answer(t(lang, "coming_soon"), show_alert=True)
         return
     try:

@@ -6,7 +6,7 @@ import json
 import os
 import zipfile
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
@@ -133,6 +133,147 @@ async def compress_image(inp: str, out: str) -> None:
 
 async def convert_image(inp: str, out: str, fmt: str) -> None:
     await asyncio.to_thread(_convert_image_sync, inp, out, fmt)
+
+
+# ── جعبه‌ابزارِ تصویر: اندازه/چرخش/بهبود/واترمارک/به‌PDF (Pillow) ─
+def _save_image(img: Image.Image, out: str) -> None:
+    """ذخیره بر اساسِ پسوندِ خروجی (jpg مسطح‌شده؛ png/webp با آلفا)."""
+    ext = os.path.splitext(out)[1].lower()
+    if ext in (".jpg", ".jpeg"):
+        _flatten_rgb(img).save(out, "JPEG", quality=90, optimize=True)
+    elif ext == ".webp":
+        img.save(out, "WEBP", quality=90)
+    else:
+        img.save(out, "PNG", optimize=True)
+
+
+def _resize_image_sync(inp: str, out: str, target) -> int:
+    img = ImageOps.exif_transpose(Image.open(inp))
+    w, h = img.size
+    nw = max(1, w // 2) if target == "half" else int(target)
+    nw = min(nw, w)  # هرگز بزرگ‌نمایی نکن
+    nh = max(1, round(h * nw / w))
+    _save_image(img.resize((nw, nh), Image.LANCZOS), out)
+    return nw
+
+
+async def resize_image(inp: str, out: str, target) -> int:
+    """تغییرِ اندازه به عرضِ target (px) یا «half»؛ عرضِ نهایی را برمی‌گرداند."""
+    return await asyncio.to_thread(_resize_image_sync, inp, out, target)
+
+
+_ROTATE = {"cw": Image.ROTATE_270, "ccw": Image.ROTATE_90, "180": Image.ROTATE_180}
+
+
+def _rotate_image_sync(inp: str, out: str, mode: str) -> None:
+    img = ImageOps.exif_transpose(Image.open(inp))
+    img = ImageOps.mirror(img) if mode == "mirror" else img.transpose(_ROTATE.get(mode, Image.ROTATE_270))
+    _save_image(img, out)
+
+
+async def rotate_image(inp: str, out: str, mode: str) -> None:
+    await asyncio.to_thread(_rotate_image_sync, inp, out, mode)
+
+
+def _enhance_image_sync(inp: str, out: str) -> None:
+    img = ImageOps.exif_transpose(Image.open(inp)).convert("RGB")
+    img = ImageOps.autocontrast(img, cutoff=1)
+    img = ImageEnhance.Color(img).enhance(1.08)
+    img = ImageEnhance.Sharpness(img).enhance(1.6)
+    _save_image(img, out)
+
+
+async def enhance_image(inp: str, out: str) -> None:
+    """بهبودِ خودکار: کنتراستِ خودکار + کمی رنگ و شارپ."""
+    await asyncio.to_thread(_enhance_image_sync, inp, out)
+
+
+def _watermark_image_sync(inp: str, out: str, wm_path: str, position: str, is_logo: bool) -> None:
+    base = ImageOps.exif_transpose(Image.open(inp)).convert("RGBA")
+    wm = Image.open(wm_path).convert("RGBA")
+    if is_logo:  # لوگو را نسبت به عرضِ تصویر کوچک کن
+        tw = max(60, base.width // 5)
+        th = max(1, round(wm.height * tw / wm.width))
+        wm = wm.resize((tw, th), Image.LANCZOS)
+    m = max(12, base.width // 50)
+    x = m if position in ("tl", "bl") else base.width - wm.width - m
+    y = m if position in ("tl", "tr") else base.height - wm.height - m
+    layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    layer.paste(wm, (max(0, x), max(0, y)), wm)
+    _save_image(Image.alpha_composite(base, layer), out)
+
+
+async def watermark_image(inp: str, out: str, wm_path: str, position: str, is_logo: bool = False) -> None:
+    await asyncio.to_thread(_watermark_image_sync, inp, out, wm_path, position, is_logo)
+
+
+def _images_to_pdf_sync(paths: list[str], out: str, max_side: int = 2000) -> None:
+    pages: list[Image.Image] = []
+    for p in paths:
+        img = _flatten_rgb(ImageOps.exif_transpose(Image.open(p)))
+        if max(img.size) > max_side:  # صفحاتِ خیلی بزرگ را کوچک کن (مصرفِ حافظه)
+            r = max_side / max(img.size)
+            img = img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))), Image.LANCZOS)
+        pages.append(img)
+    if not pages:
+        raise RuntimeError("no images for PDF")
+    pages[0].save(out, "PDF", save_all=True, append_images=pages[1:])
+
+
+async def images_to_pdf(paths: list[str], out: str) -> None:
+    """چند تصویر → یک PDFِ چندصفحه‌ای (هر تصویر یک صفحه)."""
+    await asyncio.to_thread(_images_to_pdf_sync, paths, out)
+    if not os.path.exists(out):
+        raise RuntimeError("PDF build produced no output")
+
+
+# ── OCR: استخراجِ متن (tesseract؛ فارسی + انگلیسی) ──────────────
+async def _tesseract(png: str, lang: str) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "tesseract", png, "stdout", "-l", lang,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError("OCR timed out") from None
+    if proc.returncode != 0:
+        detail = " ".join((err or b"").decode("utf-8", "ignore").split())[:160]
+        raise RuntimeError(f"OCR failed: {detail}")
+    return out.decode("utf-8", "ignore")
+
+
+async def ocr_image(inp: str, workdir: str, langs: str = "fas+eng") -> str:
+    """متنِ تصویر را می‌خواند؛ اگر بستهٔ فارسی نبود، به انگلیسیِ تنها برمی‌گردد."""
+    png = os.path.join(workdir, "_ocr_in.png")
+    await asyncio.to_thread(
+        lambda: ImageOps.exif_transpose(Image.open(inp)).convert("RGB").save(png, "PNG")
+    )
+    try:
+        return await _tesseract(png, langs)
+    except RuntimeError:
+        return await _tesseract(png, "eng")
+
+
+# ── حذفِ پس‌زمینه (rembg؛ RAM‌بر → قفلِ هم‌زمانیِ ۱) ────────────
+_BG_SEM = asyncio.Semaphore(1)
+
+
+def _remove_bg_sync(inp: str, out: str) -> None:
+    from rembg import remove  # ورودِ تنبل: فقط ورکر این وابستگی را دارد
+
+    with Image.open(inp) as im:
+        res = remove(im.convert("RGBA"))
+    res.save(out, "PNG")
+
+
+async def remove_background(inp: str, out: str) -> None:
+    async with _BG_SEM:  # هم‌زمان فقط یکی (مصرفِ حافظهٔ مدل بالاست)
+        await asyncio.to_thread(_remove_bg_sync, inp, out)
+    if not os.path.exists(out):
+        raise RuntimeError("background removal produced no output")
 
 
 # ── صوت (ffmpeg) ───────────────────────────────────────────────

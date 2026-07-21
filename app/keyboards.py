@@ -4,7 +4,7 @@ from __future__ import annotations
 from aiogram.types import CopyTextButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .callbacks import Act, Cmp, Conv, Lang, Meta, Wm
+from .callbacks import Act, Cmp, Conv, Lang, Meta, Rot, Rsz, Wm
 from .i18n import t
 
 # رزولوشن‌های هدفِ کاهشِ حجمِ ویدیو → (ارتفاع, بیت‌ریتِ ویدیو kbps)
@@ -23,14 +23,20 @@ FIELD_LABEL: dict[str, str] = {field: key for field, key in META_FIELDS}
 FIELD_LABEL["cover"] = "btn_f_cover"
 
 # نوع‌هایی که کلیدِ اولِ منویشان تمام‌عرض (ردیفِ جدا) نمایش داده می‌شود
-FEATURED_TOP = {"audio", "video"}
+FEATURED_TOP = {"audio", "video", "image"}
+
+# عرض‌های هدفِ تغییرِ اندازهٔ تصویر (px)
+IMAGE_RESIZE_WIDTHS = [1920, 1280, 800, 512]
 
 # عملیاتِ مرتبط با هر نوعِ فایل (فقط کلیدهایی که برای آن نوع معنا دارند).
 # ترتیب: عملیاتِ مختصِ نوع اول، بعد عمومی‌های مرتبط.
 OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
     "image": [
-        ("bg_remove", "btn_bg_remove"), ("convert", "btn_convert"), ("compress", "btn_compress"),
-        ("link", "btn_link"), ("rename", "btn_rename"), ("zip", "btn_zip"),
+        ("link", "btn_link"),
+        ("ocr", "btn_ocr"), ("watermark", "btn_watermark"), ("img_pdf", "btn_to_pdf"),
+        ("resize", "btn_resize"), ("rotate", "btn_rotate"), ("enhance", "btn_enhance"),
+        ("compress", "btn_compress"), ("convert", "btn_convert"), ("bg_remove", "btn_bg_remove"),
+        ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "video": [
         ("link", "btn_link_stream"),
@@ -120,6 +126,32 @@ def watermark_pos_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def resize_menu_kb(ref: str, file, lang: str) -> InlineKeyboardMarkup:
+    """منوی تغییرِ اندازهٔ تصویر: عرض‌های کوچک‌تر از فعلی + «نصف»."""
+    b = InlineKeyboardBuilder()
+    w = file.width or 0
+    for tw in IMAGE_RESIZE_WIDTHS:
+        if w and tw >= w:            # فقط کوچک‌تر از عرضِ فعلی
+            continue
+        b.button(text=f"↔️ {tw}px", callback_data=Rsz(ref=ref, w=str(tw)))
+    b.button(text=t(lang, "btn_half"), callback_data=Rsz(ref=ref, w="half"))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(2)
+    return b.as_markup()
+
+
+def rotate_menu_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    """منوی چرخش/آینهٔ تصویر."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "rot_ccw"), callback_data=Rot(ref=ref, mode="ccw"))
+    b.button(text=t(lang, "rot_cw"), callback_data=Rot(ref=ref, mode="cw"))
+    b.button(text=t(lang, "rot_180"), callback_data=Rot(ref=ref, mode="180"))
+    b.button(text=t(lang, "rot_mirror"), callback_data=Rot(ref=ref, mode="mirror"))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(2, 2, 1)
+    return b.as_markup()
+
+
 def cancel_job_kb(job_id: int, lang: str) -> InlineKeyboardMarkup:
     """دکمهٔ لغوِ یک جابِ در حالِ اجرا (ref = شناسهٔ جاب)."""
     b = InlineKeyboardBuilder()
@@ -140,8 +172,8 @@ def link_menu_kb(ref: str, lang: str, dl_url: str, stream_url: str, streamable: 
 
 
 def collect_kb(ref: str, lang: str, purpose: str) -> InlineKeyboardMarkup:
-    """کیبوردِ جمع‌کردنِ فایل — دکمهٔ اجرا بسته به هدف (زیپ یا ادغامِ PDF)."""
-    go_key = "btn_merge_go" if purpose == "merge" else "btn_zip_go"
+    """کیبوردِ جمع‌کردنِ فایل — دکمهٔ اجرا بسته به هدف (زیپ / ادغامِ PDF / عکس‌ها به PDF)."""
+    go_key = {"merge": "btn_merge_go", "img_pdf": "btn_img_pdf_go"}.get(purpose, "btn_zip_go")
     b = InlineKeyboardBuilder()
     b.button(text=t(lang, go_key), callback_data=Act(op="collect_go", ref=ref))
     b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))

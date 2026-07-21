@@ -31,3 +31,13 @@ class Cmp(CallbackData, prefix="cmp"):
 class Wm(CallbackData, prefix="wm"):
     ref: str
     pos: str  # tl | tr | bl | br
+
+
+class Rsz(CallbackData, prefix="rsz"):
+    ref: str
+    w: str  # عرضِ هدف («۸۰۰») یا «half»
+
+
+class Rot(CallbackData, prefix="rot"):
+    ref: str
+    mode: str  # cw | ccw | 180 | mirror
