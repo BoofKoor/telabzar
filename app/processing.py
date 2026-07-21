@@ -276,6 +276,41 @@ async def remove_background(inp: str, out: str) -> None:
         raise RuntimeError("background removal produced no output")
 
 
+# ── رونویسیِ صوت (faster-whisper؛ CPU/RAM‌بر → قفلِ هم‌زمانیِ ۱) ──
+_ASR_SEM = asyncio.Semaphore(1)
+_WHISPER_MODELS: dict[str, object] = {}  # کشِ مدلِ بارگذاری‌شده به‌ازای هر اندازه
+
+
+def _srt_ts(seconds: float) -> str:
+    ms = int(round(max(0.0, seconds) * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _transcribe_sync(inp: str, model_size: str, mode: str) -> str:
+    from faster_whisper import WhisperModel  # ورودِ تنبل: فقط ورکر این وابستگی را دارد
+
+    model = _WHISPER_MODELS.get(model_size)
+    if model is None:
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        _WHISPER_MODELS[model_size] = model
+    segments, _info = model.transcribe(inp, vad_filter=True)  # تشخیصِ خودکارِ زبان
+    if mode == "srt":
+        lines: list[str] = []
+        for i, seg in enumerate(segments, 1):
+            lines += [str(i), f"{_srt_ts(seg.start)} --> {_srt_ts(seg.end)}", seg.text.strip(), ""]
+        return "\n".join(lines)
+    return " ".join(seg.text.strip() for seg in segments).strip()
+
+
+async def transcribe_audio(inp: str, model_size: str = "base", mode: str = "txt") -> str:
+    """متنِ گفتارِ صوت را برمی‌گرداند (mode=txt) یا زیرنویسِ SRT (mode=srt)."""
+    async with _ASR_SEM:  # رونویسیِ هم‌زمان فقط یکی
+        return await asyncio.to_thread(_transcribe_sync, inp, model_size, mode)
+
+
 # ── صوت (ffmpeg) ───────────────────────────────────────────────
 # نکته: '-vn' کاورآرتِ جاسازی‌شده در MP3 را دراپ می‌کند تا تبدیل به
 # ogg/m4a شکست نخورد.
@@ -306,6 +341,49 @@ async def extract_audio(inp: str, out: str, fmt: str = "mp3", progress=None, dur
                progress=progress, duration=duration, cancel=cancel)
     if not os.path.exists(out):
         raise RuntimeError("no audio track extracted")
+
+
+async def trim_audio(inp: str, out: str, start: float, end: float,
+                     progress=None, cancel=None) -> None:
+    """برشِ بازهٔ [start, end] از صوت (خروجیِ mp3)."""
+    await _run([FFMPEG, "-y", "-ss", f"{start}", "-to", f"{end}", "-i", inp,
+                "-vn", "-c:a", "libmp3lame", "-b:a", "192k", out],
+               progress=progress, duration=max(0.1, end - start), cancel=cancel)
+    if not os.path.exists(out):
+        raise RuntimeError("audio trim produced no output")
+
+
+async def normalize_audio(inp: str, out: str, progress=None, duration=None, cancel=None) -> None:
+    """یکسان‌سازیِ بلندی (EBU R128 loudnorm) — برای ضبط‌های کم/پرصدا."""
+    await _run([FFMPEG, "-y", "-i", inp, "-vn", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
+                "-c:a", "libmp3lame", "-b:a", "192k", out],
+               progress=progress, duration=duration, cancel=cancel)
+    if not os.path.exists(out):
+        raise RuntimeError("normalize produced no output")
+
+
+def _atempo_chain(rate: float) -> str:
+    """atempo فقط ۰٫۵–۲٫۰ را می‌پذیرد؛ برای خارج از بازه زنجیره می‌سازد."""
+    parts: list[str] = []
+    r = rate
+    while r > 2.0:
+        parts.append("atempo=2.0")
+        r /= 2.0
+    while r < 0.5:
+        parts.append("atempo=0.5")
+        r /= 0.5
+    parts.append(f"atempo={r:.4f}")
+    return ",".join(parts)
+
+
+async def speed_audio(inp: str, out: str, rate: float, progress=None, duration=None, cancel=None) -> None:
+    """تغییرِ سرعت با حفظِ زیروبمی (atempo)."""
+    out_dur = (duration / rate) if duration else None
+    await _run([FFMPEG, "-y", "-i", inp, "-vn", "-af", _atempo_chain(rate),
+                "-c:a", "libmp3lame", "-b:a", "192k", out],
+               progress=progress, duration=out_dur, cancel=cancel)
+    if not os.path.exists(out):
+        raise RuntimeError("speed change produced no output")
 
 
 # ── ویدیو (ffmpeg) ─────────────────────────────────────────────

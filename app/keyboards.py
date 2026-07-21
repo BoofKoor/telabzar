@@ -4,7 +4,7 @@ from __future__ import annotations
 from aiogram.types import CopyTextButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .callbacks import Act, Cmp, Conv, Lang, Meta, Rot, Rsz, Wm
+from .callbacks import Act, Cmp, Conv, Lang, Meta, Rot, Rsz, Spd, Tr, Wm
 from .i18n import t
 
 # رزولوشن‌های هدفِ کاهشِ حجمِ ویدیو → (ارتفاع, بیت‌ریتِ ویدیو kbps)
@@ -46,8 +46,10 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "audio": [
-        ("meta", "btn_edit_music"), ("transcribe", "btn_transcribe"), ("convert", "btn_convert"),
-        ("compress", "btn_compress"), ("link", "btn_link"), ("zip", "btn_zip"),
+        ("meta", "btn_edit_music"),
+        ("transcribe", "btn_transcribe"), ("trim", "btn_trim"), ("normalize", "btn_normalize"),
+        ("speed", "btn_speed"), ("convert", "btn_convert"), ("compress", "btn_compress"),
+        ("link", "btn_link"), ("zip", "btn_zip"),
     ],
     "document": [
         ("to_pdf", "btn_to_pdf"), ("link", "btn_link"),
@@ -147,6 +149,29 @@ def rotate_menu_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     b.button(text=t(lang, "rot_cw"), callback_data=Rot(ref=ref, mode="cw"))
     b.button(text=t(lang, "rot_180"), callback_data=Rot(ref=ref, mode="180"))
     b.button(text=t(lang, "rot_mirror"), callback_data=Rot(ref=ref, mode="mirror"))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(2, 2, 1)
+    return b.as_markup()
+
+
+AUDIO_SPEEDS = ["0.75", "1.25", "1.5", "2.0"]
+
+
+def transcribe_menu_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    """انتخابِ خروجیِ رونویسی: متنِ ساده یا زیرنویسِ SRT."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_tr_text"), callback_data=Tr(ref=ref, mode="txt"))
+    b.button(text=t(lang, "btn_tr_srt"), callback_data=Tr(ref=ref, mode="srt"))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(2, 1)
+    return b.as_markup()
+
+
+def speed_menu_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    """انتخابِ ضریبِ سرعتِ صوت (بدونِ تغییرِ زیروبمی)."""
+    b = InlineKeyboardBuilder()
+    for r in AUDIO_SPEEDS:
+        b.button(text=f"⏩ {r.rstrip('0').rstrip('.')}×", callback_data=Spd(ref=ref, rate=r))
     b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
     b.adjust(2, 2, 1)
     return b.as_markup()

@@ -41,3 +41,13 @@ class Rsz(CallbackData, prefix="rsz"):
 class Rot(CallbackData, prefix="rot"):
     ref: str
     mode: str  # cw | ccw | 180 | mirror
+
+
+class Spd(CallbackData, prefix="spd"):
+    ref: str
+    rate: str  # 0.75 | 1.25 | 1.5 | 2.0
+
+
+class Tr(CallbackData, prefix="tr"):
+    ref: str
+    mode: str  # txt | srt

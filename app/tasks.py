@@ -40,6 +40,7 @@ _PROGRESS_LABEL = {
     "compress": "pr_compress", "convert": "pr_convert",
     "to_gif": "pr_gif", "extract_audio": "pr_extract",
     "watermark": "pr_watermark", "trim": "pr_trim",
+    "normalize": "pr_normalize", "speed": "pr_speed",
 }
 
 
@@ -290,9 +291,13 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         return {"path": out, "filename": f"{stem}.mp4", "label": t(lang, "cl_mute")}
 
     if op == "trim":
+        start, end = float(args.get("start", 0)), float(args.get("end", 0))
+        if file.kind == "audio":
+            out = os.path.join(workdir, f"{stem}-cut.mp3")
+            await P.trim_audio(inpath, out, start, end, progress=progress, cancel=cancel)
+            return {"path": out, "filename": f"{stem}-cut.mp3", "label": t(lang, "cl_trim"), "kind": "audio"}
         out = os.path.join(workdir, f"{stem}-cut.mp4")
-        await P.trim_video(inpath, out, float(args.get("start", 0)), float(args.get("end", 0)),
-                           progress=progress, cancel=cancel)
+        await P.trim_video(inpath, out, start, end, progress=progress, cancel=cancel)
         return {"path": out, "filename": f"{stem}-cut.mp4", "label": t(lang, "cl_trim")}
 
     if op == "screenshot":
@@ -300,6 +305,37 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         await P.screenshot_video(inpath, out, float(args.get("ts", 0)))
         return {"send_media": {"as": "photo", "path": out, "filename": f"{stem}.jpg"},
                 "label": t(lang, "cl_screenshot")}
+
+    if op == "transcribe":
+        mode = "srt" if args.get("mode") == "srt" else "txt"
+        text = (await P.transcribe_audio(inpath, settings.whisper_model, mode)).strip()
+        if not text:
+            return {"note_only": True, "label": t(lang, "asr_empty")}
+        if mode == "srt":  # زیرنویس همیشه به‌صورتِ فایلِ .srt
+            srt = os.path.join(workdir, f"{stem}.srt")
+            with open(srt, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            return {"files": [srt], "label": t(lang, "cl_transcribe_srt")}
+        if len(text) > 3000:  # متنِ بلند → فایلِ txt
+            txt = os.path.join(workdir, f"{stem}-transcript.txt")
+            with open(txt, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            return {"files": [txt], "label": t(lang, "cl_transcribe")}
+        return {"message": f"{t(lang, 'asr_header')}\n<blockquote expandable>{escape(text)}</blockquote>",
+                "label": t(lang, "cl_transcribe")}
+
+    if op == "normalize":
+        out = os.path.join(workdir, f"{stem}-norm.mp3")
+        await P.normalize_audio(inpath, out, progress=progress, duration=dur, cancel=cancel)
+        return {"path": out, "filename": f"{stem}.mp3", "label": t(lang, "cl_normalize"), "kind": "audio"}
+
+    if op == "speed":
+        rate = float(args.get("rate", 1.0)) or 1.0
+        out = os.path.join(workdir, f"{stem}-x{args.get('rate', '1')}.mp3")
+        await P.speed_audio(inpath, out, rate, progress=progress, duration=dur, cancel=cancel)
+        return {"path": out, "filename": os.path.basename(out),
+                "label": t(lang, "cl_speed", rate=str(args.get("rate", "1")).rstrip("0").rstrip(".")),
+                "kind": "audio"}
 
     if op == "ocr":
         text = (await P.ocr_image(inpath, workdir)).strip()

@@ -5,4 +5,5 @@ clamd>=1.0,<2
 arabic-reshaper>=3.0,<4    # شکل‌دهیِ حروفِ فارسی برای واترمارکِ متنی
 python-bidi>=0.4,<1        # ترتیبِ راست‌به‌چپ
 rembg>=2.0,<3              # حذفِ پس‌زمینهٔ تصویر (مدلِ u2net)
-onnxruntime>=1.16,<2       # موتورِ اجرای مدلِ rembg (CPU)
+onnxruntime>=1.16,<2       # موتورِ اجرای مدلِ rembg + VADِ whisper (CPU)
+faster-whisper>=1.0,<2     # رونویسیِ صوت (Whisper روی CTranslate2)

@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # پردازش (ورکر)
     work_dir: str = "/work"
 
+    # رونویسیِ صوت (faster-whisper) — اندازهٔ مدل: tiny/base/small/medium/large-v3.
+    # پیش‌فرض base (تعادلِ RAM/دقت روی CPU). بعداً از پنلِ ادمین (M5) قابلِ تغییر
+    # می‌شود — فهرستِ تنظیماتِ قابلِ‌مدیریت در docs/ADMIN_PANEL.md نگه‌داری می‌شود.
+    whisper_model: str = "base"
+
     # امنیت
     clamav_host: str = "clamav"
     clamav_port: int = 3310
