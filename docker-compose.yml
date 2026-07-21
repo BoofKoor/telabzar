@@ -147,6 +147,39 @@ services:
     cap_add:
       - DAC_READ_SEARCH
 
+  # پنلِ ادمینِ وب (فاز D) — ورود با کدِ تلگرام. میزبان → ‎2083.
+  admin:
+    build:
+      context: .
+      dockerfile: docker/admin.Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LOCAL_API_BASE: http://local-bot-api:8081
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      WORK_DIR: /work
+      ADMIN_PORT: 8080
+      ADMIN_BASE: ${ADMIN_BASE:-}
+      TLS_CERT: ${TLS_CERT:-}
+      TLS_KEY: ${TLS_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      local-bot-api:
+        condition: service_started
+    ports:
+      - "${ADMIN_HTTPS_PORT:-2083}:8080"
+    volumes:
+      - work-data:/work:ro     # فقط برای نمایشِ فضای دیسک در هلث
+      - ./certs:/certs:ro      # همان سرتیفیکیتِ Origin کلودفلر
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
   # سرویسِ توکنِ PO یوتیوب (yt-dlp روی IP دیتاسنتر بدونِ این بلاک می‌شود).
   bgutil-pot-provider:
     image: brainicism/bgutil-ytdlp-pot-provider:latest

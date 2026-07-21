@@ -59,6 +59,18 @@ async def _effective(key: str) -> str:
     return f"{escape(override)}  <i>(تنظیم‌شده)</i>"
 
 
+@router.message(Command("panel"))
+async def panel_cmd(message: Message, is_admin: bool) -> None:
+    """لینکِ پنلِ ادمینِ وب را می‌دهد (ورود با کدِ تلگرام)."""
+    if not is_admin:
+        return
+    from ..config import settings as _s
+    if _s.admin_base:
+        await message.answer(f"🖥 پنلِ مدیریت:\n{_s.admin_base}\n\nشناسهٔ عددی‌ات را وارد کن؛ کد همین‌جا برایت می‌آید.")
+    else:
+        await message.answer("پنلِ وب هنوز پیکربندی نشده (ADMIN_BASE در نصب تنظیم نشده). فعلاً از /admin استفاده کن.")
+
+
 @router.message(Command("admin"))
 async def admin_cmd(message: Message, command: CommandObject, is_admin: bool,
                     arq_pool: ArqRedis, session: AsyncSession) -> None:

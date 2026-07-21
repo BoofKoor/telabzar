@@ -1,0 +1,4 @@
+# وابستگی‌های پنلِ ادمینِ وب = وابستگی‌های ربات (aiohttp از aiogram می‌آید) + قالب/رمز.
+-r requirements.txt
+jinja2>=3.1,<4
+cryptography>=42,<46
