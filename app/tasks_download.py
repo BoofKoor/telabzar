@@ -18,6 +18,7 @@ import shutil
 from datetime import datetime, timezone
 
 from aiogram import Bot
+from aiogram.types import FSInputFile
 
 from . import downloader as D
 from . import processing as P
@@ -32,7 +33,8 @@ from .models import File
 log = logging.getLogger("telabzar.dl")
 
 _BAN_HINTS = ("login required", "rate-limit", "rate limit", "sign in", "checkpoint",
-              "challenge", "not logged", "401", "403", "temporary ban")
+              "challenge", "not logged", "401", "403", "temporary ban", "login page")
+_LOGIN_HINTS = ("login", "not logged", "sign in", "account", "checkpoint", "challenge")
 
 
 class DownloadTooLarge(Exception):
@@ -128,9 +130,30 @@ def _kind_from_info(info: dict, path: str) -> str:
     return "video"
 
 
+def _prep_thumb(src: str | None) -> str | None:
+    """تامبنیل را به JPEGِ ≤۳۲۰px می‌کند (سقفِ تلگرام) تا send_video ردش نکند."""
+    if not src or not os.path.exists(src):
+        return None
+    try:
+        from PIL import Image
+        out = src + ".thumb.jpg"
+        with Image.open(src) as im:
+            im = im.convert("RGB")
+            im.thumbnail((320, 320))
+            im.save(out, "JPEG", quality=80)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
-                 kind: str, info: dict, lang: str) -> None:
+                 kind: str, info: dict, lang: str, thumb_path: str | None = None) -> None:
     """فایلِ دانلودی را وارد pipeline می‌کند (الگوی spawn) با source='dl'."""
+    thumb = None
+    if kind == "video" and thumb_path:
+        prepped = _prep_thumb(thumb_path)
+        if prepped:
+            thumb = FSInputFile(prepped)
     async with Sessionmaker() as s:
         f = File(
             ref=secrets.token_urlsafe(6)[:8], owner_id=owner_id, file_unique_id="", file_id="",
@@ -143,7 +166,7 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
         s.add(f)
         await s.commit()
         try:
-            sent = await send_card(bot, chat_id, f, lang, path=path)
+            sent = await send_card(bot, chat_id, f, lang, path=path, thumb=thumb)
             fid, fuid = message_media_id(sent)
             if fid:
                 f.file_id = fid
@@ -237,25 +260,29 @@ async def run_download(ctx: dict, payload: dict) -> None:
         try:
             if engine == "gallerydl":
                 files = await D.download_gallerydl(url, workdir, opts, progress=_progress, cancel=_cancelled)
-                paths = [(p, {}) for p in files]
+                paths = [(p, {}, None) for p in files]
             else:
-                path, info = await D.download_ytdlp(url, workdir, selector, opts,
-                                                    progress=_progress, cancel=_cancelled)
-                paths = [(path, info)]
+                path, info, thumb = await D.download_ytdlp(url, workdir, selector, opts,
+                                                           progress=_progress, cancel=_cancelled)
+                paths = [(path, info, thumb)]
         except P.ProcessingCancelled:
             await _edit(bot, chat_id, status_mid, t(lang, "cancelled"))
             return
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
-            if any(h in msg.lower() for h in _BAN_HINTS):
+            low = msg.lower()
+            if any(h in low for h in _BAN_HINTS):
                 await _cooldown_cookie(redis, cookie)
             await _metric(redis, platform, ok=False)
-            await _edit(bot, chat_id, status_mid, t(lang, "dl_failed") + f"\n<code>{msg[:140]}</code>")
+            if any(h in low for h in _LOGIN_HINTS):
+                await _edit(bot, chat_id, status_mid, t(lang, "dl_need_cookies", platform=platform))
+            else:
+                await _edit(bot, chat_id, status_mid, t(lang, "dl_failed") + f"\n<code>{msg[:140]}</code>")
             return
 
         # چکِ قطعیِ حجم روی دیسک قبل از آپلود (نقدِ #۱: --max-filesize کافی نیست)
         max_mb = await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb)
-        total = sum(os.path.getsize(p) for p, _ in paths if os.path.exists(p))
+        total = sum(os.path.getsize(p) for p, _i, _t in paths if os.path.exists(p))
         if max_mb and total > max_mb * 1024 * 1024:
             await _metric(redis, platform, ok=False)
             await _edit(bot, chat_id, status_mid,
@@ -271,7 +298,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass
 
-        for p, info in paths:
+        for p, info, thumb in paths:
             kind = _kind_from_info(info, p)
             name = os.path.basename(p)
             if kind == "image" and not info.get("width"):
@@ -281,7 +308,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                         info = {**info, "width": im.width, "height": im.height}
                 except Exception:  # noqa: BLE001
                     pass
-            await _spawn(bot, chat_id, owner_id, p, name, kind, info, lang)
+            await _spawn(bot, chat_id, owner_id, p, name, kind, info, lang, thumb_path=thumb)
 
         await _metric(redis, platform, ok=True)
         try:

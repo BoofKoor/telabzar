@@ -183,6 +183,7 @@ MESSAGES: dict[str, str] = {
     "dl_bad_link": "⚠️ This link is unsupported or invalid.",
     "dl_probe_failed": "❌ Couldn't read the link's info.",
     "dl_failed": "❌ Download failed.",
+    "dl_need_cookies": "🔒 “{platform}” requires a logged-in account to download; an admin must add cookies.",
     "dl_too_large": "⚠️ Output ({mb}MB) exceeds the {cap}MB limit — pick a lower quality.",
     "dl_busy": "⌛ Server is busy; try again in a moment.",
     "dl_no_disk": "⚠️ Not enough disk space to download; try again shortly.",

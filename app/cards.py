@@ -132,23 +132,42 @@ def _media_arg(file: File, path: str | None):
     return FSInputFile(path, filename=file.name or "file") if path else file.file_id
 
 
-async def _send_typed(bot: Bot, chat_id: int, file: File, media, caption, kb):
+def _video_extra(file: File, thumb=None) -> dict:
+    """پارامترهای ویدیو: مدت/ابعاد (تا زمان و کیفیت نمایش داده شوند) + تامبنیل/کاور."""
+    extra: dict = {"supports_streaming": True}
+    if file.duration:
+        extra["duration"] = int(file.duration)
+    if file.width:
+        extra["width"] = int(file.width)
+    if file.height:
+        extra["height"] = int(file.height)
+    if file.cover_id:
+        extra["cover"] = file.cover_id
+    if thumb is not None:
+        extra["thumbnail"] = thumb
+    return extra
+
+
+async def _send_typed(bot: Bot, chat_id: int, file: File, media, caption, kb, thumb=None):
     if file.kind == "image":
         return await bot.send_photo(chat_id, media, caption=caption, reply_markup=kb)
     if file.kind == "video":
-        extra = {"cover": file.cover_id} if file.cover_id else {}
-        return await bot.send_video(chat_id, media, caption=caption, reply_markup=kb, **extra)
+        return await bot.send_video(chat_id, media, caption=caption, reply_markup=kb,
+                                    **_video_extra(file, thumb))
     if file.kind == "audio":
-        return await bot.send_audio(chat_id, media, caption=caption, reply_markup=kb)
+        extra = {"duration": int(file.duration)} if file.duration else {}
+        return await bot.send_audio(chat_id, media, caption=caption, reply_markup=kb, **extra)
     return await bot.send_document(chat_id, media, caption=caption, reply_markup=kb)
 
 
-async def send_card(bot: Bot, chat_id: int, file: File, lang: str, *, path: str | None = None) -> Message:
-    """ارسالِ کارتِ فایل (فایل + کپشن + کیبورد). با fallback به سند."""
+async def send_card(bot: Bot, chat_id: int, file: File, lang: str, *,
+                    path: str | None = None, thumb=None) -> Message:
+    """ارسالِ کارتِ فایل (فایل + کپشن + کیبورد). با fallback به سند.
+    thumb: تامبنیلِ اختیاری (InputFile/file_id) — برای ویدیوهای دانلودی."""
     caption = card_caption(file, lang)
     kb = file_card_kb(file.ref, file.kind, lang)
     try:
-        return await _send_typed(bot, chat_id, file, _media_arg(file, path), caption, kb)
+        return await _send_typed(bot, chat_id, file, _media_arg(file, path), caption, kb, thumb=thumb)
     except TelegramBadRequest:
         return await bot.send_document(chat_id, _media_arg(file, path), caption=caption, reply_markup=kb)
 
@@ -159,7 +178,9 @@ async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang:
     caption = card_caption(file, lang)
     kb = file_card_kb(file.ref, file.kind, lang)
     im_cls = _INPUT_MEDIA.get(file.kind, InputMediaDocument)
-    extra = {"cover": file.cover_id} if file.kind == "video" and file.cover_id else {}
+    extra: dict = {}
+    if file.kind == "video":
+        extra = _video_extra(file)  # مدت/ابعاد/کاور تا کارتِ ویدیو خام نیفتد
     try:
         return await bot.edit_message_media(
             chat_id=chat_id,

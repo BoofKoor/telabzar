@@ -223,12 +223,13 @@ def _newest(workdir: str, exts: tuple[str, ...] | None = None) -> str | None:
 
 
 async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
-                         progress=None, cancel=None) -> tuple[str, dict]:
-    """دانلود با yt-dlp → (مسیرِ فایل, info dict). info.json را برای متادیتا می‌خوانَد."""
+                         progress=None, cancel=None) -> tuple[str, dict, str | None]:
+    """دانلود با yt-dlp → (مسیرِ فایل, info dict, مسیرِ تامبنیل). info.json را می‌خوانَد."""
     outtmpl = os.path.join(workdir, "%(title).80B [%(id)s].%(ext)s")
     audio_only = selector == "audio"
     cmd = [YTDLP, "--newline", "--progress-template", "dl:%(progress._percent_str)s",
-           "--write-info-json", "-o", outtmpl, "-f", _selector_to_format(selector)]
+           "--write-info-json", "--write-thumbnail", "--convert-thumbnails", "jpg",
+           "-o", outtmpl, "-f", _selector_to_format(selector)]
     if audio_only:
         cmd += ["-x", "--audio-format", "mp3"]
     else:
@@ -238,10 +239,13 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
     cmd += [*_common_flags(opts), url]
     await _run_dl(cmd, progress=progress, cancel=cancel, timeout=opts.get("timeout", 3000))
 
-    exts = (".mp3", ".m4a", ".opus", ".ogg") if audio_only else None
-    path = _newest(workdir, exts)
+    # فایلِ رسانه را با پسوندِ رسانه پیدا کن (نه تامبنیلِ jpg)
+    media_exts = ((".mp3", ".m4a", ".opus", ".ogg", ".wav")
+                  if audio_only else (".mp4", ".mkv", ".webm", ".mov"))
+    path = _newest(workdir, media_exts)
     if not path:
         raise RuntimeError("download produced no file")
+    thumb = _newest(workdir, (".jpg", ".jpeg"))
     info = {}
     infop = next((os.path.join(r, n) for r, _d, ns in os.walk(workdir)
                   for n in ns if n.endswith(".info.json")), None)
@@ -251,7 +255,7 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
                 info = json.load(fh)
         except Exception:  # noqa: BLE001
             pass
-    return path, info
+    return path, info, thumb
 
 
 async def download_gallerydl(url: str, workdir: str, opts: dict,
