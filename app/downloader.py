@@ -230,6 +230,29 @@ def normalize_probe(data: dict) -> dict:
     }
 
 
+def _stderr_summary(raw: bytes | str, limit: int = 300) -> str:
+    """خلاصهٔ *مفیدِ* stderrِ yt-dlp/gallery-dl.
+
+    نکته: وقتی yt-dlp خودش کرش می‌کند، stderr یک Traceback‌ِ پایتون است که خطِ
+    اولش (`sys.exit(main())`) بی‌فایده است و خطای واقعی در *آخرین* خط می‌آید. پس:
+    خطِ ERROR:‌ِ خودِ yt-dlp را ترجیح بده؛ اگر تریس‌بک بود آخرین خطِ استثنا را بردار؛
+    وگرنه دو خطِ آخر. اینطوری پیامِ کاربر و لاگ به‌جای سرِ تریس‌بک، علتِ واقعی را نشان می‌دهد.
+    """
+    text = raw.decode("utf-8", "ignore") if isinstance(raw, (bytes, bytearray)) else (raw or "")
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    err_lines = [ln for ln in lines if ln.lstrip().startswith("ERROR:")]
+    if err_lines:
+        return " ".join(err_lines[-1].split())[:limit]
+    if any("Traceback (most recent call last)" in ln for ln in lines):
+        for ln in reversed(lines):  # آخرین خطِ «SomeError: …» (نه خطِ File "…")
+            s = ln.strip()
+            if s and not s.startswith(("File \"", "Traceback", "During handling", "The above")):
+                return " ".join(s.split())[:limit]
+    return " ".join(" | ".join(lines[-2:]).split())[:limit]
+
+
 async def probe(url: str, opts: dict, timeout: float = 120) -> dict:
     """اطلاعاتِ رسانه بدونِ دانلود (‎-J) → دیکشنریِ نرمال‌شده."""
     cmd = [YTDLP, "-J", *_common_flags(opts), url]
@@ -242,8 +265,7 @@ async def probe(url: str, opts: dict, timeout: float = 120) -> dict:
         await proc.wait()
         raise RuntimeError("probe timed out") from None
     if proc.returncode != 0:
-        detail = " ".join((err or b"").decode("utf-8", "ignore").split())[:200]
-        raise RuntimeError(f"probe failed: {detail}")
+        raise RuntimeError(f"probe failed: {_stderr_summary(err) or 'unknown'}")
     return normalize_probe(json.loads(out.decode("utf-8", "ignore") or "{}"))
 
 
@@ -298,8 +320,7 @@ async def _run_dl(cmd: list[str], progress=None, cancel=None, timeout: float = 3
     if cancelled:
         raise ProcessingCancelled()
     if proc.returncode != 0:
-        lines = [ln for ln in b"".join(err_chunks).decode("utf-8", "ignore").splitlines() if ln.strip()]
-        raise RuntimeError("download failed: " + (" | ".join(lines[-2:]) or "unknown"))
+        raise RuntimeError("download failed: " + (_stderr_summary(b"".join(err_chunks)) or "unknown"))
 
 
 def _newest(workdir: str, exts: tuple[str, ...] | None = None) -> str | None:

@@ -111,9 +111,10 @@ async def _metric(redis, platform: str, ok: bool) -> None:
 
 
 async def _opts(redis, platform: str) -> dict:
+    pot_on = await settings_store.get_bool("dl_pot_enabled", settings.dl_pot_enabled)
     return {
         "proxy": await settings_store.get_str("proxy_url", settings.proxy_url) or None,
-        "pot_provider": settings.pot_provider_url or None,
+        "pot_provider": (settings.pot_provider_url or None) if pot_on else None,
         "cookies": await _pick_cookies(redis, platform),
         "max_mb": await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb),
         "sponsorblock": await settings_store.get_str("dl_sponsorblock", settings.dl_sponsorblock) or None,
@@ -331,7 +332,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
             else:
                 await _edit(bot, chat_id, status_mid,
-                            t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:120])}</code>")
+                            t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
         opts = info.get("options") or []
         if redis is not None and opts:
@@ -448,14 +449,34 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 except P.ProcessingCancelled:
                     raise
                 except Exception as ytdlp_exc:  # noqa: BLE001
-                    # fallback به Cobalt فقط روی شکستِ extractor (نه login/ban که کوکی می‌خواهد)
-                    cobalt = settings.cobalt_url
-                    if cobalt and not any(h in str(ytdlp_exc).lower() for h in _LOGIN_HINTS):
-                        log.info("yt-dlp failed, trying cobalt: %s", str(ytdlp_exc)[:100])
-                        path, info, thumb = await D.download_cobalt(url, workdir, cobalt, opts,
-                                                                    progress=_progress, cancel=_cancelled)
-                    else:
-                        raise
+                    # پلاگینِ pot-provider گاهی خودِ yt-dlp را می‌اندازد (تریس‌بکِ پایتون، نه خطای
+                    # تمیز — مثلاً ناسازگاریِ نسخهٔ پلاگین با سرورِ pot). یک‌بار بدونِ pot دوباره
+                    # تلاش کن: هم خطای واقعی (bot-check) تمیز بیرون می‌آید، هم اگر فقط pot خراب
+                    # بوده، دانلود (به‌ویژه وقتی کوکیِ یوتیوب هست) موفق می‌شود.
+                    retried = False
+                    if opts.get("pot_provider"):
+                        log.info("yt-dlp failed with pot-provider (%s); retrying without pot",
+                                 str(ytdlp_exc)[:140])
+                        try:
+                            path, info, thumb = await D.download_ytdlp(
+                                url, workdir, selector, {**opts, "pot_provider": None},
+                                progress=_progress, cancel=_cancelled)
+                            retried = True
+                        except P.ProcessingCancelled:
+                            raise
+                        except Exception as exc2:  # noqa: BLE001
+                            ytdlp_exc = exc2  # خطای تمیزِ بدونِ pot را به مسیرِ پایین بده
+                    if not retried:
+                        # fallback به Cobalt فقط روی شکستِ extractor (نه login/ban که کوکی می‌خواهد)
+                        cobalt = settings.cobalt_url
+                        if cobalt and not any(h in str(ytdlp_exc).lower() for h in _LOGIN_HINTS):
+                            log.info("yt-dlp failed, trying cobalt: %s", str(ytdlp_exc)[:100])
+                            path, info, thumb = await D.download_cobalt(url, workdir, cobalt, opts,
+                                                                        progress=_progress, cancel=_cancelled)
+                        else:
+                            # صریح، نه `raise` خالی — چون ytdlp_exc را به خطای تمیزِ بدونِ pot
+                            # عوض کرده‌ایم و raiseِ خالی خطای اصلیِ تریس‌بک را دوباره پرت می‌کند.
+                            raise ytdlp_exc
                 paths = [(path, info, thumb)]
         except P.ProcessingCancelled:
             await _stop_ticker()
@@ -474,7 +495,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_need_cookies", platform=plabel))
             else:
                 await _edit(bot, chat_id, status_mid,
-                            t(lang, "dl_failed") + f"\n<code>{escape(msg[:140])}</code>")
+                            t(lang, "dl_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
         await _stop_ticker()
 
