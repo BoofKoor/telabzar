@@ -93,6 +93,10 @@ class Settings(BaseSettings):
     spotify_client_secret: str = ""    # از پنل ست می‌شود
     spotify_meta: bool = False         # خاموش=متادیتا از یوتیوب · روشن=متادیتا از اسپاتیفای
     spotify_max_tracks: int = 20       # سقفِ تعدادِ ترک در هر آلبوم/پلی‌لیست
+    # منبعِ تطبیق: ytmusic = کاتالوگِ «songs»ی YouTube Music (دقیق، پیش‌فرض) · youtube = ytsearchِ خام
+    spotify_source: str = "ytmusic"
+    spotify_match_min: int = 55        # حداقلِ امتیازِ تطبیق (۰..۱۰۰)؛ زیرش = تطبیقِ نامطمئن
+    spotify_yt_fallback: bool = True   # اگر نامزدی از آستانه رد نشد: ytsearch1 (روشن) یا ردِ ترک (خاموش)
 
     # پنلِ ادمینِ وب (فاز D) — سرویسِ جدا، احراز با کدِ تلگرام
     admin_port: int = 8080         # پورتِ داخلِ کانتینر (میزبان → 2083)

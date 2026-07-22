@@ -82,6 +82,9 @@ GROUPS = [
         ("spotify_client_secret", "Client Secret", ""),
         ("spotify_meta", "متادیتا از اسپاتیفای", "خاموش = از یوتیوب · روشن = از اسپاتیفای"),
         ("spotify_max_tracks", "سقفِ ترک (آلبوم/پلی‌لیست)", ""),
+        ("spotify_source", "منبعِ تطبیق", "ytmusic = دقیق‌تر · youtube = خام"),
+        ("spotify_match_min", "حداقلِ امتیازِ تطبیق", "۰..۱۰۰ · بالاتر = سخت‌گیرتر"),
+        ("spotify_yt_fallback", "چاره‌یِ یوتیوب", "اگر تطبیقِ مطمئن نبود: نتیجهٔ اولِ یوتیوب"),
     ]),
     ("🎬 کاهشِ حجمِ ویدیو", [
         ("compress_speed", "سرعت / کیفیت", "کندتر = کوچک‌تر"),
@@ -102,6 +105,7 @@ ENUM_LABELS = {
     "tiny": "tiny", "base": "base", "small": "small", "medium": "medium", "large-v3": "large-v3",
     "fast": "سریع", "balanced": "بالانس", "quality": "کیفیت",
     "x264": "x264 (CPU)", "nvenc": "NVENC (GPU)",
+    "ytmusic": "YouTube Music (دقیق)", "youtube": "یوتیوب (خام)",
 }
 
 

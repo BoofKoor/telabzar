@@ -126,6 +126,9 @@ async def _opts(redis, platform: str) -> dict:
         "spotify_client_id": await settings_store.get_str("spotify_client_id", settings.spotify_client_id),
         "spotify_client_secret": await settings_store.get_str("spotify_client_secret", settings.spotify_client_secret),
         "spotify_max_tracks": await settings_store.get_int("spotify_max_tracks", settings.spotify_max_tracks),
+        "spotify_source": await settings_store.get_str("spotify_source", settings.spotify_source),
+        "spotify_match_min": await settings_store.get_int("spotify_match_min", settings.spotify_match_min),
+        "spotify_yt_fallback": await settings_store.get_bool("spotify_yt_fallback", settings.spotify_yt_fallback),
     }
 
 
