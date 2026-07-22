@@ -55,13 +55,21 @@ def _collect_lock(chat_id: int) -> asyncio.Lock:
 _COLLECT_TEXT = {
     "merge": ("merge_collect_prompt", "merge_list_header"),
     "img_pdf": ("img_pdf_collect_prompt", "img_pdf_list_header"),
+    "vjoin": ("vjoin_collect_prompt", "vjoin_list_header"),
     "zip": ("zip_collect_prompt", "zip_list_header"),
 }
 # هدف‌هایی که فقط یک نوعِ خاص می‌پذیرند → (نوعِ مجاز, کلیدِ هشدار)
 _COLLECT_ONLY = {
     "merge": ("pdf", "merge_only_pdf"),
     "img_pdf": ("image", "img_pdf_only_image"),
+    "vjoin": ("video", "vjoin_only_video"),
 }
+
+
+async def _vjoin_cap_mb() -> int:
+    """سقفِ مجموعِ حجمِ ویدیوهای چسبانده‌شده (MB). ۰ = برگرد به سقفِ عمومیِ فایل."""
+    cap = await settings_store.get_int("vjoin_max_mb", settings.vjoin_max_mb)
+    return cap if cap > 0 else await _max_mb()
 
 
 def _collect_note(lang: str, purpose: str, members: list[dict], last: str | None = None) -> str:
@@ -488,7 +496,8 @@ async def op_rename_recv(message: Message, state: FSMContext, session: AsyncSess
 
 
 async def _collect_start(cq: CallbackQuery, file, lang: str, state: FSMContext, purpose: str) -> None:
-    members = [{"file_id": file.file_id, "name": suggested_name(file.name, file.kind, file.mime)}]
+    members = [{"file_id": file.file_id, "name": suggested_name(file.name, file.kind, file.mime),
+                "size": file.size or 0}]
     await state.set_state(Collect.collecting)
     await state.update_data(ref=file.ref, card_chat=cq.message.chat.id,
                             card_mid=cq.message.message_id, members=members, purpose=purpose)
@@ -527,6 +536,20 @@ async def op_merge_start(cq: CallbackQuery, callback_data: Act, session: AsyncSe
     await _collect_start(cq, file, lang, state, "merge")
 
 
+# ── چسباندنِ ویدیو (concat): شروع ───────────────────────────────
+@router.callback_query(Act.filter(F.op == "vjoin"))
+async def op_vjoin_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
+                         lang: str, state: FSMContext) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "video":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    await _collect_start(cq, file, lang, state, "vjoin")
+
+
 # ── جمع‌کردن: دریافتِ فایل‌های بعدی ─────────────────────────────
 @router.message(Collect.collecting, _FILE_F)
 async def collect_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str) -> None:
@@ -545,25 +568,35 @@ async def collect_recv(message: Message, state: FSMContext, session: AsyncSessio
     file = await get_file_by_ref(session, ref)
     if file is None:
         return
-    # هدف‌های نوع‌مقید (ادغامِ PDF → فقط PDF · عکس‌ها به PDF → فقط تصویر)
+    # هدف‌های نوع‌مقید (ادغامِ PDF → فقط PDF · عکس‌ها به PDF → فقط تصویر · چسباندن → فقط ویدیو)
     only = _COLLECT_ONLY.get(purpose)
-    if only and info.kind != only[0]:
+
+    async def _warn(extra: str) -> None:  # هشدارِ درجا روی کپشنِ کارت (بدونِ افزودنِ عضو)
         try:
             await message.bot.edit_message_caption(
                 chat_id=card_chat, message_id=card_mid,
-                caption=card_caption(file, lang, note=_collect_note(lang, purpose, list(data.get("members", [])))
-                                     + "\n" + t(lang, only[1])),
-                reply_markup=collect_kb(ref, lang, purpose),
-            )
+                caption=card_caption(file, lang, note=_collect_note(
+                    lang, purpose, list((await state.get_data()).get("members", []))) + "\n" + extra),
+                reply_markup=collect_kb(ref, lang, purpose))
         except Exception:  # noqa: BLE001
             pass
+
+    if only and info.kind != only[0]:
+        await _warn(t(lang, only[1]))
         return
+    # سقفِ مجموعِ حجمِ چسباندنِ ویدیو (از پنل) — اگر با این ویدیو رد شود، درجا هشدار بده
+    if purpose == "vjoin":
+        cap_mb = await _vjoin_cap_mb()
+        cur = sum(m.get("size", 0) for m in data.get("members", []))
+        if cap_mb > 0 and cur + (info.size or 0) > cap_mb * 1024 * 1024:
+            await _warn(t(lang, "vjoin_too_big", mb=cap_mb))
+            return
     # قفلِ هر-چت: افزودنِ همزمانِ عکس‌های آلبوم دچارِ رقابت نشود
     async with _collect_lock(message.chat.id):
         data = await state.get_data()
         members = list(data.get("members", []))
         name = suggested_name(info.name, info.kind, info.mime, idx=len(members) + 1)
-        members.append({"file_id": info.file_id, "name": name})
+        members.append({"file_id": info.file_id, "name": name, "size": info.size or 0})
         await state.update_data(members=members)
     try:
         await message.bot.edit_message_caption(
@@ -593,6 +626,10 @@ async def op_collect_go(cq: CallbackQuery, callback_data: Act, session: AsyncSes
         await cq.answer(t(lang, "merge_need_more"), show_alert=True)
         await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang, keyboard=True)
         return
+    if purpose == "vjoin" and len(members) < 2:
+        await cq.answer(t(lang, "vjoin_need_more"), show_alert=True)
+        await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang, keyboard=True)
+        return
     if user is not None:
         limit = await _check_limits(arq_pool, user.tg_user_id)
         if limit:
@@ -600,7 +637,8 @@ async def op_collect_go(cq: CallbackQuery, callback_data: Act, session: AsyncSes
             await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang, keyboard=True)
             return
     await cq.answer()
-    op = {"merge": "pdf_merge", "img_pdf": "images_to_pdf"}.get(purpose, "zip_many")
+    op = {"merge": "pdf_merge", "img_pdf": "images_to_pdf",
+          "vjoin": "video_concat"}.get(purpose, "zip_many")
     await _enqueue(cq.message.bot, arq_pool, session, file, op, {"members": members},
                    cq.message.chat.id, cq.message.message_id, lang)
 

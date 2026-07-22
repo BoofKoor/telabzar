@@ -88,6 +88,7 @@ GROUPS = [
         ("video_encoder", "انکودر", "nvenc فقط با GPU"),
         ("compress_tiny_target_mb", "هدفِ «خیلی کم‌حجم» (MB)", "کلاس/جلسه"),
         ("compress_tiny_height", "کفِ رزولوشنِ خیلی کم‌حجم", "۴۸۰ یا ۳۶۰"),
+        ("vjoin_max_mb", "سقفِ حجمِ چسباندنِ ویدیو (MB)", "۰ = مثلِ سقفِ فایل"),
     ]),
     ("🎙 رونویسی و اکسترا", [
         ("whisper_model", "مدلِ Whisper", ""),

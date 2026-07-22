@@ -31,6 +31,7 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "compress_speed": ("str", settings.compress_speed),
     "compress_tiny_target_mb": ("int", settings.compress_tiny_target_mb),
     "compress_tiny_height": ("int", settings.compress_tiny_height),
+    "vjoin_max_mb": ("int", settings.vjoin_max_mb),
     # ── دانلودر ──
     "downloader_enabled": ("bool", settings.downloader_enabled),
     "dl_allow_unknown": ("bool", settings.dl_allow_unknown),

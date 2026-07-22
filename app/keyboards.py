@@ -42,7 +42,7 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("link", "btn_link_stream"),
         ("cover", "btn_cover_v"), ("compress", "btn_compress"), ("convert", "btn_convert"),
         ("watermark", "btn_watermark"), ("extract_audio", "btn_extract_audio"), ("to_gif", "btn_to_gif"),
-        ("trim", "btn_trim"), ("screenshot", "btn_screenshot"), ("mute", "btn_mute"),
+        ("trim", "btn_trim"), ("vjoin", "btn_vjoin"), ("screenshot", "btn_screenshot"), ("mute", "btn_mute"),
         ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "audio": [
@@ -230,7 +230,8 @@ def link_menu_kb(ref: str, lang: str, dl_url: str, stream_url: str, streamable: 
 
 def collect_kb(ref: str, lang: str, purpose: str) -> InlineKeyboardMarkup:
     """کیبوردِ جمع‌کردنِ فایل — دکمهٔ اجرا بسته به هدف (زیپ / ادغامِ PDF / عکس‌ها به PDF)."""
-    go_key = {"merge": "btn_merge_go", "img_pdf": "btn_img_pdf_go"}.get(purpose, "btn_zip_go")
+    go_key = {"merge": "btn_merge_go", "img_pdf": "btn_img_pdf_go",
+              "vjoin": "btn_vjoin_go"}.get(purpose, "btn_zip_go")
     b = InlineKeyboardBuilder()
     b.button(text=t(lang, go_key), callback_data=Act(op="collect_go", ref=ref))
     b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))

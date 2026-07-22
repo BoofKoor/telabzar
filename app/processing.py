@@ -226,10 +226,12 @@ async def enhance_image(inp: str, out: str) -> None:
 def _watermark_image_sync(inp: str, out: str, wm_path: str, position: str, is_logo: bool) -> None:
     base = ImageOps.exif_transpose(Image.open(inp)).convert("RGBA")
     wm = Image.open(wm_path).convert("RGBA")
-    if is_logo:  # لوگو را نسبت به عرضِ تصویر کوچک کن
-        tw = max(60, base.width // 5)
+    if is_logo:  # لوگو را کوچک/استاندارد کن + کمی محو (شفاف)
+        tw = max(48, base.width // 7)
         th = max(1, round(wm.height * tw / wm.width))
         wm = wm.resize((tw, th), Image.LANCZOS)
+        alpha = wm.split()[3].point(lambda a: int(a * 0.65))  # ~۶۵٪ کدری
+        wm.putalpha(alpha)
     m = max(12, base.width // 50)
     x = m if position in ("tl", "bl") else base.width - wm.width - m
     y = m if position in ("tl", "tr") else base.height - wm.height - m
@@ -595,7 +597,7 @@ def _render_text_watermark_sync(text: str, out_png: str, video_h: int) -> None:
         shaped = get_display(arabic_reshaper.reshape(text))
     except Exception:  # noqa: BLE001  — اگر کتابخانه‌ها نبودند، خامِ متن
         shaped = text
-    size = max(18, int((video_h or 480) / 14))
+    size = max(14, int((video_h or 480) / 18))  # کوچک‌تر/استانداردتر
     fp = _font_path()
     font = ImageFont.truetype(fp, size) if fp else ImageFont.load_default()
     tmp = ImageDraw.Draw(Image.new("RGBA", (4, 4)))
@@ -605,8 +607,8 @@ def _render_text_watermark_sync(text: str, out_png: str, video_h: int) -> None:
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     dr = ImageDraw.Draw(im)
     ox, oy = pad - box[0], pad - box[1]
-    dr.text((ox + 2, oy + 2), shaped, font=font, fill=(0, 0, 0, 150))   # سایه
-    dr.text((ox, oy), shaped, font=font, fill=(255, 255, 255, 235))     # متن
+    dr.text((ox + 2, oy + 2), shaped, font=font, fill=(0, 0, 0, 90))    # سایهٔ ملایم‌تر
+    dr.text((ox, oy), shaped, font=font, fill=(255, 255, 255, 175))     # متنِ کمی محو
     im.save(out_png)
 
 
@@ -615,11 +617,12 @@ async def render_text_watermark(text: str, out_png: str, video_h: int) -> None:
 
 
 async def watermark_video(inp: str, out: str, wm: str, position: str, scale_w: int | None = None,
-                          progress=None, duration=None, cancel=None) -> None:
+                          opacity: float = 1.0, progress=None, duration=None, cancel=None) -> None:
     pos = _WM_POS.get(position, _WM_POS["br"])
-    if scale_w:  # لوگو را نسبت به عرضِ ویدیو کوچک کن
-        fc = f"[1:v]scale={scale_w}:-1[wm];[0:v][wm]overlay={pos}"
-    else:        # PNGِ متنی از قبل اندازه‌شده است
+    if scale_w:  # لوگو را کوچک کن + کمی محو (شفاف)
+        fade = f",format=rgba,colorchannelmixer=aa={opacity}" if opacity < 1 else ""
+        fc = f"[1:v]scale={scale_w}:-1{fade}[wm];[0:v][wm]overlay={pos}"
+    else:        # PNGِ متنی از قبل اندازه‌شده/محو است
         fc = f"[0:v][1:v]overlay={pos}"
     await _run([
         FFMPEG, "-y", "-i", inp, "-i", wm, "-filter_complex", fc,
@@ -637,6 +640,58 @@ async def mute_video(inp: str, out: str) -> None:
         raise RuntimeError("mute produced no output")
 
 
+async def _has_audio(path: str) -> bool:
+    """آیا فایل استریمِ صوتی دارد؟ (برای نرمال‌سازیِ concat)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFPROBE, "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+            "-of", "csv=p=0", path, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate()
+        return bool(out.strip())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def concat_videos(paths: list[str], out: str, width: int | None = None, height: int | None = None,
+                        progress=None, duration=None, cancel=None) -> None:
+    """چند ویدیو را پشتِ‌هم به یک ویدیو می‌چسباند (به ترتیب).
+
+    ورودی‌ها فرمت/رزولوشن/فریم‌ریتِ متفاوت دارند؛ پس هرکدام اول به پارامترِ یکسان
+    نرمال می‌شود (scale+pad به ابعادِ ویدیوی اصلی، ۳۰fps، yuv420p، AACِ استریو ۴۴٫۱،
+    و اگر صدا نداشت سکوت) بعد با concat demuxer بی‌رمزگذاریِ دوباره به‌هم وصل می‌شوند.
+    """
+    W = int(width) if width else 1280
+    H = int(height) if height else 720
+    W += W % 2  # ابعادِ زوج برای libx264
+    H += H % 2
+    wd = os.path.dirname(out) or "."
+    norm: list[str] = []
+    vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+          f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p")
+    for i, p in enumerate(paths):
+        n = os.path.join(wd, f"vj-norm-{i}.mp4")
+        has_a = await _has_audio(p)
+        cmd = [FFMPEG, "-y", "-i", p]
+        if not has_a:  # ورودیِ بی‌صدا → سکوت تا concat یکدست بماند
+            cmd += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
+        cmd += ["-vf", vf, "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
+                "-c:a", "aac", "-ar", "44100", "-ac", "2"]
+        if not has_a:
+            cmd += ["-map", "0:v", "-map", "1:a", "-shortest"]
+        cmd += [n]
+        await _run(cmd, cancel=cancel)
+        norm.append(n)
+    listf = os.path.join(wd, "vj-list.txt")
+    with open(listf, "w", encoding="utf-8") as fh:
+        for n in norm:
+            fh.write(f"file '{os.path.abspath(n)}'\n")
+    await _run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", listf,
+                "-c", "copy", "-movflags", "+faststart", out],
+               progress=progress, duration=duration, cancel=cancel)
+    if not os.path.exists(out):
+        raise RuntimeError("video concat produced no output")
+
+
 async def trim_video(inp: str, out: str, start: float, end: float,
                      progress=None, cancel=None) -> None:
     """برشِ دقیق [start, end] با رمزگذاریِ دوباره."""
@@ -650,8 +705,12 @@ async def trim_video(inp: str, out: str, start: float, end: float,
 
 
 async def screenshot_video(inp: str, out: str, ts: float) -> None:
-    """فریمِ لحظهٔ ts را به‌صورتِ عکس می‌گیرد."""
+    """فریمِ لحظهٔ ts را به‌صورتِ عکس می‌گیرد (seekِ سریع؛ اگر فریمی نداد، seekِ دقیق)."""
     await _run([FFMPEG, "-y", "-ss", f"{ts}", "-i", inp, "-frames:v", "1", "-q:v", "2", out], timeout=120)
+    if not os.path.exists(out):  # ts احتمالاً از مدت گذشته یا کیفریم نبود → seekِ دقیقِ خروجی
+        await _run([FFMPEG, "-y", "-i", inp, "-ss", f"{ts}", "-frames:v", "1", "-q:v", "2", out], timeout=300)
+    if not os.path.exists(out):  # هنوز نشد → فریمِ اول
+        await _run([FFMPEG, "-y", "-i", inp, "-frames:v", "1", "-q:v", "2", out], timeout=120)
     if not os.path.exists(out):
         raise RuntimeError("screenshot produced no output")
 
