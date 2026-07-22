@@ -72,6 +72,20 @@ class Setting(Base):
     )
 
 
+class TextOverride(Base):
+    """بازنویسیِ زمانِ‌اجرا برای متن‌ها/لیبل‌ها (به‌جای هاردکد در locales).
+    نبودِ ردیف یعنی «از پیش‌فرضِ locale استفاده کن». کلید = (زبان, کلیدِ متن)."""
+
+    __tablename__ = "text_overrides"
+
+    lang: Mapped[str] = mapped_column(String(2), primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class DownloadCache(Base):
     """کشِ file_id برای دانلودِ آنی: کلید = هشِ (لینک + کیفیت) → فایلِ ارسال‌شده.
     دفعهٔ بعد که همان لینک+کیفیت خواسته شود، مستقیم با file_id فرستاده می‌شود

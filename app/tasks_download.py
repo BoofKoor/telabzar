@@ -32,6 +32,7 @@ from . import dl_cache
 from . import downloader as D
 from . import processing as P
 from . import settings_store
+from . import textstore
 from .cards import message_media_id, progress_note, send_card, update_card
 from .config import settings
 from .db import Sessionmaker
@@ -341,6 +342,7 @@ async def _apply_spotify_meta(
 
 async def run_download(ctx: dict, payload: dict) -> None:
     bot: Bot = ctx["bot"]
+    await textstore.refresh_if_stale()  # متن‌های ادمین‌ویرایش‌شده تازه بمانند
     redis = ctx.get("redis")
     ref = payload["ref"]
     chat_id = payload["chat_id"]

@@ -30,9 +30,11 @@ from markupsafe import Markup
 from sqlalchemy import func, select, text as sql_text
 
 from . import settings_store
+from . import textstore
 from .config import settings
 from .db import Sessionmaker
 from .downloader import KNOWN_PLATFORMS, PLATFORM_LABELS
+from .i18n import CATALOG
 from .models import File, Job, User
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
 
@@ -233,6 +235,7 @@ _BASE = """<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
 <aside class=side><div class=brand>🧰 تل‌ابزار<small>پنلِ مدیریت</small></div>
 <nav class=nav>
   <a class="{{'on' if active=='settings'}}" href=/>⚙️ تنظیمات</a>
+  <a class="{{'on' if active=='texts'}}" href=/texts>✏️ متن‌ها</a>
   <a class="{{'on' if active=='cookies'}}" href=/cookies>🍪 کوکی‌ها</a>
   <a class="{{'on' if active=='health'}}" href=/health>🩺 سلامت</a>
   <a class="{{'on' if active=='users'}}" href=/users>👤 کاربران</a>
@@ -470,10 +473,60 @@ border-radius:12px;font-size:15px;font-weight:700;font-family:inherit;box-shadow
 {% endif %}
 </div></div></body></html>"""
 
+_TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% block heading %}متن‌ها و لیبل‌ها{% endblock %}
+{% block style %}
+.tx-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.tx-item{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:rgba(255,255,255,.02)}
+.tx-key{display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap}
+.tx-def{color:#94a3b8;font-size:12.5px;margin:6px 0;white-space:pre-wrap;word-break:break-word}
+.tx-item textarea{width:100%;box-sizing:border-box;background:#0b1220;color:#e2e8f0;border:1px solid var(--line);
+  border-radius:9px;padding:8px;font-family:inherit;font-size:13.5px;line-height:1.7;resize:vertical}
+.tx-row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.tx-err{background:rgba(220,38,38,.14);border:1px solid rgba(220,38,38,.5);color:#fecaca;padding:9px 12px;border-radius:10px;margin-bottom:10px}
+{% endblock %}
+{% block body %}
+<div class=card>
+  <form class=tx-tools method=get action=/texts>
+    <select class=sel name=lang onchange="this.form.submit()">
+      <option value=fa {% if lang=='fa' %}selected{% endif %}>فارسی</option>
+      <option value=en {% if lang=='en' %}selected{% endif %}>English</option>
+    </select>
+    <input class=inp name=q value="{{q}}" placeholder="جست‌وجوی کلید یا متن…" style="flex:1;min-width:180px">
+    <button class=btn-sm>جست‌وجو</button>
+    {% if q %}<a class=btn-sm href="/texts?lang={{lang}}">پاک‌کردن</a>{% endif %}
+    <span class=tag>بی‌ری‌استارت · HTML و ایموجیِ پرمیوم مجاز</span>
+  </form>
+  {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
+  {% if error %}<div class=tx-err>⚠️ {{error}}</div>{% endif %}
+  {% if not items %}
+    <div class=empty>{% if q %}چیزی مطابقِ «{{q}}» پیدا نشد.{% else %}هنوز متنی ویرایش نشده. برای ویرایش، یک کلید یا متن را جست‌وجو کن.{% endif %}</div>
+  {% endif %}
+  {% for it in items %}
+  <div class=tx-item>
+    <div class=tx-key><code class=mono>{{it.key}}</code>
+      {% if it.overridden %}<span class=chip>ویرایش‌شده</span>{% endif %}</div>
+    <div class=tx-def>پیش‌فرض: {{it.default}}</div>
+    <form method=post action=/texts/save>
+      <input type=hidden name=key value="{{it.key}}">
+      <input type=hidden name=lang value="{{lang}}">
+      <input type=hidden name=q value="{{q}}">
+      <textarea name=value rows=2>{{it.current}}</textarea>
+      <div class=tx-row>
+        <button class=save style="padding:8px 16px">ذخیره</button>
+        {% if it.overridden %}
+        <button class=btn-sm formaction=/texts/reset>بازگشت به پیش‌فرض</button>{% endif %}
+      </div>
+    </form>
+  </div>
+  {% endfor %}
+  {% if truncated %}<div class=empty>فقط {{items|length}} موردِ اول نشان داده شد — جست‌وجو را دقیق‌تر کن.</div>{% endif %}
+</div>{% endblock %}"""
+
 ENV = Environment(
     loader=DictLoader({
         "base": _BASE, "settings": _SETTINGS, "cookies": _COOKIES,
         "health": _HEALTH, "users": _USERS, "stats": _STATS, "login": _LOGIN,
+        "texts": _TEXTS,
     }),
     autoescape=select_autoescape(default=True, default_for_string=True),
 )
@@ -878,6 +931,94 @@ async def stats_page(request: web.Request) -> web.Response:
                    kindfa=_KIND_FA, opfa=_OP_FA)
 
 
+# ── متن‌ها/لیبل‌ها (override زمانِ‌اجرا روی locales) ──────────────
+_TEXT_KEYS = sorted(set(CATALOG["fa"]) | set(CATALOG["en"]))
+_TEXTS_CAP = 100
+
+
+def _text_default(lang: str, key: str) -> str:
+    return CATALOG.get(lang, {}).get(key) or CATALOG["fa"].get(key) or key
+
+
+def _texts_items(lang: str, q: str) -> tuple[list[dict], bool]:
+    """بدونِ جست‌وجو فقط ویرایش‌شده‌ها؛ با جست‌وجو، تطبیق روی کلید/پیش‌فرض/متنِ فعلی."""
+    ov = {k: v for (lg, k), v in textstore.snapshot().items() if lg == lang}
+    ql = q.strip().lower()
+    items: list[dict] = []
+    for key in _TEXT_KEYS:
+        override = ov.get(key)
+        default = _text_default(lang, key)
+        current = override if override is not None else default
+        if ql:
+            if ql not in key.lower() and ql not in default.lower() and ql not in current.lower():
+                continue
+        elif override is None:
+            continue
+        items.append({"key": key, "default": default, "current": current,
+                      "overridden": override is not None})
+    return items[:_TEXTS_CAP], len(items) > _TEXTS_CAP
+
+
+def _texts_redirect(lang: str, q: str, **extra) -> web.HTTPFound:
+    from urllib.parse import quote_plus
+    params = [f"lang={lang}"]
+    if q:
+        params.append("q=" + quote_plus(q))
+    for k, v in extra.items():
+        params.append(f"{k}=" + quote_plus(str(v)))
+    return web.HTTPFound("/texts?" + "&".join(params))
+
+
+async def texts_page(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    lang = request.query.get("lang", "fa")
+    if lang not in ("fa", "en"):
+        lang = "fa"
+    q = request.query.get("q", "")
+    items, truncated = _texts_items(lang, q)
+    saved = {"1": "متن ذخیره شد (بی‌ری‌استارت اعمال شد).",
+             "r": "به پیش‌فرض برگشت."}.get(request.query.get("ok", ""), "")
+    return _render("texts", admin_id=_session_admin(request), active="texts",
+                   pill_ok=await _pill_ok(request.app), lang=lang, q=q,
+                   items=items, truncated=truncated, saved=saved,
+                   error=request.query.get("err", ""))
+
+
+async def texts_save(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    lang = (form.get("lang") or "fa").strip()
+    key = (form.get("key") or "").strip()
+    q = (form.get("q") or "").strip()
+    value = (form.get("value") or "").replace("\r\n", "\n")
+    valid_key = key in CATALOG.get(lang, {}) or key in CATALOG["fa"]
+    if lang not in ("fa", "en") or not valid_key:
+        raise _texts_redirect(lang if lang in ("fa", "en") else "fa", q, err="کلیدِ نامعتبر.")
+    default = _text_default(lang, key)
+    if value.strip() == default.strip():  # برابرِ پیش‌فرض = حذفِ override
+        await textstore.reset_text(lang, key)
+        raise _texts_redirect(lang, q, ok="r")
+    err = textstore.validate(default, value)
+    if err:
+        raise _texts_redirect(lang, q, err=err)
+    await textstore.set_text(lang, key, value)
+    raise _texts_redirect(lang, q, ok="1")
+
+
+async def texts_reset(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    lang = (form.get("lang") or "fa").strip()
+    key = (form.get("key") or "").strip()
+    q = (form.get("q") or "").strip()
+    if lang in ("fa", "en") and key:
+        await textstore.reset_text(lang, key)
+    raise _texts_redirect(lang if lang in ("fa", "en") else "fa", q, ok="r")
+
+
 async def cookies_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
@@ -1093,6 +1234,9 @@ def build_app() -> web.Application:
     app.router.add_get("/users", users_page)
     app.router.add_post("/users/block", users_block)
     app.router.add_get("/stats", stats_page)
+    app.router.add_get("/texts", texts_page)
+    app.router.add_post("/texts/save", texts_save)
+    app.router.add_post("/texts/reset", texts_reset)
     app.router.add_get("/healthz", healthz)
     if os.path.isdir(_STATIC_DIR):
         app.router.add_static("/static", _STATIC_DIR)

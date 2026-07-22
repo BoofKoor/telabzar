@@ -32,6 +32,8 @@ async def startup(ctx: dict) -> None:
     # فایل‌های بزرگ به‌راحتی از ۶۰ ثانیه می‌گذرد.
     ctx["bot"] = create_bot(request_timeout=600.0)
     settings_store.init_store(settings.redis_url)  # تنظیماتِ زمانِ‌اجرا (مثلِ whisper_model)
+    from . import textstore
+    await textstore.load()  # متن‌های override‌شدهٔ ادمین را پیش‌بارگذاری کن
     log.info("Worker ready.")
 
 

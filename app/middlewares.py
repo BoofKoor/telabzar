@@ -10,6 +10,7 @@ from aiogram.types import TelegramObject, User as TgUser
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from . import textstore
 from .config import settings
 from .models import User
 
@@ -39,6 +40,7 @@ class DataMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        await textstore.refresh_if_stale()  # متن‌های ویرایش‌شدهٔ ادمین را بین‌پروسه‌ای تازه کن
         async with self.sessionmaker() as session:
             data["session"] = session
             tg_user: TgUser | None = data.get("event_from_user")
