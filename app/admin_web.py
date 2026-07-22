@@ -477,13 +477,21 @@ border-radius:12px;font-size:15px;font-weight:700;font-family:inherit;box-shadow
 
 _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% block heading %}متن‌ها و لیبل‌ها{% endblock %}
 {% block style %}
-.tx-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
-.tx-item{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:rgba(255,255,255,.02)}
-.tx-key{display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap}
+.tx-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.tx-cat{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;background:rgba(255,255,255,.02);overflow:hidden}
+.tx-cat>summary{cursor:pointer;padding:12px 14px;font-weight:600;list-style:none;display:flex;align-items:center;gap:8px}
+.tx-cat>summary::-webkit-details-marker{display:none}
+.tx-cat>summary::before{content:'▸';color:#64748b;transition:transform .15s}
+.tx-cat[open]>summary::before{transform:rotate(90deg)}
+.tx-cat .cnt{color:#64748b;font-size:12px;font-weight:400}
+.tx-cat .ed{color:var(--teal2);font-size:12px}
+.tx-body{padding:0 14px 12px}
+.tx-item{border-top:1px solid var(--line);padding:11px 0}
+.tx-key{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tx-def{color:#94a3b8;font-size:12.5px;margin:6px 0;white-space:pre-wrap;word-break:break-word}
 .tx-item textarea{width:100%;box-sizing:border-box;background:#0b1220;color:#e2e8f0;border:1px solid var(--line);
   border-radius:9px;padding:8px;font-family:inherit;font-size:13.5px;line-height:1.7;resize:vertical}
-.tx-row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.tx-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
 .tx-err{background:rgba(220,38,38,.14);border:1px solid rgba(220,38,38,.5);color:#fecaca;padding:9px 12px;border-radius:10px;margin-bottom:10px}
 {% endblock %}
 {% block body %}
@@ -496,32 +504,37 @@ _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% b
     <input class=inp name=q value="{{q}}" placeholder="جست‌وجوی کلید یا متن…" style="flex:1;min-width:180px">
     <button class=btn-sm>جست‌وجو</button>
     {% if q %}<a class=btn-sm href="/texts?lang={{lang}}">پاک‌کردن</a>{% endif %}
-    <span class=tag>بی‌ری‌استارت · HTML و ایموجیِ پرمیوم مجاز</span>
+    <span class=tag>{{total}} متن · {{edited}} ویرایش‌شده · بی‌ری‌استارت</span>
   </form>
   {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
   {% if error %}<div class=tx-err>⚠️ {{error}}</div>{% endif %}
-  {% if not items %}
-    <div class=empty>{% if q %}چیزی مطابقِ «{{q}}» پیدا نشد.{% else %}هنوز متنی ویرایش نشده. برای ویرایش، یک کلید یا متن را جست‌وجو کن.{% endif %}</div>
-  {% endif %}
-  {% for it in items %}
-  <div class=tx-item>
-    <div class=tx-key><code class=mono>{{it.key}}</code>
-      {% if it.overridden %}<span class=chip>ویرایش‌شده</span>{% endif %}</div>
-    <div class=tx-def>پیش‌فرض: {{it.default}}</div>
-    <form method=post action=/texts/save>
-      <input type=hidden name=key value="{{it.key}}">
-      <input type=hidden name=lang value="{{lang}}">
-      <input type=hidden name=q value="{{q}}">
-      <textarea name=value rows=2>{{it.current}}</textarea>
-      <div class=tx-row>
-        <button class=save style="padding:8px 16px">ذخیره</button>
-        {% if it.overridden %}
-        <button class=btn-sm formaction=/texts/reset>بازگشت به پیش‌فرض</button>{% endif %}
+  {% if not groups %}<div class=empty>چیزی مطابقِ «{{q}}» پیدا نشد.</div>{% endif %}
+  {% for g in groups %}
+  <details class=tx-cat {% if g.open %}open{% endif %}>
+    <summary>{{g.title}} <span class=cnt>({{g.n}})</span>
+      {% if g.edited %}<span class=ed>· {{g.edited}} ویرایش‌شده</span>{% endif %}</summary>
+    <div class=tx-body>
+    {% for it in g['items'] %}
+      <div class=tx-item>
+        <div class=tx-key><code class=mono>{{it.key}}</code>
+          {% if it.overridden %}<span class=chip>ویرایش‌شده</span>{% endif %}</div>
+        <div class=tx-def>پیش‌فرض: {{it.default}}</div>
+        <form method=post action=/texts/save>
+          <input type=hidden name=key value="{{it.key}}">
+          <input type=hidden name=lang value="{{lang}}">
+          <input type=hidden name=q value="{{q}}">
+          <textarea name=value rows=2>{{it.current}}</textarea>
+          <div class=tx-actions>
+            <button class=save style="padding:8px 16px">ذخیره</button>
+            {% if it.overridden %}
+            <button class=btn-sm formaction=/texts/reset>بازگشت به پیش‌فرض</button>{% endif %}
+          </div>
+        </form>
       </div>
-    </form>
-  </div>
+    {% endfor %}
+    </div>
+  </details>
   {% endfor %}
-  {% if truncated %}<div class=empty>فقط {{items|length}} موردِ اول نشان داده شد — جست‌وجو را دقیق‌تر کن.</div>{% endif %}
 </div>{% endblock %}"""
 
 _BUTTONS = """{% extends 'base' %}{% block title %}کلیدها{% endblock %}{% block heading %}استایلِ کلیدها{% endblock %}
@@ -969,30 +982,58 @@ async def stats_page(request: web.Request) -> web.Response:
 
 # ── متن‌ها/لیبل‌ها (override زمانِ‌اجرا روی locales) ──────────────
 _TEXT_KEYS = sorted(set(CATALOG["fa"]) | set(CATALOG["en"]))
-_TEXTS_CAP = 100
+
+# دسته‌بندیِ کلیدها بر اساسِ پیشوند (سگمنتِ پیش از اولین «_»)؛ هرچه نیفتد → «سایر».
+_TEXT_CATS: list[tuple[str, set[str]]] = [
+    ("🔘 دکمه‌ها و لیبل‌ها", {"btn"}),
+    ("🎬 کپشنِ نتیجه", {"cl"}),
+    ("⬇️ دانلود", {"dl"}),
+    ("📊 پیشرفت و وضعیت", {"pr", "processing", "queued", "cancelling", "cancelled", "done", "failed"}),
+    ("🎵 متادیتای صوت", {"meta"}),
+    ("💧 واترمارک", {"wm"}),
+    ("🖼 تصویر و ویدیو", {"rot", "rotate", "resize", "ocr", "shot", "trim", "speed",
+                          "cover", "compress", "vjoin", "merge", "img", "zip"}),
+    ("🗣 رونویسی", {"asr", "tr"}),
+    ("🧾 کارت و پیام‌ها", {"detected", "card", "link", "limit", "too", "ask", "send",
+                           "coming", "welcome", "choose", "language", "list"}),
+]
+_TEXT_CAT_TITLES = [t for t, _ in _TEXT_CATS] + ["🧩 سایر"]
 
 
 def _text_default(lang: str, key: str) -> str:
     return CATALOG.get(lang, {}).get(key) or CATALOG["fa"].get(key) or key
 
 
-def _texts_items(lang: str, q: str) -> tuple[list[dict], bool]:
-    """بدونِ جست‌وجو فقط ویرایش‌شده‌ها؛ با جست‌وجو، تطبیق روی کلید/پیش‌فرض/متنِ فعلی."""
+def _text_cat_index(key: str) -> int:
+    seg = key.split("_")[0]
+    for i, (_title, prefixes) in enumerate(_TEXT_CATS):
+        if seg in prefixes:
+            return i
+    return len(_TEXT_CATS)  # سایر
+
+
+def _texts_groups(lang: str, q: str) -> list[dict]:
+    """همهٔ کلیدها، دسته‌بندی‌شده. با جست‌وجو فقط تطبیق‌ها؛ دسته‌های خالی حذف می‌شوند."""
     ov = {k: v for (lg, k), v in textstore.snapshot().items() if lg == lang}
     ql = q.strip().lower()
-    items: list[dict] = []
+    buckets: list[list[dict]] = [[] for _ in _TEXT_CAT_TITLES]
     for key in _TEXT_KEYS:
         override = ov.get(key)
         default = _text_default(lang, key)
         current = override if override is not None else default
-        if ql:
-            if ql not in key.lower() and ql not in default.lower() and ql not in current.lower():
-                continue
-        elif override is None:
+        if ql and ql not in key.lower() and ql not in default.lower() and ql not in current.lower():
             continue
-        items.append({"key": key, "default": default, "current": current,
-                      "overridden": override is not None})
-    return items[:_TEXTS_CAP], len(items) > _TEXTS_CAP
+        buckets[_text_cat_index(key)].append(
+            {"key": key, "default": default, "current": current, "overridden": override is not None})
+    groups: list[dict] = []
+    for title, items in zip(_TEXT_CAT_TITLES, buckets):
+        if items:
+            edited = sum(1 for i in items if i["overridden"])
+            groups.append({"title": title, "items": items, "n": len(items),
+                           "edited": edited, "open": bool(ql) or edited > 0})
+    if groups and not any(g["open"] for g in groups):  # صفحه هیچ‌وقت خالی به‌نظر نرسد
+        groups[0]["open"] = True
+    return groups
 
 
 def _texts_redirect(lang: str, q: str, **extra) -> web.HTTPFound:
@@ -1012,12 +1053,14 @@ async def texts_page(request: web.Request) -> web.Response:
     if lang not in ("fa", "en"):
         lang = "fa"
     q = request.query.get("q", "")
-    items, truncated = _texts_items(lang, q)
+    groups = _texts_groups(lang, q)
+    total = sum(g["n"] for g in groups)
+    edited = sum(g["edited"] for g in groups)
     saved = {"1": "متن ذخیره شد (بی‌ری‌استارت اعمال شد).",
              "r": "به پیش‌فرض برگشت."}.get(request.query.get("ok", ""), "")
     return _render("texts", admin_id=_session_admin(request), active="texts",
                    pill_ok=await _pill_ok(request.app), lang=lang, q=q,
-                   items=items, truncated=truncated, saved=saved,
+                   groups=groups, total=total, edited=edited, saved=saved,
                    error=request.query.get("err", ""))
 
 
