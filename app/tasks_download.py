@@ -448,14 +448,34 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 except P.ProcessingCancelled:
                     raise
                 except Exception as ytdlp_exc:  # noqa: BLE001
-                    # fallback به Cobalt فقط روی شکستِ extractor (نه login/ban که کوکی می‌خواهد)
-                    cobalt = settings.cobalt_url
-                    if cobalt and not any(h in str(ytdlp_exc).lower() for h in _LOGIN_HINTS):
-                        log.info("yt-dlp failed, trying cobalt: %s", str(ytdlp_exc)[:100])
-                        path, info, thumb = await D.download_cobalt(url, workdir, cobalt, opts,
-                                                                    progress=_progress, cancel=_cancelled)
-                    else:
-                        raise
+                    # پلاگینِ pot-provider گاهی خودِ yt-dlp را می‌اندازد (تریس‌بکِ پایتون، نه خطای
+                    # تمیز — مثلاً ناسازگاریِ نسخهٔ پلاگین با سرورِ pot). یک‌بار بدونِ pot دوباره
+                    # تلاش کن: هم خطای واقعی (bot-check) تمیز بیرون می‌آید، هم اگر فقط pot خراب
+                    # بوده، دانلود (به‌ویژه وقتی کوکیِ یوتیوب هست) موفق می‌شود.
+                    retried = False
+                    if opts.get("pot_provider"):
+                        log.info("yt-dlp failed with pot-provider (%s); retrying without pot",
+                                 str(ytdlp_exc)[:140])
+                        try:
+                            path, info, thumb = await D.download_ytdlp(
+                                url, workdir, selector, {**opts, "pot_provider": None},
+                                progress=_progress, cancel=_cancelled)
+                            retried = True
+                        except P.ProcessingCancelled:
+                            raise
+                        except Exception as exc2:  # noqa: BLE001
+                            ytdlp_exc = exc2  # خطای تمیزِ بدونِ pot را به مسیرِ پایین بده
+                    if not retried:
+                        # fallback به Cobalt فقط روی شکستِ extractor (نه login/ban که کوکی می‌خواهد)
+                        cobalt = settings.cobalt_url
+                        if cobalt and not any(h in str(ytdlp_exc).lower() for h in _LOGIN_HINTS):
+                            log.info("yt-dlp failed, trying cobalt: %s", str(ytdlp_exc)[:100])
+                            path, info, thumb = await D.download_cobalt(url, workdir, cobalt, opts,
+                                                                        progress=_progress, cancel=_cancelled)
+                        else:
+                            # صریح، نه `raise` خالی — چون ytdlp_exc را به خطای تمیزِ بدونِ pot
+                            # عوض کرده‌ایم و raiseِ خالی خطای اصلیِ تریس‌بک را دوباره پرت می‌کند.
+                            raise ytdlp_exc
                 paths = [(path, info, thumb)]
         except P.ProcessingCancelled:
             await _stop_ticker()
