@@ -529,7 +529,8 @@ async def run_download(ctx: dict, payload: dict) -> None:
             if any(h in low for h in _BAN_HINTS):
                 await _cooldown_cookie(redis, cookie)
             await _metric(redis, platform, ok=False)
-            if "spotify not configured" in low or "spotify auth failed" in low:
+            if platform == "spotify" and any(
+                    k in low for k in ("spotify", "could not read link", "no tracks", "unreadable")):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_spotify_setup"))
             elif D.is_youtube_botcheck(msg, platform):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))

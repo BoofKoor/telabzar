@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import logging
 import os
 import re
 import shutil
@@ -21,6 +22,8 @@ import tempfile
 from urllib.parse import urlparse
 
 from .exceptions import ProcessingCancelled
+
+log = logging.getLogger("telabzar.downloader")
 
 YTDLP = "yt-dlp"
 GALLERY_DL = "gallery-dl"
@@ -556,11 +559,9 @@ def _track_meta(t: dict, album: dict | None = None) -> dict:
     }
 
 
-async def spotify_resolve(url: str, client_id: str, secret: str, max_tracks: int = 20) -> dict:
-    """لینکِ اسپاتیفای → {kind, title, tracks[]} با متادیتای هر ترک."""
+async def _spotify_api_resolve(url: str, client_id: str, secret: str, max_tracks: int) -> dict:
+    """مسیرِ رسمیِ API (نیازمندِ client id/secret) — کامل‌ترین متادیتا + پلی‌لیستِ کامل."""
     kind, sid = spotify_id(url)
-    if not kind:
-        raise RuntimeError("unsupported spotify link")
     token = await _spotify_token(client_id, secret)
     tracks: list[dict] = []
     title = ""
@@ -581,6 +582,104 @@ async def spotify_resolve(url: str, client_id: str, secret: str, max_tracks: int
             if tr.get("name"):
                 tracks.append(_track_meta(tr))
     return {"kind": kind, "title": title, "tracks": tracks[:max_tracks]}
+
+
+def _find_spotify_entity(obj):
+    """در JSONِ __NEXT_DATA__ی صفحهٔ embed دنبالِ آبجکتِ entity می‌گردد (مقاوم به تغییرِ مسیر)."""
+    if isinstance(obj, dict):
+        if obj.get("trackList") is not None or (obj.get("title") and obj.get("coverArt")):
+            return obj
+        for v in obj.values():
+            found = _find_spotify_entity(v)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _find_spotify_entity(v)
+            if found:
+                return found
+    return None
+
+
+def _embed_cover(entity: dict) -> str | None:
+    srcs = ((entity.get("coverArt") or {}).get("sources")) or []
+    return srcs[-1].get("url") if srcs else None
+
+
+def _embed_track(title: str | None, subtitle, cover: str | None, dur_ms) -> dict:
+    if isinstance(subtitle, list):  # گاهی لیستِ [{name}] است
+        subtitle = ", ".join(x.get("name", "") if isinstance(x, dict) else str(x) for x in subtitle)
+    return {"title": title or "", "artist": (subtitle or "").strip(), "album": "", "year": "",
+            "cover_url": cover, "duration": int((dur_ms or 0) / 1000) or None, "isrc": None}
+
+
+def _parse_spotify_embed(html: str, kind: str, max_tracks: int) -> dict | None:
+    """JSONِ __NEXT_DATA__ی صفحهٔ embed → {kind, title, tracks[]} (خالص، تست‌پذیر)."""
+    m = re.search(r'id="__NEXT_DATA__"[^>]*>(\{.*?\})</script>', html or "", re.S)
+    if not m:
+        return None
+    try:
+        entity = _find_spotify_entity(json.loads(m.group(1)))
+    except (ValueError, KeyError):
+        return None
+    if not entity:
+        return None
+    title = entity.get("title") or entity.get("name") or ""
+    tl = entity.get("trackList") or []
+    if kind == "track" or not tl:
+        artists = entity.get("subtitle") or entity.get("artists")
+        tracks = [_embed_track(title, artists, _embed_cover(entity), entity.get("duration"))]
+    else:
+        alb_cover = _embed_cover(entity)
+        tracks = [_embed_track(it.get("title"), it.get("subtitle"),
+                               _embed_cover(it) or alb_cover, it.get("duration"))
+                  for it in tl[:max_tracks]]
+    tracks = [t for t in tracks if t["title"]]
+    if not tracks:
+        return None
+    return {"kind": kind, "title": title, "tracks": tracks[:max_tracks]}
+
+
+async def _spotify_scrape(url: str, max_tracks: int) -> dict:
+    """بدونِ credential: از صفحهٔ عمومیِ embedِ اسپاتیفای متادیتا را می‌خواند (بی‌لاگین).
+
+    منبعِ اصلی: JSONِ __NEXT_DATA__ (نام/هنرمند/کاور/مدت). اگر ساختار عوض شده بود،
+    fallback به oEmbedِ رسمی (فقط عنوان + کاور برای تک‌آهنگ).
+    """
+    import aiohttp
+    kind, sid = spotify_id(url)
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; TelabzarBot)"}
+    async with aiohttp.ClientSession(headers=headers) as s:
+        async with s.get(f"https://open.spotify.com/embed/{kind}/{sid}") as r:
+            html = await r.text() if r.status == 200 else ""
+    parsed = _parse_spotify_embed(html, kind, max_tracks)
+    if parsed:
+        return parsed
+    # fallback: oEmbedِ رسمی (عنوان + کاور)
+    async with aiohttp.ClientSession(headers=headers) as s:
+        async with s.get(f"https://open.spotify.com/oembed?url={url}") as r:
+            if r.status != 200:
+                raise RuntimeError(f"spotify page unreadable (HTTP {r.status})")
+            d = await r.json(content_type=None)
+    if not d.get("title"):
+        raise RuntimeError("spotify: could not read link metadata")
+    return {"kind": kind, "title": d["title"],
+            "tracks": [{"title": d["title"], "artist": "", "album": "", "year": "",
+                        "cover_url": d.get("thumbnail_url"), "duration": None, "isrc": None}]}
+
+
+async def spotify_resolve(url: str, client_id: str = "", secret: str = "", max_tracks: int = 20) -> dict:
+    """لینکِ اسپاتیفای → {kind, title, tracks[]}. با credential از API (کامل‌تر)، وگرنه
+    از صفحهٔ عمومیِ embed (بی‌لاگین). credential اختیاری است اما پایدارتر/کامل‌تر."""
+    kind, _sid = spotify_id(url)
+    if not kind:
+        raise RuntimeError("unsupported spotify link")
+    if client_id and secret:
+        try:
+            return await _spotify_api_resolve(url, client_id, secret, max_tracks)
+        except Exception as exc:  # noqa: BLE001  — API خطا داد → برگرد به اسکرَیپِ عمومی
+            log.info("spotify API failed (%s); falling back to public embed", str(exc)[:120])
+    return await _spotify_scrape(url, max_tracks)
 
 
 async def _fetch_cover(url: str | None, dest_dir: str) -> str | None:
@@ -609,9 +708,9 @@ async def download_spotify(url: str, workdir: str, opts: dict,
     tasks_download در صورتِ روشن‌بودنِ کلیدِ متادیتا، تگ/کاور را بازنویسی کند.
     کوکی/پروکسی/pot از opts همان مالِ یوتیوب است (دانلودِ واقعی از یوتیوب انجام می‌شود).
     """
-    cid, secret = opts.get("spotify_client_id"), opts.get("spotify_client_secret")
-    if not cid or not secret:
-        raise RuntimeError("spotify not configured")  # → پیامِ «در پنل تنظیم کن»
+    # credential اختیاری است: با آن از API (کامل‌تر)، بدونِ آن از صفحهٔ عمومیِ embed.
+    cid = opts.get("spotify_client_id") or ""
+    secret = opts.get("spotify_client_secret") or ""
     max_tracks = int(opts.get("spotify_max_tracks") or 20)
     resolved = await spotify_resolve(url, cid, secret, max_tracks)
     tracks = resolved["tracks"]
