@@ -439,7 +439,9 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
     if audio_only:
         cmd += ["-x", "--audio-format", "mp3"]
     else:
-        cmd += ["--merge-output-format", "mp4"]
+        # faststart = اتمِ moov جلوی فایل → استریمِ مرورگری بلافاصله شروع می‌شود (نه پس از دانلودِ کامل)
+        cmd += ["--merge-output-format", "mp4",
+                "--postprocessor-args", "Merger:-movflags +faststart"]
     cmd += ["--embed-metadata"]  # عنوان/هنرمند و… داخلِ فایل
     if opts.get("sponsorblock"):  # حذفِ اسپانسر/اینترو (یوتیوب)
         cmd += ["--sponsorblock-remove", opts["sponsorblock"]]
@@ -867,9 +869,18 @@ def _match_score(cand: dict, track: dict) -> float:
     return score
 
 
-def _pick_best_match(candidates: list[dict], track: dict, min_score: float = 55.0) -> dict | None:
-    """بهترین نامزدِ بالای آستانه؛ نامزدهای با نام/مدتِ آشکارا نادرست رد می‌شوند."""
-    best, best_score = None, -1e9
+def _explicit_artist(cand: dict) -> bool:
+    """نامزد فهرستِ صریحِ هنرمند دارد (YT Music) یا فقط از کانال حدس زده شده (ytsearch)؟"""
+    return bool(isinstance(cand.get("artists"), list) and cand.get("artists"))
+
+
+def _rank_candidates(candidates: list[dict], track: dict) -> list[tuple[float, dict]]:
+    """نامزدها را می‌سنجد و از بهترین به بدترین مرتب می‌کند؛ گیت‌های سختِ نام/مدت/هنرمند.
+
+    گیتِ هنرمند فقط وقتی نامزد فهرستِ صریحِ هنرمند دارد اعمال می‌شود (تا «خوانندهٔ
+    اشتباه» رد شود)؛ برای نتایجِ ytsearch که هنرمند از کانال حدس زده شده، اعمال نمی‌شود.
+    """
+    scored: list[tuple[float, dict]] = []
     for c in candidates:
         if not _cand_url(c):
             continue
@@ -877,12 +888,20 @@ def _pick_best_match(candidates: list[dict], track: dict, min_score: float = 55.
             continue
         if _duration_reject(c, track):   # طولِ آشکارا متفاوت (لایو/اکستندد)
             continue
-        s = _match_score(c, track)
-        if s > best_score:
-            best, best_score = c, s
-    if best is None or best_score < min_score:
-        return None
-    return best
+        am = _artist_match(track, c)
+        if _explicit_artist(c) and am is not None and am < 40:  # صراحتاً خوانندهٔ دیگری
+            continue
+        scored.append((_match_score(c, track), c))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored
+
+
+def _pick_best_match(candidates: list[dict], track: dict, min_score: float = 55.0) -> dict | None:
+    """بهترین نامزدِ بالای آستانه (وگرنه None). گیت‌های سختِ نام/مدت/هنرمند اعمال می‌شوند."""
+    ranked = _rank_candidates(candidates, track)
+    if ranked and ranked[0][0] >= min_score:
+        return ranked[0][1]
+    return None
 
 
 async def _yt_search_candidates(query: str, opts: dict, limit: int = 6, timeout: float = 60) -> list[dict]:
@@ -964,7 +983,12 @@ async def _ytmusic_search(query: str, filt: str, proxy: str | None,
 
 
 async def _gather_candidates(track: dict, opts: dict, source: str) -> list[dict]:
-    """نامزدهای یک ترک: YT Music (ISRC→songs→videos) اول، وگرنه fallback به ytsearch."""
+    """نامزدهای یک ترک: YT Music (ISRC→songs→videos)، و در صورتِ کم‌بودن + استخرِ ytsearch.
+
+    استخرِ ytsearch همیشه وقتی YT Music کم/خالی بود اضافه می‌شود (نه فقط وقتی صفر است)
+    تا امتیازده روی مجموعهٔ بزرگ‌تری انتخاب کند و هیچ‌وقت به «گرفتنِ خامِ نتیجهٔ اول»
+    نیفتیم — که علتِ فرستادنِ آهنگ/خوانندهٔ اشتباه بود.
+    """
     query = " ".join(p for p in (track.get("artist"), track.get("title")) if p).strip()
     proxy = opts.get("proxy")
     cands: list[dict] = []
@@ -975,9 +999,10 @@ async def _gather_candidates(track: dict, opts: dict, source: str) -> list[dict]
                 h["isrc_hit"] = True
                 cands.append(h)
         cands += await _ytmusic_search(query, "songs", proxy)
-        if len(cands) < 2:  # کاتالوگِ songs کم بود → ویدیوهای موزیک را هم بگیر
+        if len(cands) < 3:  # کاتالوگِ songs کم بود → ویدیوهای موزیک را هم بگیر
             cands += await _ytmusic_search(query, "videos", proxy)
-    if not cands:  # YT Music خالی/بلاک بود یا source=youtube → موتورِ قدیمِ ytsearch
+    # اگر YT Music خالی/کم بود (یا source=youtube)، استخرِ ytsearch را هم ضمیمه کن
+    if len(cands) < 3:
         cands += await _yt_search_candidates(query, opts)
     return cands
 
@@ -1013,16 +1038,19 @@ async def download_spotify(url: str, workdir: str, opts: dict,
         tdir = os.path.join(workdir, f"t{i}")
         os.makedirs(tdir, exist_ok=True)
         query = " ".join(p for p in (tr.get("artist"), tr.get("title")) if p).strip()
-        # نامزدها را از کاتالوگِ «songs»ی YouTube Music بگیر (ضبطِ رسمی، نه لایو/کاور) و با
-        # امتیازِ fuzzyِ وزن‌دار (نام/هنرمند/آلبوم/مدت) بهترینِ بالای آستانه را انتخاب کن.
+        # نامزدها را از کاتالوگِ «songs»ی YouTube Music (+ استخرِ ytsearch) بگیر و با امتیازِ
+        # fuzzyِ وزن‌دار (نام/هنرمند/آلبوم/مدت) رتبه بده؛ بهترینِ بالای آستانه را بردار.
         candidates = await _gather_candidates(tr, opts, source)
-        best = _pick_best_match(candidates, tr, min_score) if candidates else None
+        ranked = _rank_candidates(candidates, tr)
+        best = ranked[0][1] if ranked and ranked[0][0] >= min_score else None
+        if best is None and yt_fallback and ranked:
+            best = ranked[0][1]  # بهترینِ موجود (حتی زیرِ آستانه) — بهتر از گرفتنِ خامِ اول
         target = _cand_url(best) if best else None
-        if not target:  # هیچ نامزدی از آستانه رد نشد
+        if not target:  # نه نامزدی رد شد نه چیزی برای fallback ماند
             if not yt_fallback:  # این ترک را رد کن، اشتباه نفرست
                 last_err = RuntimeError(f"no confident match: {query}")
                 continue
-            target = f"ytsearch1:{query}"  # آخرین‌چاره: نتیجهٔ اولِ یوتیوب
+            target = f"ytsearch1:{query}"  # آخرین‌چاره (وقتی هیچ نامزدی نبود)
 
         async def _p(pct: float, _i=i) -> None:  # پیشرفتِ کلی روی همهٔ ترک‌ها
             if progress is not None:
