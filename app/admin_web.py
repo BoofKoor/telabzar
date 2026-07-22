@@ -74,6 +74,13 @@ GROUPS = [
         ("dl_concurrency", "دانلودِ هم‌زمان (کل)", ""),
         ("dl_daily_count", "سقفِ روزانهٔ دانلود", "هر کاربر · ۰ = نامحدود"),
     ]),
+    ("🎧 اسپاتیفای", [
+        ("spotify_enabled", "اسپاتیفای فعال", "لینک را با تطبیقِ یوتیوب دانلود کن"),
+        ("spotify_client_id", "Client ID", "از اپِ رایگانِ Spotify Developer"),
+        ("spotify_client_secret", "Client Secret", ""),
+        ("spotify_meta", "متادیتا از اسپاتیفای", "خاموش = از یوتیوب · روشن = از اسپاتیفای"),
+        ("spotify_max_tracks", "سقفِ ترک (آلبوم/پلی‌لیست)", ""),
+    ]),
     ("🎬 کاهشِ حجمِ ویدیو", [
         ("compress_speed", "سرعت / کیفیت", "کندتر = کوچک‌تر"),
         ("video_encoder", "انکودر", "nvenc فقط با GPU"),

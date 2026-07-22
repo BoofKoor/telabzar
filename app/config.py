@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     dl_subs: bool = False          # جاسازیِ زیرنویسِ خودکار (en+fa) در ویدیو
     cobalt_url: str = ""           # نمونهٔ self-hostedِ Cobalt به‌عنوان fallback؛ خالی=خاموش
     cobalt_api_key: str = ""       # کلیدِ API نمونهٔ Cobalt (در صورتِ نیاز)
+    # ── اسپاتیفای (متادیتا از API + تطبیقِ صوت روی یوتیوب) ──
+    spotify_enabled: bool = True       # پردازشِ لینکِ اسپاتیفای (نیازمندِ client id/secret)
+    spotify_client_id: str = ""        # از پنل ست می‌شود (اپِ رایگانِ Spotify Developer)
+    spotify_client_secret: str = ""    # از پنل ست می‌شود
+    spotify_meta: bool = False         # خاموش=متادیتا از یوتیوب · روشن=متادیتا از اسپاتیفای
+    spotify_max_tracks: int = 20       # سقفِ تعدادِ ترک در هر آلبوم/پلی‌لیست
 
     # پنلِ ادمینِ وب (فاز D) — سرویسِ جدا، احراز با کدِ تلگرام
     admin_port: int = 8080         # پورتِ داخلِ کانتینر (میزبان → 2083)

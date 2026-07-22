@@ -50,6 +50,12 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "dl_min_free_gb": ("int", settings.dl_min_free_gb),
     "dl_sponsorblock": ("str", settings.dl_sponsorblock),
     "dl_subs": ("bool", settings.dl_subs),
+    # ── اسپاتیفای ──
+    "spotify_enabled": ("bool", settings.spotify_enabled),
+    "spotify_client_id": ("str", settings.spotify_client_id),
+    "spotify_client_secret": ("str", settings.spotify_client_secret),
+    "spotify_meta": ("bool", settings.spotify_meta),
+    "spotify_max_tracks": ("int", settings.spotify_max_tracks),
 }
 
 # کلیدهایی با مقادیرِ مجازِ محدود (اعتبارسنجیِ /admin).

@@ -187,6 +187,11 @@ MESSAGES: dict[str, str] = {
     "dl_probing": "🔎 در حالِ خواندنِ کیفیت‌های موجود…",
     "dl_preparing": "در حالِ آماده‌سازیِ دریافت",
     "dl_fetching": "در حالِ دریافت",
+    "dl_matching": "در حالِ پیدا کردنِ آهنگ روی یوتیوب",
+    "dl_spotify_setup": (
+        "🎧 برای دانلود از اسپاتیفای، ادمین باید یک اپِ رایگانِ Spotify Developer بسازد و "
+        "<code>Client ID</code> و <code>Client Secret</code> را در پنل تنظیم کند."
+    ),
     "dl_almost": "لحظه‌های آخر — کمی مانده",
     "dl_uploading": "📤 در حالِ ارسال به تو…",
     "dl_downloading": "⬇️ در حالِ دانلود… {pct}%",
