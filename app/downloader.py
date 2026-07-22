@@ -254,6 +254,33 @@ def _newest(workdir: str, exts: tuple[str, ...] | None = None) -> str | None:
     return best
 
 
+async def _ffprobe_video(path: str) -> dict:
+    """(width, height, duration) از ffprobe — برای پرکردنِ متادیتای ناقصِ yt-dlp
+    (merge‌شدهٔ DASHِ یوتیوب گاهی width/height ندارد)."""
+    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
+           "-show_entries", "stream=width,height:format=duration", "-of", "json", path]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate()
+        data = json.loads(out or b"{}")
+    except Exception:  # noqa: BLE001
+        return {}
+    st = (data.get("streams") or [{}])[0]
+    fmt = data.get("format") or {}
+    res: dict = {}
+    if st.get("width"):
+        res["width"] = int(st["width"])
+    if st.get("height"):
+        res["height"] = int(st["height"])
+    try:
+        if fmt.get("duration"):
+            res["duration"] = int(float(fmt["duration"]))
+    except (TypeError, ValueError):
+        pass
+    return res
+
+
 async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
                          progress=None, cancel=None) -> tuple[str, dict, str | None]:
     """دانلود با yt-dlp → (مسیرِ فایل, info dict, مسیرِ تامبنیل). info.json را می‌خوانَد."""
@@ -297,6 +324,12 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
                 info = json.load(fh)
         except Exception:  # noqa: BLE001
             pass
+    # متادیتای ناقصِ ویدیو را با ffprobe کامل کن (کارت + منوی کاهشِ حجم دقیق شود)
+    if not audio_only and not (info.get("width") and info.get("height") and info.get("duration")):
+        probed = await _ffprobe_video(path)
+        for k in ("width", "height", "duration"):
+            if not info.get(k) and probed.get(k):
+                info[k] = probed[k]
     return path, info, thumb
 
 
