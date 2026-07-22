@@ -111,9 +111,10 @@ async def _metric(redis, platform: str, ok: bool) -> None:
 
 
 async def _opts(redis, platform: str) -> dict:
+    pot_on = await settings_store.get_bool("dl_pot_enabled", settings.dl_pot_enabled)
     return {
         "proxy": await settings_store.get_str("proxy_url", settings.proxy_url) or None,
-        "pot_provider": settings.pot_provider_url or None,
+        "pot_provider": (settings.pot_provider_url or None) if pot_on else None,
         "cookies": await _pick_cookies(redis, platform),
         "max_mb": await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb),
         "sponsorblock": await settings_store.get_str("dl_sponsorblock", settings.dl_sponsorblock) or None,

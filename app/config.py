@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     proxy_url: str = ""            # egressِ تمیزِ خودت، مثل socks5h://host:1080 (خالی = مستقیم)
     cookies_dir: str = ""          # پوشهٔ کوکی‌ها (چرخشِ اکانت برای اینستا/X)
     pot_provider_url: str = ""     # http://bgutil-pot-provider:4416 (توکنِ یوتیوب)
+    dl_pot_enabled: bool = True    # استفاده از pot-provider؛ اگر پلاگین کرش کند از پنل خاموشش کن
     dl_default_ux: str = "quick"   # probe | quick — پیش‌فرضِ رفتارِ لینک
     dl_max_size_mb: int = 2000     # ≤ سقفِ آپلودِ Bot API (فایلِ بزرگ‌تر تحویل‌شدنی نیست)
     dl_max_duration_min: int = 0   # ردِ رسانهٔ خیلی بلند در probe
