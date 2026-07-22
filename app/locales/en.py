@@ -79,7 +79,7 @@ MESSAGES: dict[str, str] = {
     "btn_link_stream": "🔗 Download + stream link",
     "btn_dl": "⬇️ Download",
     "btn_stream": "▶️ Stream",
-    "btn_copy_link": "📋 Copy download link",
+    "btn_copy_link": "Copy download link",
     "link_ready_menu": "🔗 <b>Link ready</b> — download, stream, or copy:",
     "link_unconfigured": "Links aren't configured yet (no domain set at install).",
     # video cover & audio extraction
