@@ -86,6 +86,21 @@ class TextOverride(Base):
     )
 
 
+class ButtonStyle(Base):
+    """استایلِ زمانِ‌اجرا برای کلیدهای منوی کارت (به‌ازای هر op).
+    style ∈ primary/success/danger (رنگِ کلید)؛ icon_emoji_id = آیدیِ ایموجیِ
+    پرمیوم روی کلید. نبودِ ردیف = کلیدِ ساده (بی‌رنگ/بی‌آیکون)."""
+
+    __tablename__ = "button_styles"
+
+    op: Mapped[str] = mapped_column(String(24), primary_key=True)
+    style: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    icon_emoji_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class DownloadCache(Base):
     """کشِ file_id برای دانلودِ آنی: کلید = هشِ (لینک + کیفیت) → فایلِ ارسال‌شده.
     دفعهٔ بعد که همان لینک+کیفیت خواسته شود، مستقیم با file_id فرستاده می‌شود

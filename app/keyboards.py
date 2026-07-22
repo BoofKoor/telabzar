@@ -4,6 +4,7 @@ from __future__ import annotations
 from aiogram.types import CopyTextButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from . import textstore
 from .callbacks import Act, Cmp, Conv, Dl, Lang, Meta, Rot, Rsz, Spd, Tr, Wm
 from .i18n import t
 
@@ -104,7 +105,13 @@ def file_card_kb(ref: str, kind: str, lang: str, collapsible: bool = False) -> I
     b = InlineKeyboardBuilder()
     ops = OPS_BY_KIND.get(kind, _DEFAULT_OPS)
     for op, key in ops:
-        b.button(text=t(lang, key), callback_data=Act(op=op, ref=ref))
+        style, icon = textstore.get_button_style(op)  # رنگ/ایموجیِ ادمین‌ست‌شده (اگر بود)
+        extra = {}
+        if style:
+            extra["style"] = style
+        if icon:
+            extra["icon_custom_emoji_id"] = icon
+        b.button(text=t(lang, key), callback_data=Act(op=op, ref=ref), **extra)
     # فایلِ لینک (collapsible): «بستن» منو را جمع می‌کند (نه حذفِ کارت)؛ وگرنه می‌بندد.
     b.button(text=t(lang, "btn_close"),
              callback_data=Act(op="collapse" if collapsible else "close", ref=ref))
