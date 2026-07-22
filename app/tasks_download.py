@@ -9,12 +9,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import glob
 import json
 import logging
 import os
 import secrets
 import shutil
+import time
 from datetime import datetime, timezone
 from html import escape
 
@@ -29,7 +31,7 @@ from . import dl_cache
 from . import downloader as D
 from . import processing as P
 from . import settings_store
-from .cards import message_media_id, send_card, update_card
+from .cards import message_media_id, progress_note, send_card, update_card
 from .config import settings
 from .db import Sessionmaker
 from .i18n import t
@@ -319,12 +321,17 @@ async def run_download(ctx: dict, payload: dict) -> None:
 
     # ── فازِ probe: منوی کیفیت ──
     if phase == "probe":
+        await _edit(bot, chat_id, status_mid, t(lang, "dl_probing"))
         try:
             info = await D.probe(url, await _opts(redis, platform))
         except Exception as exc:  # noqa: BLE001
             await _metric(redis, platform, ok=False)
-            await _edit(bot, chat_id, status_mid,
-                        t(lang, "dl_probe_failed") + f"\n<code>{str(exc)[:120]}</code>")
+            msg = str(exc)
+            if D.is_youtube_botcheck(msg, platform):
+                await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
+            else:
+                await _edit(bot, chat_id, status_mid,
+                            t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:120])}</code>")
             return
         opts = info.get("options") or []
         if redis is not None and opts:
@@ -388,15 +395,45 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 log.warning("cookie copy failed (%s); بدونِ کوکی ادامه", exc)
                 opts["cookies"] = None
 
-        pstate = {"pct": -1}
+        # ── روایتِ زنده‌ی مراحل: اسپینرِ چرخان + درصد/زمانِ سپری‌شده ──
+        # تیک‌زنِ پس‌زمینه هیچ‌وقت «قفل‌شده» به‌نظر نمی‌رسد — چه yt-dlp که درصد می‌دهد،
+        # چه gallery-dl که نمی‌دهد (فقط اسپینر + زمان). نزدیکِ پایان → «لحظه‌های آخر».
+        plabel = D.platform_label(platform, lang)
+        narr = {"label": t(lang, "dl_fetching"), "pct": None, "eta": None}
+        nstart = time.monotonic()
 
         async def _progress(pct: float) -> None:
             ip = int(pct)
-            if ip <= pstate["pct"]:
-                return
-            pstate["pct"] = ip
-            await _edit(bot, chat_id, status_mid, t(lang, "dl_downloading", pct=ip),
-                        kb=download_cancel_kb(ref, lang))
+            narr["pct"] = ip
+            elapsed = time.monotonic() - nstart
+            narr["eta"] = (elapsed / ip * (100 - ip)) if ip > 3 else None
+            narr["label"] = t(lang, "dl_almost") if ip >= 92 else t(lang, "dl_fetching")
+
+        async def _ticker() -> None:
+            tick = 0
+            while True:
+                await asyncio.sleep(3.0)
+                tick += 1
+                try:
+                    await _edit(bot, chat_id, status_mid,
+                                progress_note(narr["label"], narr["pct"], narr["eta"],
+                                              time.monotonic() - nstart, tick),
+                                kb=download_cancel_kb(ref, lang))
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # فیدبکِ فوری قبل از اولین تیک تا فاصله‌ای بی‌وضعیت نمانَد
+        await _edit(bot, chat_id, status_mid,
+                    progress_note(t(lang, "dl_preparing"), None, None, 0, 0),
+                    kb=download_cancel_kb(ref, lang))
+        ticker = asyncio.create_task(_ticker())
+
+        async def _stop_ticker() -> None:
+            ticker.cancel()
+            try:
+                await ticker
+            except BaseException:  # noqa: BLE001
+                pass
 
         gallery_caption = None
         try:
@@ -421,19 +458,25 @@ async def run_download(ctx: dict, payload: dict) -> None:
                         raise
                 paths = [(path, info, thumb)]
         except P.ProcessingCancelled:
+            await _stop_ticker()
             await _edit(bot, chat_id, status_mid, t(lang, "cancelled"))
             return
         except Exception as exc:  # noqa: BLE001
+            await _stop_ticker()
             msg = str(exc)
             low = msg.lower()
             if any(h in low for h in _BAN_HINTS):
                 await _cooldown_cookie(redis, cookie)
             await _metric(redis, platform, ok=False)
-            if any(h in low for h in _LOGIN_HINTS):
-                await _edit(bot, chat_id, status_mid, t(lang, "dl_need_cookies", platform=platform))
+            if D.is_youtube_botcheck(msg, platform):
+                await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
+            elif any(h in low for h in _LOGIN_HINTS):
+                await _edit(bot, chat_id, status_mid, t(lang, "dl_need_cookies", platform=plabel))
             else:
-                await _edit(bot, chat_id, status_mid, t(lang, "dl_failed") + f"\n<code>{msg[:140]}</code>")
+                await _edit(bot, chat_id, status_mid,
+                            t(lang, "dl_failed") + f"\n<code>{escape(msg[:140])}</code>")
             return
+        await _stop_ticker()
 
         # چکِ قطعیِ حجم روی دیسک قبل از آپلود (نقدِ #۱: --max-filesize کافی نیست)
         max_mb = await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb)
@@ -452,6 +495,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 await redis.expire(k, 90000)
             except Exception:  # noqa: BLE001
                 pass
+
+        # مرحلهٔ پایانی: در حالِ ارسال به کاربر (آپلود به سرورِ لوکالِ Bot API)
+        await _edit(bot, chat_id, status_mid, t(lang, "dl_uploading"))
 
         if engine == "gallerydl" and len(paths) > 1:
             # پستِ چند‌تایی (کاروسل) → Rich Message (مقاله‌ایِ ورق‌زدنی) یا آلبوم
