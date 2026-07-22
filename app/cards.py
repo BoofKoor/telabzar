@@ -25,10 +25,11 @@ from .keyboards import collapsed_kb, file_card_kb
 
 def _initial_kb(file: File, lang: str):
     """کیبوردِ اولیهٔ کارت: فایلِ ارسالیِ لینک (source='dl') جمع‌شده می‌آید (فقط دکمهٔ
-    «نمایش آپشن‌ها»)؛ بقیه منوی کامل. UIِ خلوت‌تر برای تحویلِ لینک."""
+    «نمایش آپشن‌ها»)؛ بقیه منوی کامل. دکمهٔ «بستن» همه‌جا منو را جمع می‌کند (نه حذفِ
+    کارت) — collapsible=True."""
     if file.source == "dl":
         return collapsed_kb(file.ref, lang)
-    return file_card_kb(file.ref, file.kind, lang)
+    return file_card_kb(file.ref, file.kind, lang, collapsible=True)
 from .models import File
 
 _ICON = {"document": "🗎", "image": "🖼", "video": "🎬", "audio": "🎵",
@@ -274,7 +275,7 @@ async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lan
     · یا یک InlineKeyboardMarkup دلخواه (مثلِ دکمهٔ لغوِ حین پردازش)."""
     if keyboard is True:
         # منوی کامل؛ برای فایلِ لینک، «بستن» به‌جای حذف، منو را جمع می‌کند
-        kb = file_card_kb(file.ref, file.kind, lang, collapsible=(file.source == "dl"))
+        kb = file_card_kb(file.ref, file.kind, lang, collapsible=True)
     elif not keyboard:
         kb = None
     else:

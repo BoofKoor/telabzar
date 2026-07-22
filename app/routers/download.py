@@ -111,11 +111,10 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
         cache = await dl_cache.get_cached(session, url, quick_sel)
         if cache is not None:
             await _charge(arq_pool, uid)
-            try:
-                await message.delete()
-            except Exception:  # noqa: BLE001
-                pass
-            await dl_cache.deliver_from_cache(message.bot, session, message.chat.id, owner_id, cache, lang)
+            # لینک را نگه‌دار و روی همان ریپلای بده (به‌جای حذفِ پیامِ کاربر)
+            status = await message.reply(t(lang, "dl_reading"))
+            await dl_cache.deliver_from_cache(message.bot, session, message.chat.id, owner_id, cache,
+                                              lang, anchor_mid=status.message_id)
             return
 
     ref = secrets.token_urlsafe(6)[:8]
@@ -126,11 +125,8 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     except Exception:  # noqa: BLE001
         pass
 
-    status = await message.answer(t(lang, "dl_reading"))
-    try:
-        await message.delete()  # لینک را پاک کن تا چت تمیز بماند
-    except Exception:  # noqa: BLE001
-        pass
+    # لینک را نگه‌دار و وضعیت را روی همان ریپلای بده (تحویلِ نهایی همین را درجا عوض می‌کند)
+    status = await message.reply(t(lang, "dl_reading"))
 
     base = {"ref": ref, "chat_id": message.chat.id, "status_mid": status.message_id,
             "lang": lang, "url": url, "platform": platform, "engine": engine,
