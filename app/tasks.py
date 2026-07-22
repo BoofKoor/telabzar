@@ -122,8 +122,11 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             await P.compress_image(inpath, out)
         elif file.kind == "video":
             out = os.path.join(workdir, f"{stem}-min.mp4")
+            enc = await settings_store.get_str("video_encoder", settings.video_encoder)
+            spd = await settings_store.get_str("compress_speed", settings.compress_speed)
             await P.compress_video(inpath, out, height=args.get("height"), kbps=args.get("kbps"),
-                                   progress=progress, duration=dur, cancel=cancel)
+                                   progress=progress, duration=dur, cancel=cancel,
+                                   encoder=enc, speed=spd)
         elif file.kind == "audio":
             out = os.path.join(workdir, f"{stem}-min.mp3")
             await P.compress_audio(inpath, out, progress=progress, duration=dur, cancel=cancel)

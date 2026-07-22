@@ -27,6 +27,8 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "daily_op_quota": ("int", settings.daily_op_quota),
     "whisper_model": ("str", settings.whisper_model),
     "max_file_mb": ("int", settings.max_file_mb),
+    "video_encoder": ("str", settings.video_encoder),
+    "compress_speed": ("str", settings.compress_speed),
     # ── دانلودر ──
     "downloader_enabled": ("bool", settings.downloader_enabled),
     "dl_allow_unknown": ("bool", settings.dl_allow_unknown),
@@ -52,6 +54,8 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
 # کلیدهایی با مقادیرِ مجازِ محدود (اعتبارسنجیِ /admin).
 ENUM_VALUES: dict[str, tuple[str, ...]] = {
     "whisper_model": ("tiny", "base", "small", "medium", "large-v3"),
+    "video_encoder": ("x264", "nvenc"),
+    "compress_speed": ("fast", "balanced", "quality"),
     "dl_default_ux": ("probe", "quick"),
     "dl_ux_youtube": ("probe", "quick", ""),
     "dl_ux_instagram": ("probe", "quick", ""),
