@@ -70,6 +70,8 @@ GROUPS = [
         ("dl_default_ux", "رفتارِ پیش‌فرضِ لینک", ""),
         ("dl_ux_youtube", "کیفیتِ یوتیوب", ""),
         ("dl_ux_instagram", "کیفیتِ اینستاگرام", ""),
+        ("dl_ux_twitter", "کیفیتِ X / توییتر", ""),
+        ("dl_ux_tiktok", "کیفیتِ تیک‌تاک", ""),
         ("dl_max_size_mb", "حداکثر حجمِ دانلود (MB)", ""),
         ("dl_concurrency", "دانلودِ هم‌زمان (کل)", ""),
         ("dl_daily_count", "سقفِ روزانهٔ دانلود", "هر کاربر · ۰ = نامحدود"),
@@ -117,9 +119,12 @@ def _session_admin(request: web.Request) -> int | None:
         return None
     try:
         data = json.loads(_fernet().decrypt(tok.encode(), ttl=_SESSION_TTL))
-        return int(data["id"])
+        aid = int(data["id"])
     except (InvalidToken, ValueError, KeyError):
         return None
+    # هر درخواست دوباره عضویت را چک کن: ادمینِ حذف‌شده از ADMIN_IDS نباید تا انقضای
+    # کوکی (۸ ساعت) دسترسی داشته باشد.
+    return aid if aid in settings.admin_id_set else None
 
 
 # ── فونت + استایلِ مشترک ────────────────────────────────────────
@@ -527,7 +532,7 @@ async def _health(app: web.Application) -> dict:
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:
                 async with s.get(settings.pot_provider_url + "/ping") as resp:
-                    h["pot"] = resp.status < 500
+                    h["pot"] = resp.status == 200  # 404/403 = خطا، نه «آنلاین»
         except Exception:  # noqa: BLE001
             h["pot"] = False
     # نرخِ per-host امروز (لیستِ مرتب برای رندر)
@@ -628,10 +633,17 @@ async def _users_list(page: int, q: str) -> dict:
     q = (q or "").strip()
     async with Sessionmaker() as db:
         base = select(User)
-        if q.isdigit():
-            base = base.where(User.tg_user_id == int(q))
+        if q:
+            # جست‌وجو فقط با شناسهٔ عددیِ دقیق؛ ورودیِ غیرعددی/خیلی‌بزرگ → نتیجهٔ خالی
+            # (نه کلِ لیست، و نه 500 روی int8 سرریز).
+            if q.isdigit() and int(q) < 2 ** 63:
+                base = base.where(User.tg_user_id == int(q))
+            else:
+                base = base.where(User.id == -1)
         total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
-        blocked = await db.scalar(select(func.count(User.id)).where(User.is_blocked.is_(True))) or 0
+        # شمارشِ بلاک‌شده هم‌محدودهٔ جست‌وجو (وگرنه «۱ کل · ۵ بلاک»ِ بی‌معنی)
+        blocked = await db.scalar(select(func.count()).select_from(
+            base.where(User.is_blocked.is_(True)).subquery())) or 0
         rows = (await db.execute(
             base.order_by(User.last_seen.desc()).limit(per).offset(page * per))).scalars().all()
         ids = [u.id for u in rows]
@@ -776,8 +788,12 @@ async def auth_verify(request: web.Request) -> web.Response:
         return _login_page(step=2, admin_id=admin_id, sent=True, error="کد نادرست است.")
     await r.delete(f"panelcode:{admin_id}")
     resp = web.HTTPFound("/")
+    # secure را از اسکیمِ واقعی بگیر: روی HTTPِ ساده (بدونِ TLS/پروکسی) کوکیِ Secure
+    # توسطِ مرورگر دور انداخته می‌شود → لوپِ بی‌پایانِ بازگشت به /login. پشتِ Cloudflare/
+    # پروکسی، X-Forwarded-Proto=https کوکی را درست Secure می‌کند.
+    https = request.secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https"
     resp.set_cookie(_COOKIE, _make_session(int(admin_id)), max_age=_SESSION_TTL,
-                    httponly=True, secure=True, samesite="Lax")
+                    httponly=True, secure=https, samesite="Lax")
     raise resp
 
 
