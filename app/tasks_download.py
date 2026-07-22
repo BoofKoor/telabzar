@@ -57,8 +57,9 @@ async def _pick_cookies(redis, platform: str) -> str | None:
     if not d or not os.path.isdir(d):
         return None
     cands = sorted(glob.glob(os.path.join(d, "*.txt")))
-    plat = [f for f in cands if platform in os.path.basename(f).lower()]
-    pool = plat or cands
+    # فقط کوکیِ همان پلتفرم — نه fallback به همهٔ کوکی‌ها (وگرنه مثلاً ساندکلاود
+    # کوکیِ اینستاگرام را برمی‌داشت و اشتباه/بی‌فایده به yt-dlp می‌داد).
+    pool = [f for f in cands if platform in os.path.basename(f).lower()]
     if not pool:
         return None
     live = []
@@ -303,7 +304,18 @@ async def run_download(ctx: dict, payload: dict) -> None:
 
         os.makedirs(workdir, exist_ok=True)
         opts = await _opts(redis, platform)
-        cookie = opts.get("cookies")
+        cookie = opts.get("cookies")  # مسیرِ اصلی؛ برای cooldown/متریک نگه‌داری می‌شود
+        if cookie:
+            # yt-dlp/gallery-dl کوکی‌جار را به همان فایل برمی‌گردانند (yt-dlp issue #5977)
+            # ولی mountِ /cookies فقط‌خواندنی است → کپیِ نوشتنی در workdir بده تا write-back
+            # آنجا بیفتد و پوشهٔ اشتراکی دست‌نخورده/امن بماند.
+            try:
+                writable = os.path.join(workdir, "cookies.txt")
+                shutil.copyfile(cookie, writable)
+                opts["cookies"] = writable
+            except OSError as exc:  # noqa: BLE001
+                log.warning("cookie copy failed (%s); بدونِ کوکی ادامه", exc)
+                opts["cookies"] = None
 
         pstate = {"pct": -1}
 
