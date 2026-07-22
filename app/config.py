@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     # قابلِ‌تغییرند (settings_store)؛ مقادیرِ زیر پیش‌فرضِ env‌اند. ۰ = نامحدود.
     downloader_enabled: bool = True
     dl_allow_unknown: bool = True  # لینکِ هاستِ ناشناخته را هم با yt-dlp تلاش کن (از پنل خاموش‌شدنی)
+    dl_rich_posts: bool = True     # پستِ چند‌عکسی را Rich Message بفرست (fallback: آلبوم)
     proxy_url: str = ""            # egressِ تمیزِ خودت، مثل socks5h://host:1080 (خالی = مستقیم)
     cookies_dir: str = ""          # پوشهٔ کوکی‌ها (چرخشِ اکانت برای اینستا/X)
     pot_provider_url: str = ""     # http://bgutil-pot-provider:4416 (توکنِ یوتیوب)
