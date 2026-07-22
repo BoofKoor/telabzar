@@ -16,9 +16,11 @@ import os
 import secrets
 import shutil
 from datetime import datetime, timezone
+from html import escape
 
 from aiogram import Bot
 from aiogram.types import FSInputFile
+from aiogram.utils.media_group import MediaGroupBuilder
 
 from . import dl_cache
 from . import downloader as D
@@ -155,6 +157,42 @@ def _prep_thumb(src: str | None) -> str | None:
         return out
     except Exception:  # noqa: BLE001
         return None
+
+
+_ALBUM_IMG = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif", ".bmp")
+_ALBUM_VID = (".mp4", ".mov", ".webm", ".mkv", ".m4v")
+
+
+async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str],
+                         caption: str | None, lang: str) -> None:
+    """پستِ چند‌تاییِ گالری (کاروسلِ اینستاگرام) → آلبومِ سوایپ‌شدنیِ تلگرام.
+
+    کپشنِ پست (بدونِ هشتگ) روی آیتمِ اول؛ عکس و ویدیو در همان آلبوم؛ بدونِ دکمه/کارت
+    (media group اصلاً reply_markup نمی‌پذیرد → با «کلیدها را لیست نکن» جور است).
+    کاروسلِ بیش از ۱۰ آیتم به چند آلبومِ پشتِ‌سرِ‌هم شکسته می‌شود.
+    """
+    media = [f for f in files
+             if os.path.isfile(f) and os.path.getsize(f) > 0
+             and f.lower().endswith(_ALBUM_IMG + _ALBUM_VID)]
+    if len(media) < 2:  # کمتر از ۲ رسانه → آلبوم بی‌معنی؛ برگرد به کارتِ معمولی
+        for p in media:
+            kind = "video" if p.lower().endswith(_ALBUM_VID) else "image"
+            await _spawn(bot, chat_id, owner_id, p, os.path.basename(p), kind, {}, lang)
+        return
+    cap_text = D.clean_caption(caption)  # تضمینِ بدونِ‌هشتگ + سقفِ ۱۰۲۴ (idempotent)
+    cap = escape(cap_text) if cap_text else None  # parse_mode=HTML → کپشنِ کاربر escape شود
+    for gi in range(0, len(media), 10):  # سقفِ ۱۰ آیتم در هر media group
+        batch = media[gi:gi + 10]
+        b = MediaGroupBuilder(caption=cap if gi == 0 else None)
+        for p in batch:
+            if p.lower().endswith(_ALBUM_VID):
+                b.add_video(media=FSInputFile(p))
+            else:
+                b.add_photo(media=FSInputFile(p))
+        try:
+            await bot.send_media_group(chat_id, media=b.build())
+        except Exception:  # noqa: BLE001
+            log.exception("album send failed (batch starting %d)", gi)
 
 
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
@@ -327,9 +365,11 @@ async def run_download(ctx: dict, payload: dict) -> None:
             await _edit(bot, chat_id, status_mid, t(lang, "dl_downloading", pct=ip),
                         kb=download_cancel_kb(ref, lang))
 
+        gallery_caption = None
         try:
             if engine == "gallerydl":
-                files = await D.download_gallerydl(url, workdir, opts, progress=_progress, cancel=_cancelled)
+                files, gallery_caption = await D.download_gallerydl(
+                    url, workdir, opts, progress=_progress, cancel=_cancelled)
                 paths = [(p, {}, None) for p in files]
             else:
                 try:
@@ -380,13 +420,21 @@ async def run_download(ctx: dict, payload: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass
 
-        if engine != "gallerydl" and len(paths) == 1:
+        if engine == "gallerydl" and len(paths) > 1:
+            # پستِ چند‌تایی (کاروسل) → آلبومِ سوایپ‌شدنی با کپشنِ پست، بدونِ دکمه/کارت
+            await _deliver_album(bot, chat_id, owner_id, [p for p, _i, _t in paths],
+                                 gallery_caption, lang)
+            try:
+                await bot.delete_message(chat_id, status_mid)
+            except Exception:  # noqa: BLE001
+                pass
+        elif engine != "gallerydl" and len(paths) == 1:
             # تک‌فایل → تحویلِ درجا روی همان پیامِ لنگرگاه + کش
             p, info, thumb = paths[0]
             await _deliver_single(bot, chat_id, status_mid, owner_id, p, os.path.basename(p),
                                   _kind_from_info(info, p), info, lang, thumb, url, selector)
         else:
-            # چندفایلی (گالری) → کارتِ جدا برای هرکدام + حذفِ لنگرگاه
+            # تک‌عکسیِ گالری یا حالتِ نادرِ دیگر → کارتِ جدا برای هرکدام + حذفِ لنگرگاه
             for p, info, thumb in paths:
                 kind = _kind_from_info(info, p)
                 name = os.path.basename(p)

@@ -333,10 +333,46 @@ async def download_cobalt(url: str, workdir: str, cobalt_url: str, opts: dict,
     return out, {}, None
 
 
+_HASHTAG_RE = re.compile(r"#[^\s#]+")
+
+
+def clean_caption(text: str | None) -> str | None:
+    """کپشنِ پست را تمیز می‌کند: حذفِ هشتگ‌ها، جمعِ فاصله/خطوطِ اضافی، سقفِ ۱۰۲۴ کاراکترِ تلگرام."""
+    text = _HASHTAG_RE.sub("", text or "")
+    text = "\n".join(ln.rstrip() for ln in text.splitlines())
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if not text:
+        return None
+    if len(text) > 1024:
+        text = text[:1023].rstrip() + "…"
+    return text
+
+
+def _gallery_caption(workdir: str) -> str | None:
+    """کپشنِ پست را از سایدکارِ متادیتای gallery-dl می‌خواند (فیلدِ description)."""
+    for root, _d, names in os.walk(workdir):
+        for n in sorted(names):
+            if not n.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(root, n), encoding="utf-8") as fh:
+                    meta = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(meta, dict):
+                continue
+            for key in ("description", "caption", "content", "title"):
+                val = meta.get(key)
+                if isinstance(val, str) and val.strip():
+                    return clean_caption(val)
+    return None
+
+
 async def download_gallerydl(url: str, workdir: str, opts: dict,
-                             progress=None, cancel=None) -> list[str]:
-    """دانلودِ گالری/کاروسل با gallery-dl → فهرستِ فایل‌ها."""
-    cmd = [GALLERY_DL, "-D", workdir]
+                             progress=None, cancel=None) -> tuple[list[str], str | None]:
+    """دانلودِ گالری/کاروسل با gallery-dl → (فهرستِ فایل‌ها, کپشنِ پست بدونِ هشتگ)."""
+    cmd = [GALLERY_DL, "-D", workdir, "--write-metadata"]  # سایدکارِ .json برای کپشن
     if opts.get("proxy"):
         cmd += ["--proxy", opts["proxy"]]
     if opts.get("cookies"):
@@ -346,8 +382,8 @@ async def download_gallerydl(url: str, workdir: str, opts: dict,
     files = []
     for root, _d, names in os.walk(workdir):
         for n in names:
-            if not n.endswith((".info.json", ".part")):
+            if not n.endswith((".json", ".part")):  # .json = سایدکارِ متادیتا (رسانه نیست)
                 files.append(os.path.join(root, n))
     if not files:
         raise RuntimeError("gallery download produced no files")
-    return sorted(files)
+    return sorted(files), _gallery_caption(workdir)
