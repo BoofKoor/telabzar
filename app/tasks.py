@@ -181,6 +181,26 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         await P.pdf_merge(paths, out)
         return {"path": out, "filename": "merged.pdf", "label": t(lang, "cl_merge", n=len(paths)), "kind": "pdf"}
 
+    if op == "video_concat":
+        members = args.get("members") or []
+        paths = []
+        for m in members:
+            fid = m.get("file_id")
+            if not fid:
+                continue
+            tg = await bot.get_file(fid)
+            p = tg.file_path
+            if not p or not os.path.exists(p):
+                raise RuntimeError(f"member not found on disk: {m.get('name') or fid}")
+            paths.append(p)
+        if len(paths) < 2:
+            raise RuntimeError("need at least two videos to join")
+        out = os.path.join(workdir, f"{stem}-joined.mp4")
+        await P.concat_videos(paths, out, width=file.width, height=file.height,
+                              progress=progress, cancel=cancel)
+        return {"path": out, "filename": f"{stem}-joined.mp4",
+                "label": t(lang, "cl_vjoin", n=len(paths)), "kind": "video"}
+
     if op == "zip":
         out = os.path.join(workdir, f"{stem}.zip")
         await P.make_zip(inpath, out, file.name or stem)
@@ -296,8 +316,8 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             lp = tg.file_path
             if not lp or not os.path.exists(lp):
                 raise RuntimeError("logo not found on disk")
-            scale_w = max(80, (file.width or 640) // 5)
-            await P.watermark_video(inpath, out, lp, pos, scale_w=scale_w,
+            scale_w = max(64, (file.width or 640) // 7)  # کوچک‌تر/استاندارد
+            await P.watermark_video(inpath, out, lp, pos, scale_w=scale_w, opacity=0.65,
                                     progress=progress, duration=dur, cancel=cancel)
         else:
             raise RuntimeError("no watermark content")

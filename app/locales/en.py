@@ -73,6 +73,15 @@ MESSAGES: dict[str, str] = {
     "merge_only_pdf": "⚠️ Please send a PDF file only.",
     "merge_need_more": "Merging needs at least two PDFs.",
     "cl_merge": "📎 Merged {n} PDFs",
+    # join videos (concat)
+    "btn_vjoin": "🎬 Join videos",
+    "btn_vjoin_go": "🎬 Join",
+    "vjoin_collect_prompt": "🎬 <b>Join mode</b> — send the next videos here to append them (in order) to the end of this video, then tap “Join”.",
+    "vjoin_list_header": "🎬 Videos ({n}):",
+    "vjoin_only_video": "⚠️ Please send a video only.",
+    "vjoin_need_more": "Joining needs at least two videos.",
+    "vjoin_too_big": "⚠️ The combined size of the joined videos can't exceed {mb}MB.",
+    "cl_vjoin": "🎬 Joined {n} videos",
     "cl_convert_pages": "🖼 Converted to {n} page images",
     # download / stream links
     "btn_link": "🔗 Link",

@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     # اُفتِ خودکار به ۳۶۰p در بیت‌ریتِ خیلی‌کم؛ ۱۵fps؛ صدای مونو. از پنل قابلِ تغییر.
     compress_tiny_target_mb: int = 250
     compress_tiny_height: int = 480
+    # سقفِ مجموعِ حجمِ ویدیوهای «چسباندن» (MB). ۰ = برگرد به max_file_mb.
+    vjoin_max_mb: int = 0
 
     # رونویسیِ صوت (faster-whisper) — اندازهٔ مدل: tiny/base/small/medium/large-v3.
     # پیش‌فرض base (تعادلِ RAM/دقت روی CPU). بعداً از پنلِ ادمین (M5) قابلِ تغییر
