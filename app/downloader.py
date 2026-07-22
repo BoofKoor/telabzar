@@ -31,7 +31,10 @@ _MEDIA_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".m4v",
                ".mp3", ".m4a", ".opus", ".ogg", ".oga", ".wav", ".flac", ".aac")
 _GALLERY_PLATFORMS = {"instagram", "pinterest"}
 # پلتفرم‌های صوتیِ تک‌استریم: منوی کیفیت بی‌معنی است → همیشه quick-grab.
-AUDIO_PLATFORMS = {"soundcloud", "bandcamp"}
+# spotify هم صوتی است (تطبیق روی یوتیوب) → بی‌منوی کیفیت.
+AUDIO_PLATFORMS = {"soundcloud", "bandcamp", "spotify"}
+# پلتفرم‌های استریمِ DRM‌دار که مستقیم دانلود نمی‌شوند → متادیتا از API + تطبیقِ یوتیوب.
+_MATCH_PLATFORMS = {"spotify"}
 # میزبان‌های داخلی که هرگز نباید دانلود شوند (دفاعِ پایهٔ SSRF)
 _BLOCK_HOSTS = {"localhost", "metadata.google.internal", "169.254.169.254"}
 
@@ -41,7 +44,7 @@ PLATFORM_LABELS = {
     "tiktok": "تیک‌تاک", "pinterest": "پینترست", "soundcloud": "ساندکلاود",
     "aparat": "آپارات", "vimeo": "ویمئو", "twitch": "توییچ",
     "dailymotion": "دیلی‌موشن", "bandcamp": "بندکمپ", "reddit": "ردیت",
-    "streamable": "استریمبل", "other": "عمومی / سایر",
+    "streamable": "استریمبل", "spotify": "اسپاتیفای", "other": "عمومی / سایر",
 }
 # برچسبِ انگلیسیِ پلتفرم‌ها (برای پیامِ کاربرِ en).
 PLATFORM_LABELS_EN = {
@@ -49,7 +52,7 @@ PLATFORM_LABELS_EN = {
     "tiktok": "TikTok", "pinterest": "Pinterest", "soundcloud": "SoundCloud",
     "aparat": "Aparat", "vimeo": "Vimeo", "twitch": "Twitch",
     "dailymotion": "Dailymotion", "bandcamp": "Bandcamp", "reddit": "Reddit",
-    "streamable": "Streamable", "other": "the site",
+    "streamable": "Streamable", "spotify": "Spotify", "other": "the site",
 }
 # پلتفرم‌های شناخته‌شده (برای متریکِ per-host؛ «other» شناخته‌شده نیست).
 KNOWN_PLATFORMS = tuple(k for k in PLATFORM_LABELS if k != "other")
@@ -90,6 +93,13 @@ def describe_link(url: str, platform: str, lang: str = "fa") -> str:
         return "ویدیوی تیک‌تاک" if fa else "a TikTok video"
     if platform == "pinterest":
         return "پینِ پینترست" if fa else "a Pinterest pin"
+    if platform == "spotify":
+        kind, _sid = spotify_id(url)
+        if kind == "album":
+            return "آلبومِ اسپاتیفای" if fa else "a Spotify album"
+        if kind == "playlist":
+            return "پلی‌لیستِ اسپاتیفای" if fa else "a Spotify playlist"
+        return "آهنگِ اسپاتیفای" if fa else "a Spotify track"
     label = platform_label(platform, lang)
     if platform == "other":
         return "لینک" if fa else "a link"
@@ -149,11 +159,16 @@ def platform_of(url: str) -> str:
         return "reddit"
     if "streamable.com" in host:
         return "streamable"
+    if "spotify.com" in host or host == "spotify":  # open.spotify.com و spotify: URI
+        return "spotify"
     return "other"
 
 
 def engine_for(url: str, platform: str | None = None) -> str:
-    return "gallerydl" if (platform or platform_of(url)) in _GALLERY_PLATFORMS else "ytdlp"
+    p = platform or platform_of(url)
+    if p in _MATCH_PLATFORMS:
+        return "spotify"       # متادیتا از API + تطبیقِ یوتیوب
+    return "gallerydl" if p in _GALLERY_PLATFORMS else "ytdlp"
 
 
 def is_safe_url(url: str) -> bool:
@@ -492,6 +507,153 @@ async def download_cobalt(url: str, workdir: str, cobalt_url: str, opts: dict,
     if not os.path.exists(out) or os.path.getsize(out) == 0:
         raise RuntimeError("cobalt produced no file")
     return out, {}, None
+
+
+# ── Spotify: متادیتا از Web API + تطبیقِ صوت روی یوتیوب ─────────────
+# اسپاتیفای DRM دارد؛ استریمِ واقعی دانلود نمی‌شود. مسیر: با client-credentials
+# متادیتا بگیر (بی‌نیاز به لاگینِ کاربر) → بهترین تطبیق را روی یوتیوب دانلود کن →
+# (اختیاری) تگ/کاور را با متادیتای اسپاتیفای بازنویسی کن.
+_SPOTIFY_RE = re.compile(
+    r"open\.spotify\.com/(?:intl-[\w-]+/)?(track|album|playlist)/([A-Za-z0-9]+)")
+
+
+def spotify_id(url: str) -> tuple[str | None, str | None]:
+    m = _SPOTIFY_RE.search(url or "")
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+async def _spotify_token(client_id: str, secret: str) -> str:
+    import aiohttp
+    async with aiohttp.ClientSession() as s:
+        async with s.post("https://accounts.spotify.com/api/token",
+                          data={"grant_type": "client_credentials"},
+                          auth=aiohttp.BasicAuth(client_id, secret)) as r:
+            if r.status != 200:
+                raise RuntimeError(f"spotify auth failed (HTTP {r.status}) — کلیدها را چک کن")
+            return (await r.json())["access_token"]
+
+
+async def _spotify_get(url: str, token: str) -> dict:
+    import aiohttp
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url, headers={"Authorization": f"Bearer {token}"}) as r:
+            if r.status != 200:
+                raise RuntimeError(f"spotify API {r.status}")
+            return await r.json()
+
+
+def _track_meta(t: dict, album: dict | None = None) -> dict:
+    album = album or t.get("album") or {}
+    images = album.get("images") or []
+    return {
+        "title": t.get("name") or "",
+        "artist": ", ".join(a["name"] for a in (t.get("artists") or []) if a.get("name")),
+        "album": album.get("name") or "",
+        "year": (album.get("release_date") or "")[:4],
+        "cover_url": images[0]["url"] if images else None,
+        "duration": int((t.get("duration_ms") or 0) / 1000) or None,
+        "isrc": (t.get("external_ids") or {}).get("isrc"),
+    }
+
+
+async def spotify_resolve(url: str, client_id: str, secret: str, max_tracks: int = 20) -> dict:
+    """لینکِ اسپاتیفای → {kind, title, tracks[]} با متادیتای هر ترک."""
+    kind, sid = spotify_id(url)
+    if not kind:
+        raise RuntimeError("unsupported spotify link")
+    token = await _spotify_token(client_id, secret)
+    tracks: list[dict] = []
+    title = ""
+    if kind == "track":
+        t = await _spotify_get(f"https://api.spotify.com/v1/tracks/{sid}", token)
+        title = t.get("name") or ""
+        tracks = [_track_meta(t)]
+    elif kind == "album":
+        alb = await _spotify_get(f"https://api.spotify.com/v1/albums/{sid}", token)
+        title = alb.get("name") or ""
+        for it in (alb.get("tracks", {}).get("items") or [])[:max_tracks]:
+            tracks.append(_track_meta(it, album=alb))  # آیتمِ آلبوم خودش album ندارد
+    elif kind == "playlist":
+        pl = await _spotify_get(f"https://api.spotify.com/v1/playlists/{sid}", token)
+        title = pl.get("name") or ""
+        for it in (pl.get("tracks", {}).get("items") or [])[:max_tracks]:
+            tr = it.get("track") or {}
+            if tr.get("name"):
+                tracks.append(_track_meta(tr))
+    return {"kind": kind, "title": title, "tracks": tracks[:max_tracks]}
+
+
+async def _fetch_cover(url: str | None, dest_dir: str) -> str | None:
+    if not url:
+        return None
+    import aiohttp
+    try:
+        out = os.path.join(dest_dir, "cover.jpg")
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url) as r:
+                if r.status != 200:
+                    return None
+                data = await r.read()
+        with open(out, "wb") as fh:
+            fh.write(data)
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def download_spotify(url: str, workdir: str, opts: dict,
+                           progress=None, cancel=None) -> list[tuple[str, dict, str | None]]:
+    """هر ترکِ اسپاتیفای را با تطبیق روی یوتیوب دانلود می‌کند → لیستِ (path, info, thumb).
+
+    info['sp'] متادیتای اسپاتیفای (title/artist/album/year/cover_path) را حمل می‌کند تا
+    tasks_download در صورتِ روشن‌بودنِ کلیدِ متادیتا، تگ/کاور را بازنویسی کند.
+    کوکی/پروکسی/pot از opts همان مالِ یوتیوب است (دانلودِ واقعی از یوتیوب انجام می‌شود).
+    """
+    cid, secret = opts.get("spotify_client_id"), opts.get("spotify_client_secret")
+    if not cid or not secret:
+        raise RuntimeError("spotify not configured")  # → پیامِ «در پنل تنظیم کن»
+    max_tracks = int(opts.get("spotify_max_tracks") or 20)
+    resolved = await spotify_resolve(url, cid, secret, max_tracks)
+    tracks = resolved["tracks"]
+    if not tracks:
+        raise RuntimeError("spotify: no tracks found")
+    n = len(tracks)
+    results: list[tuple[str, dict, str | None]] = []
+    for i, tr in enumerate(tracks):
+        if cancel is not None and await cancel():
+            raise ProcessingCancelled()
+        tdir = os.path.join(workdir, f"t{i}")
+        os.makedirs(tdir, exist_ok=True)
+        query = f"ytsearch1:{tr['artist']} - {tr['title']}".strip(" -")
+
+        async def _p(pct: float, _i=i) -> None:  # پیشرفتِ کلی روی همهٔ ترک‌ها
+            if progress is not None:
+                await progress((_i * 100 + pct) / n)
+
+        try:
+            path, yinfo, _thumb = await download_ytdlp(query, tdir, "audio", opts,
+                                                       progress=_p, cancel=cancel)
+        except ProcessingCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # pot-provider می‌تواند yt-dlp را بیندازد → یک‌بار بدونِ pot؛ وگرنه این ترک را رد کن
+            if opts.get("pot_provider"):
+                try:
+                    path, yinfo, _thumb = await download_ytdlp(
+                        query, tdir, "audio", {**opts, "pot_provider": None}, progress=_p, cancel=cancel)
+                except ProcessingCancelled:
+                    raise
+                except Exception:  # noqa: BLE001
+                    continue
+            else:
+                continue
+        cover_path = await _fetch_cover(tr.get("cover_url"), tdir)
+        info = {"duration": tr.get("duration") or yinfo.get("duration"),
+                "sp": {**tr, "cover_path": cover_path}}
+        results.append((path, info, None))
+    if not results:
+        raise RuntimeError("spotify: no tracks could be matched on YouTube")
+    return results
 
 
 _HASHTAG_RE = re.compile(r"#[^\s#]+")

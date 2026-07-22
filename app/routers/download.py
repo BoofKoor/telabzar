@@ -95,6 +95,10 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     if platform == "other" and not await settings_store.get_bool(
             "dl_allow_unknown", settings.dl_allow_unknown):
         return
+    # اسپاتیفای فقط اگر ادمین روشنش کرده باشد (نیازمندِ client id/secret)
+    if platform == "spotify" and not await settings_store.get_bool(
+            "spotify_enabled", settings.spotify_enabled):
+        return
     uid = user.tg_user_id if user else 0
     owner_id = user.id if user else 0
     block = await _precheck(arq_pool, uid, lang)

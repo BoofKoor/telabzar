@@ -6,3 +6,4 @@ clamd>=1.0,<2              # importِ تنبل؛ سبک است، برای اطم
 yt-dlp[default]            # موتورِ اصلی + yt-dlp-ejs (رانتایمِ JS)
 gallery-dl                 # گالری/کاروسلِ عکس
 bgutil-ytdlp-pot-provider  # پلاگینِ PO Token یوتیوب
+aiohttp                    # Spotify Web API + Cobalt (aiogram هم می‌آورد؛ صریح برای اطمینان)

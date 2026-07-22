@@ -14,6 +14,7 @@ import glob
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import time
@@ -112,14 +113,19 @@ async def _metric(redis, platform: str, ok: bool) -> None:
 
 async def _opts(redis, platform: str) -> dict:
     pot_on = await settings_store.get_bool("dl_pot_enabled", settings.dl_pot_enabled)
+    # اسپاتیفای دانلودِ واقعی را از یوتیوب می‌گیرد → کوکیِ یوتیوب لازم است، نه اسپاتیفای
+    cookie_platform = "youtube" if platform == "spotify" else platform
     return {
         "proxy": await settings_store.get_str("proxy_url", settings.proxy_url) or None,
         "pot_provider": (settings.pot_provider_url or None) if pot_on else None,
-        "cookies": await _pick_cookies(redis, platform),
+        "cookies": await _pick_cookies(redis, cookie_platform),
         "max_mb": await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb),
         "sponsorblock": await settings_store.get_str("dl_sponsorblock", settings.dl_sponsorblock) or None,
         "subs": await settings_store.get_bool("dl_subs", settings.dl_subs),
         "cobalt_key": settings.cobalt_api_key or None,
+        "spotify_client_id": await settings_store.get_str("spotify_client_id", settings.spotify_client_id),
+        "spotify_client_secret": await settings_store.get_str("spotify_client_secret", settings.spotify_client_secret),
+        "spotify_max_tracks": await settings_store.get_int("spotify_max_tracks", settings.spotify_max_tracks),
     }
 
 
@@ -297,6 +303,39 @@ async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int
             log.exception("dl in-place delivery failed")
 
 
+_SP_NAME_RE = re.compile(r'[\\/:*?"<>|\x00]+')
+
+
+async def _apply_spotify_meta(
+        paths: list[tuple[str, dict, str | None]]) -> list[tuple[str, dict, str | None]]:
+    """کلیدِ متادیتا روشن → تگ/کاورِ نهایی را با متادیتای اسپاتیفای بازنویسی می‌کند.
+
+    خروجی: مسیرِ تازهٔ تگ‌خورده با نامِ «هنرمند - آهنگ». اگر نشد، فایلِ اصلی
+    (متادیتای یوتیوب) نگه داشته می‌شود. تلگرام عنوان/هنرمند/کاور را از همین تگ می‌خواند.
+    """
+    out: list[tuple[str, dict, str | None]] = []
+    for path, info, thumb in paths:
+        sp = (info or {}).get("sp") or {}
+        tags: dict[str, str] = {}
+        for src, dst in (("title", "title"), ("artist", "artist"), ("album", "album"), ("year", "date")):
+            if sp.get(src):
+                tags[dst] = sp[src]
+        if not tags:
+            out.append((path, info, thumb))
+            continue
+        stem = _SP_NAME_RE.sub("_", f"{sp.get('artist', '')} - {sp.get('title', '')}".strip(" -"))[:100] or "track"
+        newp = os.path.join(os.path.dirname(path), stem + os.path.splitext(path)[1])
+        if os.path.abspath(newp) == os.path.abspath(path):
+            newp = os.path.join(os.path.dirname(path), stem + ".sp" + os.path.splitext(path)[1])
+        try:
+            await P.write_audio_metadata(path, newp, tags, cover_path=sp.get("cover_path"))
+            out.append((newp, info, thumb))
+        except Exception:  # noqa: BLE001
+            log.warning("spotify meta write failed for %s", path)
+            out.append((path, info, thumb))
+    return out
+
+
 async def run_download(ctx: dict, payload: dict) -> None:
     bot: Bot = ctx["bot"]
     redis = ctx.get("redis")
@@ -392,7 +431,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
         # تیک‌زنِ پس‌زمینه هیچ‌وقت «قفل‌شده» به‌نظر نمی‌رسد — چه yt-dlp که درصد می‌دهد،
         # چه gallery-dl که نمی‌دهد (فقط اسپینر + زمان). نزدیکِ پایان → «لحظه‌های آخر».
         plabel = D.platform_label(platform, lang)
-        narr = {"label": t(lang, "dl_fetching"), "pct": None, "eta": None}
+        # اسپاتیفای دانلودِ واقعی ندارد؛ روی یوتیوب تطبیق می‌دهد → برچسبِ گویاتر
+        fetch_label = t(lang, "dl_matching") if engine == "spotify" else t(lang, "dl_fetching")
+        narr = {"label": fetch_label, "pct": None, "eta": None}
         nstart = time.monotonic()
 
         async def _progress(pct: float) -> None:
@@ -400,7 +441,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
             narr["pct"] = ip
             elapsed = time.monotonic() - nstart
             narr["eta"] = (elapsed / ip * (100 - ip)) if ip > 3 else None
-            narr["label"] = t(lang, "dl_almost") if ip >= 92 else t(lang, "dl_fetching")
+            narr["label"] = t(lang, "dl_almost") if ip >= 92 else fetch_label
 
         async def _ticker() -> None:
             tick = 0
@@ -434,6 +475,13 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 files, gallery_caption = await D.download_gallerydl(
                     url, workdir, opts, progress=_progress, cancel=_cancelled)
                 paths = [(p, {}, None) for p in files]
+            elif engine == "spotify":
+                # متادیتا از اسپاتیفای + تطبیق روی یوتیوب؛ کلیدِ متادیتا تعیین می‌کند تگ/کاورِ
+                # نهایی از اسپاتیفای باشد (روشن) یا از یوتیوب بماند (پیش‌فرض/خاموش).
+                paths = await D.download_spotify(url, workdir, opts,
+                                                 progress=_progress, cancel=_cancelled)
+                if await settings_store.get_bool("spotify_meta", settings.spotify_meta):
+                    paths = await _apply_spotify_meta(paths)
             else:
                 try:
                     path, info, thumb = await D.download_ytdlp(url, workdir, selector, opts,
@@ -481,7 +529,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
             if any(h in low for h in _BAN_HINTS):
                 await _cooldown_cookie(redis, cookie)
             await _metric(redis, platform, ok=False)
-            if D.is_youtube_botcheck(msg, platform):
+            if "spotify not configured" in low or "spotify auth failed" in low:
+                await _edit(bot, chat_id, status_mid, t(lang, "dl_spotify_setup"))
+            elif D.is_youtube_botcheck(msg, platform):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
             elif any(h in low for h in _LOGIN_HINTS):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_need_cookies", platform=plabel))
