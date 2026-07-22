@@ -19,13 +19,16 @@ from sqlalchemy import delete as sa_delete, select
 
 from . import settings_store
 from .db import Sessionmaker
-from .models import TextOverride
+from .models import ButtonStyle, TextOverride
 
 log = logging.getLogger("telabzar.textstore")
 
-_VER_KEY = "txtver"
+_VER_KEY = "txtver"  # شمارندهٔ ابطالِ مشترکِ متن‌ها + استایلِ کلیدها
 _overrides: dict[tuple[str, str], str] = {}
+_button_styles: dict[str, tuple[str | None, str | None]] = {}  # op → (style, icon_emoji_id)
 _loaded_ver: int | None = None  # None = هنوز لود نشده
+
+_BUTTON_STYLES = ("primary", "success", "danger")  # رنگ‌های مجازِ Bot API
 
 # تگ‌های مجازِ HTMLِ تلگرام (bot messages).
 _ALLOWED_TAGS = {
@@ -45,16 +48,27 @@ def snapshot() -> dict[tuple[str, str], str]:
     return dict(_overrides)
 
 
+def get_button_style(op: str) -> tuple[str | None, str | None]:
+    """(style, icon_emoji_id) برای یک op؛ (None, None) اگر تنظیم نشده. (sync، داغ)"""
+    return _button_styles.get(op, (None, None))
+
+
+def button_snapshot() -> dict[str, tuple[str | None, str | None]]:
+    return dict(_button_styles)
+
+
 def _redis():
     store = settings_store.get_store()
     return store.r if store is not None else None
 
 
 async def _load_from_db() -> None:
-    global _overrides
+    global _overrides, _button_styles
     async with Sessionmaker() as s:
         rows = (await s.execute(select(TextOverride))).scalars().all()
+        brows = (await s.execute(select(ButtonStyle))).scalars().all()
     _overrides = {(r.lang, r.key): r.value for r in rows}
+    _button_styles = {b.op: (b.style, b.icon_emoji_id) for b in brows}
 
 
 async def _redis_ver() -> int:
@@ -117,6 +131,30 @@ async def reset_text(lang: str, key: str) -> None:
     async with Sessionmaker() as s:
         await s.execute(sa_delete(TextOverride).where(
             TextOverride.lang == lang, TextOverride.key == key))
+        await s.commit()
+    await _bump_and_reload()
+
+
+# ── استایلِ کلیدها (رنگ + آیکونِ ایموجیِ پرمیوم) ────────────────
+def clean_button(style: str, emoji: str) -> tuple[str | None, str | None]:
+    """ورودیِ خام → مقادیرِ معتبر (style مجاز، emoji فقط رقمی)؛ نامعتبر → None."""
+    s = style.strip() if style else ""
+    e = emoji.strip() if emoji else ""
+    return (s if s in _BUTTON_STYLES else None, e if e.isdigit() else None)
+
+
+async def set_button_styles(mapping: dict[str, tuple[str | None, str | None]]) -> None:
+    """چند op را یک‌جا ست/ریست می‌کند و فقط یک‌بار نسخه را bump می‌کند."""
+    async with Sessionmaker() as s:
+        for op, (style, emoji) in mapping.items():
+            row = await s.get(ButtonStyle, op)
+            if not style and not emoji:          # هیچ‌کدام → حذفِ ردیف
+                if row is not None:
+                    await s.delete(row)
+            elif row is None:
+                s.add(ButtonStyle(op=op, style=style, icon_emoji_id=emoji))
+            else:
+                row.style, row.icon_emoji_id = style, emoji
         await s.commit()
     await _bump_and_reload()
 

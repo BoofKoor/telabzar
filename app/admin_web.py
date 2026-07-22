@@ -34,7 +34,8 @@ from . import textstore
 from .config import settings
 from .db import Sessionmaker
 from .downloader import KNOWN_PLATFORMS, PLATFORM_LABELS
-from .i18n import CATALOG
+from .i18n import CATALOG, t as _t
+from .keyboards import OPS_BY_KIND
 from .models import File, Job, User
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
 
@@ -236,6 +237,7 @@ _BASE = """<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
 <nav class=nav>
   <a class="{{'on' if active=='settings'}}" href=/>⚙️ تنظیمات</a>
   <a class="{{'on' if active=='texts'}}" href=/texts>✏️ متن‌ها</a>
+  <a class="{{'on' if active=='buttons'}}" href=/buttons>🎨 کلیدها</a>
   <a class="{{'on' if active=='cookies'}}" href=/cookies>🍪 کوکی‌ها</a>
   <a class="{{'on' if active=='health'}}" href=/health>🩺 سلامت</a>
   <a class="{{'on' if active=='users'}}" href=/users>👤 کاربران</a>
@@ -522,11 +524,45 @@ _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% b
   {% if truncated %}<div class=empty>فقط {{items|length}} موردِ اول نشان داده شد — جست‌وجو را دقیق‌تر کن.</div>{% endif %}
 </div>{% endblock %}"""
 
+_BUTTONS = """{% extends 'base' %}{% block title %}کلیدها{% endblock %}{% block heading %}استایلِ کلیدها{% endblock %}
+{% block style %}
+.bt-item{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:9px 0}
+.bt-lab{flex:1;min-width:150px}.bt-lab small{color:#64748b;font-size:11px;margin-inline-start:6px}
+.bt-item .sel{min-width:130px}.bt-item .inp{width:150px}
+.sw{width:12px;height:12px;border-radius:4px;display:inline-block;vertical-align:middle;margin-inline-end:5px}
+{% endblock %}
+{% block body %}
+<div class=card>
+  <h3>رنگ و ایموجیِ کلیدها <span class=tag>بی‌ری‌استارت</span></h3>
+  <div class=hint style="margin-bottom:10px;color:#94a3b8;font-size:12.5px">
+    رنگ = یکی از <b><span class=sw style=background:#3b82f6></span>آبی</b> /
+    <b><span class=sw style=background:#22c55e></span>سبز</b> /
+    <b><span class=sw style=background:#ef4444></span>قرمز</b> (تنها ۳ حالتِ تلگرام).
+    ایموجی = آیدیِ عددیِ ایموجیِ پرمیوم (اختیاری؛ نیازمندِ Premium بودنِ اکانتِ ربات).
+  </div>
+  {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
+  <form method=post action=/buttons/save>
+  {% for it in items %}
+    <div class=bt-item>
+      <div class=bt-lab>{{it.label}}<small>{{it.op}}</small></div>
+      <select class=sel name="style_{{it.op}}">
+        <option value="" {% if not it.style %}selected{% endif %}>— بی‌رنگ</option>
+        <option value=primary {% if it.style=='primary' %}selected{% endif %}>آبی (primary)</option>
+        <option value=success {% if it.style=='success' %}selected{% endif %}>سبز (success)</option>
+        <option value=danger {% if it.style=='danger' %}selected{% endif %}>قرمز (danger)</option>
+      </select>
+      <input class=inp name="emoji_{{it.op}}" value="{{it.emoji}}" inputmode=numeric placeholder="آیدیِ ایموجی">
+    </div>
+  {% endfor %}
+    <button class=save style="margin-top:14px">ذخیرهٔ همه</button>
+  </form>
+</div>{% endblock %}"""
+
 ENV = Environment(
     loader=DictLoader({
         "base": _BASE, "settings": _SETTINGS, "cookies": _COOKIES,
         "health": _HEALTH, "users": _USERS, "stats": _STATS, "login": _LOGIN,
-        "texts": _TEXTS,
+        "texts": _TEXTS, "buttons": _BUTTONS,
     }),
     autoescape=select_autoescape(default=True, default_for_string=True),
 )
@@ -1019,6 +1055,45 @@ async def texts_reset(request: web.Request) -> web.Response:
     raise _texts_redirect(lang if lang in ("fa", "en") else "fa", q, ok="r")
 
 
+# ── استایلِ کلیدها (رنگ + آیکونِ ایموجیِ پرمیوم) ────────────────
+_BTN_OPS: list[tuple[str, str]] = []  # (op, کلیدِ لیبل) — یکتا در ترتیبِ منوها
+_seen_ops: set[str] = set()
+for _kind, _ops in OPS_BY_KIND.items():
+    for _op, _key in _ops:
+        if _op not in _seen_ops:
+            _seen_ops.add(_op)
+            _BTN_OPS.append((_op, _key))
+
+
+def _button_items() -> list[dict]:
+    cur = textstore.button_snapshot()
+    out = []
+    for op, key in _BTN_OPS:
+        style, emoji = cur.get(op, (None, None))
+        out.append({"op": op, "label": _t("fa", key), "style": style or "", "emoji": emoji or ""})
+    return out
+
+
+async def buttons_page(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    saved = "استایلِ کلیدها ذخیره شد (بی‌ری‌استارت اعمال شد)." if request.query.get("ok") == "1" else ""
+    return _render("buttons", admin_id=_session_admin(request), active="buttons",
+                   pill_ok=await _pill_ok(request.app), items=_button_items(), saved=saved)
+
+
+async def buttons_save(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    mapping: dict[str, tuple[str | None, str | None]] = {}
+    for op, _key in _BTN_OPS:
+        mapping[op] = textstore.clean_button(
+            form.get(f"style_{op}", ""), form.get(f"emoji_{op}", ""))
+    await textstore.set_button_styles(mapping)
+    raise web.HTTPFound("/buttons?ok=1")
+
+
 async def cookies_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
@@ -1237,6 +1312,8 @@ def build_app() -> web.Application:
     app.router.add_get("/texts", texts_page)
     app.router.add_post("/texts/save", texts_save)
     app.router.add_post("/texts/reset", texts_reset)
+    app.router.add_get("/buttons", buttons_page)
+    app.router.add_post("/buttons/save", buttons_save)
     app.router.add_get("/healthz", healthz)
     if os.path.isdir(_STATIC_DIR):
         app.router.add_static("/static", _STATIC_DIR)

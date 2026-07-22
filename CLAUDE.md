@@ -42,7 +42,7 @@ processing (`processing.py`, `downloader.py`) → delivery (`cards.py`, or `gate
 | `app/bot.py` | `Bot`/`Dispatcher` factories; router order **start → admin → ops → download → files** |
 | `app/config.py` | `Settings` (pydantic-settings) — all env vars; `admin_id_set` property |
 | `app/db.py` | Async engine/sessionmaker; `init_models()` = `create_all` + lightweight `_MIGRATIONS` (no Alembic) |
-| `app/models.py` | ORM: `User`, `File`, `Setting`, `DownloadCache`, `Job`, `TextOverride` |
+| `app/models.py` | ORM: `User`, `File`, `Setting`, `DownloadCache`, `Job`, `TextOverride`, `ButtonStyle` |
 | `app/middlewares.py` | `DataMiddleware`: per-update DB session, get/create user, inject `lang`+`is_admin`, block-gate |
 | `app/routers/start.py` | `/start`, language pick |
 | `app/routers/admin.py` | `/admin` (list/get/set/reset/health) + `/panel`, admin-only |
@@ -58,8 +58,8 @@ processing (`processing.py`, `downloader.py`) → delivery (`cards.py`, or `gate
 | `app/processing.py` | ffmpeg/Pillow ops; `_run` subprocess contract (progress/cancel/`ProcessingCancelled`) |
 | `app/downloader.py` | Engine routing (`platform_of`/`engine_for`), yt-dlp/gallery-dl/cobalt/Spotify, YT-match scorer |
 | `app/settings_store.py` | Runtime config: Postgres (durable) + Redis (live, read-through); `RUNTIME_KEYS`/`ENUM_VALUES` |
-| `app/textstore.py` | Runtime-editable bot texts/labels: `TextOverride` (Postgres) + in-process dict, reloaded on a Redis version counter `txtver`; `validate()` (placeholders + Telegram HTML) |
-| `app/admin_web.py` | Web panel: settings/texts/health/users/stats/cookies; `GROUPS` = panel rows |
+| `app/textstore.py` | Runtime-editable bot texts/labels **and** per-op button `style`+`icon_emoji_id` (`TextOverride`/`ButtonStyle`, Postgres) via one in-process dict reloaded on the Redis `txtver` counter; `validate()` (placeholders + Telegram HTML), `clean_button()` |
+| `app/admin_web.py` | Web panel: settings/texts/buttons/health/users/stats/cookies; `GROUPS` = panel rows |
 | `app/gateway.py` | `/dl` + `/s` file serving (Range, faststart-friendly, token→path cache) |
 | `app/security.py` | ClamAV INSTREAM scan |
 | `app/filetypes.py` | `detect()` message→`FileInfo`; kind = image/video/audio/document/pdf/archive/app |
@@ -164,7 +164,8 @@ Verification is currently done with ad-hoc scratchpad scripts outside the repo (
 - **Callback 64-byte cap**: never pack large data into `CallbackData`; store in Redis, pass a token.
 - **No Alembic**: schema evolves via idempotent `ALTER … IF NOT EXISTS` in `db.py:_MIGRATIONS`.
 - **Locale parity**: every key must exist in both `locales/fa.py` and `locales/en.py`.
-- **`t()` is sync & hot**: text overrides live in an in-process dict, refreshed only when the Redis `txtver` counter changes (bumped on panel edit) — checked per-update in `DataMiddleware` and per-job in the workers. Do NOT make `t()` async or read the DB on every call. Premium/custom emoji (`<tg-emoji emoji-id=…>` in text, `icon_custom_emoji_id`/`style` on buttons — Phase B) require the **bot owner's account to have Telegram Premium**; button `style` (primary/success/danger) does not.
+- **`t()` is sync & hot**: text overrides live in an in-process dict, refreshed only when the Redis `txtver` counter changes (bumped on panel edit) — checked per-update in `DataMiddleware` and per-job in the workers. Do NOT make `t()` async or read the DB on every call. Button styles (`file_card_kb`, per-op via `textstore.get_button_style`) share the same dict + `txtver` reload.
+- **Premium/custom emoji**: `<tg-emoji emoji-id=…>` in text and `icon_custom_emoji_id` on buttons require the **bot owner's account to have Telegram Premium**; button `style` (`primary`/`success`/`danger`, the only 3 colors Telegram allows) does not. Only the card op-menu (`OPS_BY_KIND` ops) is styled today. A wrong `icon_emoji_id` can make Telegram reject the whole keyboard — the panel validates it is numeric, but existence isn't checked.
 
 ## 8. Reference Docs
 - `docs/telegram-api.md` — recent Telegram Bot API changelog (10.0→10.2), project-relevant, with sources.
@@ -177,4 +178,5 @@ Verification is currently done with ad-hoc scratchpad scripts outside the repo (
 
 ## Changelog
 - 2026-07-22 — Initial CLAUDE.md as repo source-of-truth: overview, architecture + module map, verified role hierarchy (admin/user only), dependency versions from the four requirements files, conventions + add-an-op steps, env/deploy, known gotchas; added `docs/telegram-api.md`. Reason: establish a durable, code-backed reference and the mandatory update workflow.
-- 2026-07-22 — Runtime-editable texts (Phase A): new `TextOverride` model + `app/textstore.py` (in-process overrides reloaded via Redis `txtver`); `i18n.t()` prefers overrides with format-fallback; panel `/texts` editor (search/edit/reset, placeholder+HTML validation); refresh wired into `DataMiddleware` + both workers. Reason: stop hardcoding user-facing strings — admin can edit any text/label (HTML + premium emoji) with no restart. Phase B (button `style`/`icon_custom_emoji_id`) pending.
+- 2026-07-22 — Runtime-editable texts (Phase A): new `TextOverride` model + `app/textstore.py` (in-process overrides reloaded via Redis `txtver`); `i18n.t()` prefers overrides with format-fallback; panel `/texts` editor (search/edit/reset, placeholder+HTML validation); refresh wired into `DataMiddleware` + both workers. Reason: stop hardcoding user-facing strings — admin can edit any text/label (HTML + premium emoji) with no restart.
+- 2026-07-22 — Button styling (Phase B): new `ButtonStyle` model + button funcs in `textstore` (shared `txtver` reload); `file_card_kb` applies per-op `style` (primary/success/danger) + `icon_custom_emoji_id`; panel `/buttons` page (per-op color + premium-emoji id, one-save batch, `clean_button` validation). Reason: admin sets card-button color + premium-emoji icon with no restart.
