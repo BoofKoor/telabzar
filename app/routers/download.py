@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import dl_cache, settings_store
 from ..callbacks import Dl
 from ..config import settings
-from ..downloader import engine_for, find_url, is_safe_url, platform_of
+from ..downloader import AUDIO_PLATFORMS, engine_for, find_url, is_safe_url, platform_of
 from ..i18n import t
 from ..models import User
 
@@ -32,6 +32,8 @@ def _today() -> str:
 
 
 async def _resolve_ux(platform: str) -> str:
+    if platform in AUDIO_PLATFORMS:
+        return "quick"  # صوتِ تک‌استریم منوی کیفیت ندارد
     per = await settings_store.get_str(f"dl_ux_{platform}", "")
     if per in ("probe", "quick"):
         return per
@@ -86,6 +88,11 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     if not is_safe_url(url):
         await message.reply(t(lang, "dl_bad_link"))
         return
+    platform = platform_of(url)
+    # هاستِ ناشناخته فقط اگر ادمین «تلاش برای هر لینک» را روشن گذاشته باشد
+    if platform == "other" and not await settings_store.get_bool(
+            "dl_allow_unknown", settings.dl_allow_unknown):
+        return
     uid = user.tg_user_id if user else 0
     owner_id = user.id if user else 0
     block = await _precheck(arq_pool, uid, lang)
@@ -93,7 +100,6 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
         await message.reply(block)
         return
 
-    platform = platform_of(url)
     engine = engine_for(url, platform)
     ux = await _resolve_ux(platform)
     quick = not (ux == "probe" and engine == "ytdlp")

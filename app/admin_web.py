@@ -32,6 +32,7 @@ from sqlalchemy import func, select, text as sql_text
 from . import settings_store
 from .config import settings
 from .db import Sessionmaker
+from .downloader import KNOWN_PLATFORMS, PLATFORM_LABELS
 from .models import File, Job, User
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
 
@@ -51,7 +52,8 @@ COOKIE_PLATFORMS = [
     ("pinterest", "پینترست"),
     ("other", "عمومی / سایر"),
 ]
-_PLATFORM_FA = dict(COOKIE_PLATFORMS)
+# برچسبِ فارسیِ همهٔ پلتفرم‌ها (منبعِ واحد در downloader؛ شاملِ پلتفرم‌های نوِ دانلود).
+_PLATFORM_FA = dict(PLATFORM_LABELS)
 
 # گروه‌بندیِ کلیدها برای فرم: (عنوانِ کارت, [(کلید, برچسب, توضیح)])
 GROUPS = [
@@ -62,6 +64,7 @@ GROUPS = [
     ]),
     ("⬇️ دانلودر", [
         ("downloader_enabled", "دانلودر فعال", ""),
+        ("dl_allow_unknown", "تلاش برای هر لینک", "هاستِ ناشناخته را هم دانلود کن"),
         ("dl_default_ux", "رفتارِ پیش‌فرضِ لینک", ""),
         ("dl_ux_youtube", "کیفیتِ یوتیوب", ""),
         ("dl_ux_instagram", "کیفیتِ اینستاگرام", ""),
@@ -515,7 +518,7 @@ async def _health(app: web.Application) -> dict:
     # نرخِ per-host امروز (لیستِ مرتب برای رندر)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     hosts = []
-    for p in ("youtube", "instagram", "tiktok", "twitter", "pinterest"):
+    for p in KNOWN_PLATFORMS:
         ok = await _int(f"dlstat:{p}:ok:{day}")
         fail = await _int(f"dlstat:{p}:fail:{day}")
         if ok + fail:

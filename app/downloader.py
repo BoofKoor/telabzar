@@ -25,8 +25,21 @@ GALLERY_DL = "gallery-dl"
 
 _URL_RE = re.compile(r"https?://[^\s<>()]+", re.I)
 _GALLERY_PLATFORMS = {"instagram", "pinterest"}
+# پلتفرم‌های صوتیِ تک‌استریم: منوی کیفیت بی‌معنی است → همیشه quick-grab.
+AUDIO_PLATFORMS = {"soundcloud", "bandcamp"}
 # میزبان‌های داخلی که هرگز نباید دانلود شوند (دفاعِ پایهٔ SSRF)
 _BLOCK_HOSTS = {"localhost", "metadata.google.internal", "169.254.169.254"}
+
+# برچسبِ فارسیِ پلتفرم‌ها — منبعِ واحد (پنل، متریک، پیام‌ها از این می‌خوانند).
+PLATFORM_LABELS = {
+    "youtube": "یوتیوب", "instagram": "اینستاگرام", "twitter": "X / توییتر",
+    "tiktok": "تیک‌تاک", "pinterest": "پینترست", "soundcloud": "ساندکلاود",
+    "aparat": "آپارات", "vimeo": "ویمئو", "twitch": "توییچ",
+    "dailymotion": "دیلی‌موشن", "bandcamp": "بندکمپ", "reddit": "ردیت",
+    "streamable": "استریمبل", "other": "عمومی / سایر",
+}
+# پلتفرم‌های شناخته‌شده (برای متریکِ per-host؛ «other» شناخته‌شده نیست).
+KNOWN_PLATFORMS = tuple(k for k in PLATFORM_LABELS if k != "other")
 
 
 def find_url(text: str | None) -> str | None:
@@ -49,6 +62,22 @@ def platform_of(url: str) -> str:
         return "tiktok"
     if "pinterest." in host:
         return "pinterest"
+    if "soundcloud.com" in host or "snd.sc" in host:
+        return "soundcloud"
+    if "aparat.com" in host:
+        return "aparat"
+    if "vimeo.com" in host:
+        return "vimeo"
+    if "twitch.tv" in host:
+        return "twitch"
+    if "dailymotion.com" in host or "dai.ly" in host:
+        return "dailymotion"
+    if "bandcamp.com" in host:
+        return "bandcamp"
+    if "reddit.com" in host or "redd.it" in host:
+        return "reddit"
+    if "streamable.com" in host:
+        return "streamable"
     return "other"
 
 
