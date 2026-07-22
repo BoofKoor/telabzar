@@ -60,6 +60,8 @@ async def _run() -> None:
 
     await _wait_db()
     settings_store.init_store(settings.redis_url)  # تنظیماتِ زمانِ‌اجرا (سقف‌ها و…)
+    from . import textstore
+    await textstore.load()  # متن‌های override‌شدهٔ ادمین را پیش‌بارگذاری کن
     await _init_arq(dp)
     await _set_commands(bot)
 

@@ -23,6 +23,7 @@ from aiogram.types import FSInputFile
 
 from . import processing as P
 from . import settings_store
+from . import textstore
 from .cards import (
     _quality_label, message_media_id, meta_editor_view, move_card_below, progress_note,
     send_card, set_card_note, update_card,
@@ -436,6 +437,7 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
 
 async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str) -> None:
     bot: Bot = ctx["bot"]
+    await textstore.refresh_if_stale()  # متن‌های ادمین‌ویرایش‌شده تازه بمانند
     workdir = os.path.join(settings.work_dir, str(job_id))
 
     async with Sessionmaker() as session:
