@@ -30,6 +30,7 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     # ── دانلودر ──
     "downloader_enabled": ("bool", settings.downloader_enabled),
     "dl_allow_unknown": ("bool", settings.dl_allow_unknown),
+    "dl_rich_posts": ("bool", settings.dl_rich_posts),
     "proxy_url": ("str", settings.proxy_url),
     "dl_default_ux": ("str", settings.dl_default_ux),
     "dl_ux_youtube": ("str", ""),      # خالی = ارث از dl_default_ux

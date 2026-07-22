@@ -19,7 +19,10 @@ from datetime import datetime, timezone
 from html import escape
 
 from aiogram import Bot
-from aiogram.types import FSInputFile
+from aiogram.types import (
+    FSInputFile, InputMediaPhoto, InputMediaVideo, InputRichBlockParagraph,
+    InputRichBlockPhoto, InputRichBlockSlideshow, InputRichBlockVideo, InputRichMessage,
+)
 from aiogram.utils.media_group import MediaGroupBuilder
 
 from . import dl_cache
@@ -193,6 +196,36 @@ async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str]
             await bot.send_media_group(chat_id, media=b.build())
         except Exception:  # noqa: BLE001
             log.exception("album send failed (batch starting %d)", gi)
+
+
+async def _deliver_rich_post(bot: Bot, chat_id: int, owner_id: int, files: list[str],
+                             caption: str | None, lang: str) -> None:
+    """پستِ چند‌تایی → Rich Message (Bot API 10.1): پاراگرافِ کپشن + Slideshowِ
+    ورق‌زدنیِ عکس/ویدیو (تا ۵۰ رسانه در یک پست). آپلودِ محلی، بدونِ دکمه.
+
+    خطا را بالا می‌دهد تا فراخوان به آلبوم fallback کند (سرور/کلاینتِ قدیمی).
+    متنِ پاراگراف plain rich است (نه HTML) → نیازی به escape نیست.
+    """
+    media = [f for f in files
+             if os.path.isfile(f) and os.path.getsize(f) > 0
+             and f.lower().endswith(_ALBUM_IMG + _ALBUM_VID)]
+    if len(media) < 2:  # کمتر از ۲ رسانه → کارتِ معمولی (مثلِ آلبوم)
+        for p in media:
+            kind = "video" if p.lower().endswith(_ALBUM_VID) else "image"
+            await _spawn(bot, chat_id, owner_id, p, os.path.basename(p), kind, {}, lang)
+        return
+    slides: list = []
+    for p in media[:50]:  # سقفِ رسانهٔ Rich Message
+        if p.lower().endswith(_ALBUM_VID):
+            slides.append(InputRichBlockVideo(video=InputMediaVideo(media=FSInputFile(p))))
+        else:
+            slides.append(InputRichBlockPhoto(photo=InputMediaPhoto(media=FSInputFile(p))))
+    blocks: list = []
+    cap = D.clean_caption(caption)
+    if cap:
+        blocks.append(InputRichBlockParagraph(text=cap))
+    blocks.append(InputRichBlockSlideshow(blocks=slides))
+    await bot.send_rich_message(chat_id, rich_message=InputRichMessage(blocks=blocks))
 
 
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
@@ -421,9 +454,17 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 pass
 
         if engine == "gallerydl" and len(paths) > 1:
-            # پستِ چند‌تایی (کاروسل) → آلبومِ سوایپ‌شدنی با کپشنِ پست، بدونِ دکمه/کارت
-            await _deliver_album(bot, chat_id, owner_id, [p for p, _i, _t in paths],
-                                 gallery_caption, lang)
+            # پستِ چند‌تایی (کاروسل) → Rich Message (مقاله‌ایِ ورق‌زدنی) یا آلبوم
+            media_paths = [p for p, _i, _t in paths]
+            delivered = False
+            if await settings_store.get_bool("dl_rich_posts", settings.dl_rich_posts):
+                try:
+                    await _deliver_rich_post(bot, chat_id, owner_id, media_paths, gallery_caption, lang)
+                    delivered = True
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("rich post failed (%s); fallback به آلبوم", str(exc)[:120])
+            if not delivered:
+                await _deliver_album(bot, chat_id, owner_id, media_paths, gallery_caption, lang)
             try:
                 await bot.delete_message(chat_id, status_mid)
             except Exception:  # noqa: BLE001
