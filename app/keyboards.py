@@ -92,12 +92,22 @@ def lang_keyboard() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def file_card_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
+def collapsed_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    """کیبوردِ جمع‌شده: فقط یک دکمهٔ «نمایش آپشن‌ها» (برای فایل‌های ارسالیِ لینک).
+    زدنش منوی کامل را باز می‌کند (op=menu → همان هندلرِ بازگشت)."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_show_options"), callback_data=Act(op="menu", ref=ref))
+    return b.as_markup()
+
+
+def file_card_kb(ref: str, kind: str, lang: str, collapsible: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     ops = OPS_BY_KIND.get(kind, _DEFAULT_OPS)
     for op, key in ops:
         b.button(text=t(lang, key), callback_data=Act(op=op, ref=ref))
-    b.button(text=t(lang, "btn_close"), callback_data=Act(op="close", ref=ref))
+    # فایلِ لینک (collapsible): «بستن» منو را جمع می‌کند (نه حذفِ کارت)؛ وگرنه می‌بندد.
+    b.button(text=t(lang, "btn_close"),
+             callback_data=Act(op="collapse" if collapsible else "close", ref=ref))
 
     featured = bool(ops) and kind in FEATURED_TOP  # کلیدِ اول تمام‌عرض
     rest = len(ops) - 1 if featured else len(ops)

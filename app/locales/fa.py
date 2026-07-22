@@ -24,6 +24,7 @@ MESSAGES: dict[str, str] = {
     "btn_zip": "زیپ",
     "btn_scan": "اسکن امنیت",
     "btn_close": "✕ بستن",
+    "btn_show_options": "⚙️ نمایش آپشن‌ها",
     "btn_meta": "🎵 متادیتا",
     "btn_transcribe": "🎙 رونویسی",
     "btn_bg_remove": "حذف بک‌گراند",

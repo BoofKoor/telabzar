@@ -21,8 +21,8 @@ from ..crud import get_file_by_ref
 from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
-    CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_job_kb, cancel_kb, collect_kb, compress_menu_kb,
-    convert_menu_kb, link_menu_kb, resize_menu_kb, rotate_menu_kb, speed_menu_kb,
+    CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_job_kb, cancel_kb, collapsed_kb, collect_kb,
+    compress_menu_kb, convert_menu_kb, link_menu_kb, resize_menu_kb, rotate_menu_kb, speed_menu_kb,
     transcribe_menu_kb, watermark_pos_kb,
 )
 from ..models import Job, User
@@ -1063,6 +1063,16 @@ async def op_close(cq: CallbackQuery, lang: str) -> None:
         except Exception:  # noqa: BLE001
             pass
     await cq.answer(t(lang, "card_closed"))
+
+
+# ── جمع‌کردنِ منو (فایلِ لینک): فقط منو بسته می‌شود، فایل می‌ماند ──
+@router.callback_query(Act.filter(F.op == "collapse"))
+async def op_collapse(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
+    file = await get_file_by_ref(session, callback_data.ref)
+    if file is not None and isinstance(cq.message, Message):
+        await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang,
+                            keyboard=collapsed_kb(file.ref, lang))
+    await cq.answer()
 
 
 # ── بقیهٔ عملیات (فعلاً placeholder — M4) ───────────────────────
