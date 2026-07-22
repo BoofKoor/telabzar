@@ -22,8 +22,8 @@ from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
     CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_job_kb, cancel_kb, collapsed_kb, collect_kb,
-    compress_menu_kb, convert_menu_kb, link_menu_kb, resize_menu_kb, rotate_menu_kb, speed_menu_kb,
-    transcribe_menu_kb, watermark_pos_kb,
+    compress_menu_kb, convert_menu_kb, effective_kbps, link_menu_kb, resize_menu_kb, rotate_menu_kb,
+    speed_menu_kb, transcribe_menu_kb, watermark_pos_kb,
 )
 from ..models import Job, User
 from ..states import Collect, MetaEdit, Rename, Screenshot, SetCover, Trim, Watermark
@@ -213,7 +213,9 @@ async def op_compress_pick(cq: CallbackQuery, callback_data: Cmp, session: Async
         args: dict = {}
     else:
         h = int(callback_data.res)
-        args = {"height": h, "kbps": VIDEO_KBPS.get(h)}
+        target = VIDEO_KBPS.get(h)
+        # بیت‌ریت را زیر منبع سقف بزن تا خروجی واقعاً کوچک‌تر شود (نه بزرگ‌تر)
+        args = {"height": h, "kbps": effective_kbps(target, file) if target else None}
     await _start(cq, file, lang, arq_pool, session, "compress", args, user)
 
 

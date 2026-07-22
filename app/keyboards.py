@@ -255,15 +255,43 @@ def _est_mb(kbps: int, duration: int | None) -> float | None:
     return round((kbps + 128) * duration / 8 / 1024, 1)
 
 
+def source_kbps(file) -> float | None:
+    """بیت‌ریتِ تقریبیِ منبع (kbps) از حجم و مدت. None اگر یکی نامعلوم بود."""
+    if not file.size or not file.duration:
+        return None
+    return file.size * 8 / file.duration / 1024
+
+
+def effective_kbps(target_kbps: int, file) -> int:
+    """بیت‌ریتِ مؤثرِ خروجی: هرگز از منبع بالاتر نرود (وگرنه «کاهش» حجم را زیاد می‌کند).
+    سقف ≈ ۸۵٪ بیت‌ریتِ منبع منهای صدای تقریبی؛ کف ۲۰۰kbps."""
+    src = source_kbps(file)
+    if not src:
+        return target_kbps
+    cap = max(200, int(src * 0.85) - 128)
+    return min(target_kbps, cap)
+
+
 def compress_menu_kb(ref: str, file, lang: str) -> InlineKeyboardMarkup:
-    """منوی کاهشِ حجمِ ویدیو: رزولوشن‌های پایین‌تر + تخمینِ حجم."""
+    """منوی کاهشِ حجمِ ویدیو: فقط رزولوشن‌هایی که **واقعاً** حجم را کم می‌کنند.
+
+    تخمین بر اساسِ بیت‌ریتِ مؤثر (سقف‌شده زیر منبع) است، نه بیت‌ریتِ ثابت — پس دیگر
+    گزینه‌ای که خروجی‌اش از فایلِ فعلی بزرگ‌تر شود نشان داده نمی‌شود. اگر حجم/مدت را
+    ندانیم (مثلِ ویدیوی سند)، فقط گزینهٔ رزولوشن بدونِ عددِ حجمِ گمراه‌کننده می‌آید.
+    """
     b = InlineKeyboardBuilder()
     h, dur = file.height or 0, file.duration or 0
+    src = source_kbps(file)
+    cur_mb = file.size / 1024 / 1024 if file.size else None
     for th, kbps in VIDEO_TARGETS:
-        if h and th >= h:            # فقط پایین‌تر از کیفیتِ فعلی
+        if h and th >= h:            # فقط پایین‌تر از رزولوشنِ فعلی
             continue
-        est = _est_mb(kbps, dur)
-        label = f"🔻 {th}p" + (f"  ·  ~{est:g}MB" if est else "")
+        eff = effective_kbps(kbps, file)
+        est = _est_mb(eff, dur)
+        # منبع را می‌دانیم ولی این گزینه واقعاً کم نمی‌کند → نشانش نده
+        if src and est and cur_mb and est >= cur_mb * 0.95:
+            continue
+        label = f"🔻 {th}p" + (f"  ·  ~{est:g}MB" if (est and src) else "")
         b.button(text=label, callback_data=Cmp(ref=ref, res=str(th)))
     b.button(text=t(lang, "btn_same_res"), callback_data=Cmp(ref=ref, res="same"))
     b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
