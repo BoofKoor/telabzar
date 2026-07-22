@@ -331,7 +331,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
             else:
                 await _edit(bot, chat_id, status_mid,
-                            t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:120])}</code>")
+                            t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
         opts = info.get("options") or []
         if redis is not None and opts:
@@ -474,7 +474,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_need_cookies", platform=plabel))
             else:
                 await _edit(bot, chat_id, status_mid,
-                            t(lang, "dl_failed") + f"\n<code>{escape(msg[:140])}</code>")
+                            t(lang, "dl_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
         await _stop_ticker()
 
