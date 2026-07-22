@@ -384,17 +384,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
         os.makedirs(workdir, exist_ok=True)
         opts = await _opts(redis, platform)
         cookie = opts.get("cookies")  # مسیرِ اصلی؛ برای cooldown/متریک نگه‌داری می‌شود
-        if cookie:
-            # yt-dlp/gallery-dl کوکی‌جار را به همان فایل برمی‌گردانند (yt-dlp issue #5977)
-            # ولی mountِ /cookies فقط‌خواندنی است → کپیِ نوشتنی در workdir بده تا write-back
-            # آنجا بیفتد و پوشهٔ اشتراکی دست‌نخورده/امن بماند.
-            try:
-                writable = os.path.join(workdir, "cookies.txt")
-                shutil.copyfile(cookie, writable)
-                opts["cookies"] = writable
-            except OSError as exc:  # noqa: BLE001
-                log.warning("cookie copy failed (%s); بدونِ کوکی ادامه", exc)
-                opts["cookies"] = None
+        # نکته: کپیِ نوشتنیِ کوکی (چون /cookies فقط‌خواندنی است و yt-dlp کوکی‌جار را
+        # برمی‌گرداند) حالا درونِ خودِ موتور انجام می‌شود — probe و download_ytdlp و
+        # download_gallerydl هرکدام یک کپیِ نوشتنیِ موقت می‌سازند و پاک می‌کنند.
 
         # ── روایتِ زنده‌ی مراحل: اسپینرِ چرخان + درصد/زمانِ سپری‌شده ──
         # تیک‌زنِ پس‌زمینه هیچ‌وقت «قفل‌شده» به‌نظر نمی‌رسد — چه yt-dlp که درصد می‌دهد،

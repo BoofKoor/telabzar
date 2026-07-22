@@ -16,6 +16,8 @@ import ipaddress
 import json
 import os
 import re
+import shutil
+import tempfile
 from urllib.parse import urlparse
 
 from .exceptions import ProcessingCancelled
@@ -174,6 +176,33 @@ def is_safe_url(url: str) -> bool:
     return True
 
 
+def _writable_cookie(cookie_path: str | None) -> str | None:
+    """کپیِ نوشتنیِ فایلِ کوکی در temp و برگرداندنِ مسیرش (یا None اگر نشد/نبود).
+
+    چرا لازم است: mountِ /cookies در ورکر فقط‌خواندنی است، ولی yt-dlp (و gallery-dl)
+    کوکی‌جار را پس از رفرش به همان فایل برمی‌گردانند → OSError روی فایل‌سیستمِ
+    فقط‌خواندنی. پس هر بار قبل از دادن کوکی به موتور، یک کپیِ نوشتنی می‌سازیم و write-back
+    آنجا (بی‌ضرر) می‌افتد؛ فراخوان با _cleanup_cookie پاکش می‌کند.
+    """
+    if not cookie_path or not os.path.isfile(cookie_path):
+        return None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix="telabzar-ck-", suffix=".txt")
+        os.close(fd)
+        shutil.copyfile(cookie_path, tmp)
+        return tmp
+    except OSError:
+        return None
+
+
+def _cleanup_cookie(tmp_path: str | None) -> None:
+    if tmp_path:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 # ── پرچم‌های مشترکِ yt-dlp (proxy / cookies / pot-provider) ─────
 def _common_flags(opts: dict) -> list[str]:
     flags = ["--no-warnings", "--no-playlist"]
@@ -255,18 +284,24 @@ def _stderr_summary(raw: bytes | str, limit: int = 300) -> str:
 
 async def probe(url: str, opts: dict, timeout: float = 120) -> dict:
     """اطلاعاتِ رسانه بدونِ دانلود (‎-J) → دیکشنریِ نرمال‌شده."""
-    cmd = [YTDLP, "-J", *_common_flags(opts), url]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    ck = _writable_cookie(opts.get("cookies"))  # /cookies فقط‌خواندنی → کپیِ نوشتنی
+    if ck:
+        opts = {**opts, "cookies": ck}
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError("probe timed out") from None
-    if proc.returncode != 0:
-        raise RuntimeError(f"probe failed: {_stderr_summary(err) or 'unknown'}")
-    return normalize_probe(json.loads(out.decode("utf-8", "ignore") or "{}"))
+        cmd = [YTDLP, "-J", *_common_flags(opts), url]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError("probe timed out") from None
+        if proc.returncode != 0:
+            raise RuntimeError(f"probe failed: {_stderr_summary(err) or 'unknown'}")
+        return normalize_probe(json.loads(out.decode("utf-8", "ignore") or "{}"))
+    finally:
+        _cleanup_cookie(ck)
 
 
 def _selector_to_format(sel: str) -> str:
@@ -371,6 +406,9 @@ async def _ffprobe_video(path: str) -> dict:
 async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
                          progress=None, cancel=None) -> tuple[str, dict, str | None]:
     """دانلود با yt-dlp → (مسیرِ فایل, info dict, مسیرِ تامبنیل). info.json را می‌خوانَد."""
+    ck = _writable_cookie(opts.get("cookies"))  # /cookies فقط‌خواندنی → کپیِ نوشتنی
+    if ck:
+        opts = {**opts, "cookies": ck}
     outtmpl = os.path.join(workdir, "%(title).80B [%(id)s].%(ext)s")
     audio_only = selector == "audio"
     cmd = [YTDLP, "--newline", "--progress-template", "dl:%(progress._percent_str)s",
@@ -389,7 +427,10 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
     if opts.get("max_mb"):
         cmd += ["--max-filesize", f"{int(opts['max_mb'])}M"]
     cmd += [*_common_flags(opts), url]
-    await _run_dl(cmd, progress=progress, cancel=cancel, timeout=opts.get("timeout", 3000))
+    try:
+        await _run_dl(cmd, progress=progress, cancel=cancel, timeout=opts.get("timeout", 3000))
+    finally:
+        _cleanup_cookie(ck)
 
     # فایلِ رسانه را با پسوندِ رسانه پیدا کن (نه تامبنیلِ jpg)
     media_exts = ((".mp3", ".m4a", ".opus", ".ogg", ".wav")
@@ -492,13 +533,20 @@ def _gallery_caption(workdir: str) -> str | None:
 async def download_gallerydl(url: str, workdir: str, opts: dict,
                              progress=None, cancel=None) -> tuple[list[str], str | None]:
     """دانلودِ گالری/کاروسل با gallery-dl → (فهرستِ فایل‌ها, کپشنِ پست بدونِ هشتگ)."""
+    # کوکی را در temp (بیرونِ workdir) کپی کن: هم /cookies فقط‌خواندنی است، هم اگر داخلِ
+    # workdir بگذاریم، جمع‌کنندهٔ فایل‌ها اشتباهی آن را به‌عنوان رسانه برمی‌داشت.
+    ck = _writable_cookie(opts.get("cookies"))
     cmd = [GALLERY_DL, "-D", workdir, "--write-metadata"]  # سایدکارِ .json برای کپشن
     if opts.get("proxy"):
         cmd += ["--proxy", opts["proxy"]]
-    if opts.get("cookies"):
-        cmd += ["--cookies", opts["cookies"]]
+    cookie_arg = ck or opts.get("cookies")
+    if cookie_arg:
+        cmd += ["--cookies", cookie_arg]
     cmd += [url]
-    await _run_dl(cmd, progress=progress, cancel=cancel, timeout=opts.get("timeout", 1800))
+    try:
+        await _run_dl(cmd, progress=progress, cancel=cancel, timeout=opts.get("timeout", 1800))
+    finally:
+        _cleanup_cookie(ck)
     files = []
     for root, _d, names in os.walk(workdir):
         for n in names:
