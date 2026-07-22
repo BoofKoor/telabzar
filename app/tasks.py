@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -42,6 +43,7 @@ _PROGRESS_LABEL = {
     "to_gif": "pr_gif", "extract_audio": "pr_extract",
     "watermark": "pr_watermark", "trim": "pr_trim",
     "normalize": "pr_normalize", "speed": "pr_speed",
+    "transcribe": "pr_transcribe", "scan": "pr_scan", "bg_remove": "pr_bg",
 }
 
 
@@ -98,6 +100,10 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
     """پردازش → یا {path, filename, label} (رسانه‌ساز) یا {note_only, label} (بررسی)."""
     stem = _safe_stem(file.name)
     dur = file.duration
+    # اگر مدت نامعلوم بود (ویدیوی سند/دانلودیِ بی‌متادیتا)، ffprobe کن تا نوارِ پیشرفت
+    # واقعاً کار کند (وگرنه پردازش «قفل‌شده» به‌نظر می‌رسد).
+    if not dur and file.kind in ("video", "audio"):
+        dur = await P.probe_duration(inpath)
 
     if op == "scan":
         try:
@@ -428,27 +434,33 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 # نسبی → سرور local نیست؛ مطلق → مشکلِ mount یا پرمیشن/capability
                 raise RuntimeError(f"input file not found on disk: {inpath or '(empty)'}"[:200])
 
-            # نوارِ پیشرفتِ زنده (throttle: هر ~۳ ثانیه و فقط با تغییرِ درصد)؛
-            # کیبوردِ لغو در تمامِ مدت حفظ می‌شود تا کاربر بتواند وسطِ کار لغو کند.
-            pstate = {"t": 0.0, "pct": -1}
+            # وضعیتِ زنده: یک «تیک‌زن» پس‌زمینه هر ~۴ ثانیه کارت را به‌روز می‌کند —
+            # همیشه اسپینرِ چرخان + زمانِ سپری‌شده (و درصد اگر معلوم باشد). اینطوری هیچ
+            # عملیاتی «قفل‌شده» به‌نظر نمی‌رسد، حتی آن‌هایی که درصد نمی‌دهند (اسکن/رونویسی).
+            pstate = {"pct": None, "eta": None}
             pstart = time.monotonic()
             plabel = t(lang, _PROGRESS_LABEL.get(job.op, "processing"))
             cancel_kb = cancel_job_kb(job_id, lang)
             redis = ctx.get("redis")
 
             async def _on_progress(pct: float) -> None:
-                now = time.monotonic()
-                ip = int(pct)
-                if ip <= pstate["pct"] or (now - pstate["t"]) < 3.0:
-                    return
-                pstate["t"], pstate["pct"] = now, ip
-                elapsed = now - pstart
-                eta = (elapsed / pct * (100 - pct)) if pct > 3 else None
-                try:
-                    await set_card_note(bot, chat_id, card_mid, file, lang,
-                                        note=progress_note(plabel, pct, eta), keyboard=cancel_kb)
-                except Exception:  # noqa: BLE001
-                    pass
+                pstate["pct"] = pct
+                elapsed = time.monotonic() - pstart
+                pstate["eta"] = (elapsed / pct * (100 - pct)) if pct > 3 else None
+
+            async def _ticker() -> None:
+                tick = 0
+                while True:
+                    await asyncio.sleep(4.0)
+                    tick += 1
+                    try:
+                        await set_card_note(
+                            bot, chat_id, card_mid, file, lang,
+                            note=progress_note(plabel, pstate["pct"], pstate["eta"],
+                                               time.monotonic() - pstart, tick),
+                            keyboard=cancel_kb)
+                    except Exception:  # noqa: BLE001
+                        pass
 
             async def _should_cancel() -> bool:
                 if redis is None:
@@ -458,8 +470,23 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 except Exception:  # noqa: BLE001
                     return False
 
-            res = await _do_op(bot, job.op, job.args or {}, file, inpath, workdir, lang,
-                               progress=_on_progress, cancel=_should_cancel)
+            # فیدبکِ فوری (قبل از اولین تیک) تا کاربر بداند کار شروع شد
+            try:
+                await set_card_note(bot, chat_id, card_mid, file, lang,
+                                    note=progress_note(plabel, None, None, 0, 0), keyboard=cancel_kb)
+            except Exception:  # noqa: BLE001
+                pass
+
+            ticker = asyncio.create_task(_ticker())
+            try:
+                res = await _do_op(bot, job.op, job.args or {}, file, inpath, workdir, lang,
+                                   progress=_on_progress, cancel=_should_cancel)
+            finally:
+                ticker.cancel()
+                try:
+                    await ticker
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
         except P.ProcessingCancelled:
             log.info("job %s cancelled by user", job_id)
             job.status = "cancelled"
@@ -558,8 +585,14 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 if os.path.exists(outpath):
                     file.size = os.path.getsize(outpath)
                 file.changelog = list(file.changelog or []) + [res["label"]]
+                # کاورِ ویدیو بعد از پردازش نپرد: یک پوسترِ ≤۳۲۰px بساز و به‌عنوان تامبنیل بده
+                thumb = None
+                if file.kind == "video" and os.path.exists(outpath):
+                    poster = os.path.join(workdir, "poster.jpg")
+                    if await P.video_poster(outpath, poster):
+                        thumb = FSInputFile(poster)
                 try:
-                    sent = await update_card(bot, chat_id, card_mid, file, lang, path=outpath)
+                    sent = await update_card(bot, chat_id, card_mid, file, lang, path=outpath, thumb=thumb)
                     fid, fuid = message_media_id(sent)
                     if fid:
                         file.file_id = fid

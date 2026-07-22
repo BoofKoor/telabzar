@@ -485,6 +485,33 @@ async def video_thumbnail(inp: str, out: str) -> None:
         raise RuntimeError("thumbnail extraction produced no output")
 
 
+async def video_poster(inp: str, out: str) -> bool:
+    """یک فریمِ نماینده در ≤۳۲۰px (سقفِ تامبنیلِ تلگرام) — best-effort، بدونِ خطا."""
+    try:
+        await _run([
+            FFMPEG, "-y", "-i", inp,
+            "-vf", "thumbnail,scale=w=320:h=320:force_original_aspect_ratio=decrease",
+            "-frames:v", "1", "-q:v", "4", out,
+        ], timeout=60)
+        return os.path.exists(out) and os.path.getsize(out) > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def probe_duration(path: str) -> int | None:
+    """مدتِ رسانه با ffprobe (ثانیه) — برای نوارِ پیشرفت وقتی متادیتا ندارد."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFPROBE, "-v", "error", "-show_entries", "format=duration",
+            "-of", "csv=p=0", path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate()
+        val = int(float((out or b"").decode("utf-8", "ignore").strip() or 0))
+        return val or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── واترمارک / برش / بی‌صدا / اسکرین‌شاتِ ویدیو ─────────────────
 def _font_path() -> str | None:
     for p in _FONT_CANDIDATES:
