@@ -15,24 +15,35 @@ FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
 
 
-def _video_encoder_args(kbps: int | None, crf: int, encoder: str | None = None) -> list[str]:
+# سرعت/کیفیتِ فشرده‌سازی (از پنل) → پریستِ ffmpeg. کندتر = فایلِ کوچک‌تر ولی زمانِ بیشتر.
+_SPEED_PRESET = {"fast": "veryfast", "balanced": "medium", "quality": "slow"}
+# معادلِ پریستِ NVENC (p1 تندترین … p7 کندترین).
+_NVENC_PRESET = {"veryfast": "p2", "medium": "p4", "slow": "p6"}
+
+
+def _resolve_preset(speed: str | None) -> str:
+    return _SPEED_PRESET.get((speed or settings.compress_speed or "fast").lower(), "veryfast")
+
+
+def _video_encoder_args(kbps: int | None, crf: int, encoder: str | None = None,
+                        preset: str = "veryfast") -> list[str]:
     """آرگومان‌های انکودِ h264.
 
     پیش‌فرض libx264 با **کنترلِ کیفیتِ محدودشده (VBV)**: CRF (کفِ کیفیت) + سقفِ بیت‌ریت
     → خروجیِ کوچک‌تر از ABRِ خالص با همان سرعت، و حجم همچنان کران‌دارِ زیرِ سقف.
     `-pix_fmt yuv420p` هم سازگاریِ همه‌جا و انکودِ سریع‌ترِ منبعِ ۱۰‌بیتی/4:4:4 را می‌دهد.
-    encoder='nvenc' (نیازمندِ GPU) بسیار سریع‌تر است.
+    preset = پریستِ ffmpeg (از سرعت/کیفیتِ پنل). encoder='nvenc' (GPU) بسیار سریع‌تر است.
     """
     enc = (encoder or settings.video_encoder or "x264").lower()
     if enc == "nvenc":
-        a = ["-c:v", "h264_nvenc", "-preset", "p4", "-pix_fmt", "yuv420p"]
+        a = ["-c:v", "h264_nvenc", "-preset", _NVENC_PRESET.get(preset, "p4"), "-pix_fmt", "yuv420p"]
         if kbps:
             a += ["-rc", "vbr", "-cq", str(crf), "-b:v", f"{kbps}k",
                   "-maxrate", f"{int(kbps * 1.5)}k", "-bufsize", f"{kbps * 2}k"]
         else:
             a += ["-rc", "vbr", "-cq", str(crf + 6)]
         return a
-    a = ["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"]
+    a = ["-c:v", "libx264", "-preset", preset, "-pix_fmt", "yuv420p"]
     if kbps:
         a += ["-crf", str(crf), "-maxrate", f"{kbps}k", "-bufsize", f"{kbps * 2}k"]
     else:
@@ -412,25 +423,29 @@ async def speed_audio(inp: str, out: str, rate: float, progress=None, duration=N
 
 # ── ویدیو (ffmpeg) ─────────────────────────────────────────────
 async def compress_video(inp: str, out: str, height: int | None = None, kbps: int | None = None,
-                         progress=None, duration=None, cancel=None) -> None:
+                         progress=None, duration=None, cancel=None,
+                         encoder: str | None = None, speed: str | None = None) -> None:
     """فشرده‌سازیِ سریع و بهینه. height → اسکیلِ رزولوشن؛ kbps → سقفِ بیت‌ریت (VBV با
-    کفِ CRF: خروجیِ کوچک‌ترِ کران‌دار)، وگرنه CRFِ خالص. اگر انکودِ سخت‌افزاری (nvenc)
-    پیکربندی شده باشد و شکست بخورد، خودکار به x264 برمی‌گردد."""
-    def build(encoder: str | None) -> list[str]:
+    کفِ CRF: خروجیِ کوچک‌ترِ کران‌دار)، وگرنه CRFِ خالص. encoder/speed از پنل می‌آیند
+    (پیش‌فرض از env). انکودِ سخت‌افزاری (nvenc) اگر شکست بخورد خودکار به x264 برمی‌گردد."""
+    enc = (encoder or settings.video_encoder or "x264").lower()
+    preset = _resolve_preset(speed)
+
+    def build(e: str) -> list[str]:
         args = [FFMPEG, "-y", "-i", inp]
         if height:
             args += ["-vf", f"scale=-2:{height}"]  # عرض را زوج نگه‌دار (نیازِ libx264)
-        args += _video_encoder_args(kbps, 23, encoder)
+        args += _video_encoder_args(kbps, 23, e, preset)
         args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out]
         return args
 
     try:
-        await _run(build(None), progress=progress, duration=duration, cancel=cancel)
+        await _run(build(enc), progress=progress, duration=duration, cancel=cancel)
     except ProcessingCancelled:
         raise
     except RuntimeError:
         # انکودِ سخت‌افزاری شکست خورد (GPU نیست/اشتباه پیکربندی شده) → با x264 دوباره
-        if (settings.video_encoder or "x264").lower() != "x264":
+        if enc != "x264":
             await _run(build("x264"), progress=progress, duration=duration, cancel=cancel)
         else:
             raise

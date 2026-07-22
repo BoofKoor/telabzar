@@ -73,6 +73,10 @@ GROUPS = [
         ("dl_concurrency", "دانلودِ هم‌زمان (کل)", ""),
         ("dl_daily_count", "سقفِ روزانهٔ دانلود", "هر کاربر · ۰ = نامحدود"),
     ]),
+    ("🎬 کاهشِ حجمِ ویدیو", [
+        ("compress_speed", "سرعت / کیفیت", "کندتر = کوچک‌تر"),
+        ("video_encoder", "انکودر", "nvenc فقط با GPU"),
+    ]),
     ("🎙 رونویسی و اکسترا", [
         ("whisper_model", "مدلِ Whisper", ""),
         ("dl_sponsorblock", "SponsorBlock", "حذفِ اسپانسر/اینترو"),
@@ -83,6 +87,8 @@ GROUPS = [
 ENUM_LABELS = {
     "probe": "منوی کیفیت", "quick": "گرفتنِ سریع", "": "— ارث از پیش‌فرض",
     "tiny": "tiny", "base": "base", "small": "small", "medium": "medium", "large-v3": "large-v3",
+    "fast": "سریع", "balanced": "بالانس", "quality": "کیفیت",
+    "x264": "x264 (CPU)", "nvenc": "NVENC (GPU)",
 }
 
 
