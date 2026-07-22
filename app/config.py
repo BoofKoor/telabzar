@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     # پردازش (ورکر)
     work_dir: str = "/work"
+    # انکودِ ویدیو: x264 (پیش‌فرض، CPU) یا nvenc (اگر GPU + passthroughِ داکر داری —
+    # بسیار سریع‌تر). مقدارِ نامعتبر/نبودِ سخت‌افزار → خودکار به x264 برمی‌گردد.
+    video_encoder: str = "x264"
 
     # رونویسیِ صوت (faster-whisper) — اندازهٔ مدل: tiny/base/small/medium/large-v3.
     # پیش‌فرض base (تعادلِ RAM/دقت روی CPU). بعداً از پنلِ ادمین (M5) قابلِ تغییر

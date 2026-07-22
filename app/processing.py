@@ -8,10 +8,36 @@ import zipfile
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
+from .config import settings
 from .exceptions import ProcessingCancelled  # re-export (P.ProcessingCancelled)
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
+
+
+def _video_encoder_args(kbps: int | None, crf: int, encoder: str | None = None) -> list[str]:
+    """آرگومان‌های انکودِ h264.
+
+    پیش‌فرض libx264 با **کنترلِ کیفیتِ محدودشده (VBV)**: CRF (کفِ کیفیت) + سقفِ بیت‌ریت
+    → خروجیِ کوچک‌تر از ABRِ خالص با همان سرعت، و حجم همچنان کران‌دارِ زیرِ سقف.
+    `-pix_fmt yuv420p` هم سازگاریِ همه‌جا و انکودِ سریع‌ترِ منبعِ ۱۰‌بیتی/4:4:4 را می‌دهد.
+    encoder='nvenc' (نیازمندِ GPU) بسیار سریع‌تر است.
+    """
+    enc = (encoder or settings.video_encoder or "x264").lower()
+    if enc == "nvenc":
+        a = ["-c:v", "h264_nvenc", "-preset", "p4", "-pix_fmt", "yuv420p"]
+        if kbps:
+            a += ["-rc", "vbr", "-cq", str(crf), "-b:v", f"{kbps}k",
+                  "-maxrate", f"{int(kbps * 1.5)}k", "-bufsize", f"{kbps * 2}k"]
+        else:
+            a += ["-rc", "vbr", "-cq", str(crf + 6)]
+        return a
+    a = ["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"]
+    if kbps:
+        a += ["-crf", str(crf), "-maxrate", f"{kbps}k", "-bufsize", f"{kbps * 2}k"]
+    else:
+        a += ["-crf", str(crf + 6)]
+    return a
 SEVENZ = "7z"
 
 # فونت‌های کاندید برای واترمارکِ متنی (اولی فارسی/عربی، آخری فالبکِ لاتین)
@@ -387,19 +413,27 @@ async def speed_audio(inp: str, out: str, rate: float, progress=None, duration=N
 # ── ویدیو (ffmpeg) ─────────────────────────────────────────────
 async def compress_video(inp: str, out: str, height: int | None = None, kbps: int | None = None,
                          progress=None, duration=None, cancel=None) -> None:
-    """فشرده‌سازی؛ اگر height بدهی به آن رزولوشن اسکیل می‌کند و اگر kbps بدهی
-    نرخِ هدف را می‌گیرد (برای تخمینِ حجمِ دقیق‌تر)، وگرنه CRF."""
-    args = [FFMPEG, "-y", "-i", inp]
-    if height:
-        # عرض را زوج نگه‌دار (نیازِ libx264)
-        args += ["-vf", f"scale=-2:{height}"]
-    if kbps:
-        args += ["-c:v", "libx264", "-b:v", f"{kbps}k",
-                 "-maxrate", f"{int(kbps * 1.5)}k", "-bufsize", f"{kbps * 2}k", "-preset", "veryfast"]
-    else:
-        args += ["-c:v", "libx264", "-crf", "30", "-preset", "veryfast"]
-    args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out]
-    await _run(args, progress=progress, duration=duration, cancel=cancel)
+    """فشرده‌سازیِ سریع و بهینه. height → اسکیلِ رزولوشن؛ kbps → سقفِ بیت‌ریت (VBV با
+    کفِ CRF: خروجیِ کوچک‌ترِ کران‌دار)، وگرنه CRFِ خالص. اگر انکودِ سخت‌افزاری (nvenc)
+    پیکربندی شده باشد و شکست بخورد، خودکار به x264 برمی‌گردد."""
+    def build(encoder: str | None) -> list[str]:
+        args = [FFMPEG, "-y", "-i", inp]
+        if height:
+            args += ["-vf", f"scale=-2:{height}"]  # عرض را زوج نگه‌دار (نیازِ libx264)
+        args += _video_encoder_args(kbps, 23, encoder)
+        args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out]
+        return args
+
+    try:
+        await _run(build(None), progress=progress, duration=duration, cancel=cancel)
+    except ProcessingCancelled:
+        raise
+    except RuntimeError:
+        # انکودِ سخت‌افزاری شکست خورد (GPU نیست/اشتباه پیکربندی شده) → با x264 دوباره
+        if (settings.video_encoder or "x264").lower() != "x264":
+            await _run(build("x264"), progress=progress, duration=duration, cancel=cancel)
+        else:
+            raise
 
 
 async def convert_video(inp: str, out: str, fmt: str, progress=None, duration=None, cancel=None) -> None:
