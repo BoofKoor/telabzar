@@ -103,10 +103,12 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     engine = engine_for(url, platform)
     ux = await _resolve_ux(platform)
     quick = not (ux == "probe" and engine == "ytdlp")
+    # پلتفرمِ صوتی → صوتِ تمیز (mp3)، نه «best» که برای منبعِ فقط-صوت گیجش می‌کند
+    quick_sel = "audio" if platform in AUDIO_PLATFORMS else "best"
 
-    # کشِ آنی (quick-grab، کیفیتِ best) — بدونِ دانلودِ دوباره
+    # کشِ آنی (quick-grab) — بدونِ دانلودِ دوباره
     if quick:
-        cache = await dl_cache.get_cached(session, url, "best")
+        cache = await dl_cache.get_cached(session, url, quick_sel)
         if cache is not None:
             await _charge(arq_pool, uid)
             try:
@@ -134,10 +136,10 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
             "lang": lang, "url": url, "platform": platform, "engine": engine,
             "owner_id": owner_id, "tg_user_id": uid}
 
-    if quick:  # quick-grab: بهترین کیفیت
+    if quick:  # quick-grab: بهترین کیفیت (صوت برای پلتفرمِ صوتی)
         await _charge(arq_pool, uid)
         await arq_pool.enqueue_job(
-            "run_download", {**base, "phase": "fetch", "selector": "best"}, _queue_name=_DL_QUEUE)
+            "run_download", {**base, "phase": "fetch", "selector": quick_sel}, _queue_name=_DL_QUEUE)
     else:
         await arq_pool.enqueue_job("run_download", {**base, "phase": "probe"}, _queue_name=_DL_QUEUE)
 
