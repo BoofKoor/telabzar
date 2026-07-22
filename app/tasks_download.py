@@ -529,8 +529,11 @@ async def run_download(ctx: dict, payload: dict) -> None:
             if any(h in low for h in _BAN_HINTS):
                 await _cooldown_cookie(redis, cookie)
             await _metric(redis, platform, ok=False)
-            if platform == "spotify" and any(
-                    k in low for k in ("spotify", "could not read link", "no tracks", "blocked")):
+            if platform == "spotify" and D.is_youtube_botcheck(msg, "youtube"):
+                # تطبیقِ اسپاتیفای از یوتیوب دانلود می‌کند؛ اگر یوتیوب bot-check داد، راهنمای کوکی
+                await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
+            elif platform == "spotify" and any(
+                    k in low for k in ("spotify", "could not read link", "no youtube", "no tracks", "blocked")):
                 await _edit(bot, chat_id, status_mid,
                             t(lang, "dl_spotify_setup") + f"\n<code>{escape(msg[:200])}</code>")
             elif D.is_youtube_botcheck(msg, platform):

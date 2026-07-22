@@ -738,12 +738,14 @@ async def download_spotify(url: str, workdir: str, opts: dict,
         raise RuntimeError("spotify: no tracks found")
     n = len(tracks)
     results: list[tuple[str, dict, str | None]] = []
+    last_err: Exception | None = None
     for i, tr in enumerate(tracks):
         if cancel is not None and await cancel():
             raise ProcessingCancelled()
         tdir = os.path.join(workdir, f"t{i}")
         os.makedirs(tdir, exist_ok=True)
-        query = f"ytsearch1:{tr['artist']} - {tr['title']}".strip(" -")
+        # ‎ytsearch روی خودِ یوتیوب جست‌وجو می‌کند؛ « - » وقتی هنرمند/عنوان خالی باشد اذیت می‌کند
+        query = "ytsearch1:" + " ".join(p for p in (tr.get("artist"), tr.get("title")) if p).strip()
 
         async def _p(pct: float, _i=i) -> None:  # پیشرفتِ کلی روی همهٔ ترک‌ها
             if progress is not None:
@@ -755,6 +757,7 @@ async def download_spotify(url: str, workdir: str, opts: dict,
         except ProcessingCancelled:
             raise
         except Exception as exc:  # noqa: BLE001
+            last_err = exc
             # pot-provider می‌تواند yt-dlp را بیندازد → یک‌بار بدونِ pot؛ وگرنه این ترک را رد کن
             if opts.get("pot_provider"):
                 try:
@@ -762,7 +765,8 @@ async def download_spotify(url: str, workdir: str, opts: dict,
                         query, tdir, "audio", {**opts, "pot_provider": None}, progress=_p, cancel=cancel)
                 except ProcessingCancelled:
                     raise
-                except Exception:  # noqa: BLE001
+                except Exception as exc2:  # noqa: BLE001
+                    last_err = exc2
                     continue
             else:
                 continue
@@ -771,7 +775,9 @@ async def download_spotify(url: str, workdir: str, opts: dict,
                 "sp": {**tr, "cover_path": cover_path}}
         results.append((path, info, None))
     if not results:
-        raise RuntimeError("spotify: no tracks could be matched on YouTube")
+        # علتِ واقعیِ شکستِ دانلودِ یوتیوب را بالا بده (bot-check/pot/…) تا تشخیص ممکن شود
+        raise RuntimeError("spotify: no YouTube match — "
+                           + (str(last_err)[:220] if last_err else "search returned nothing"))
     return results
 
 
