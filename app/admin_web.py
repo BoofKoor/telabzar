@@ -266,8 +266,10 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
 {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
 {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
 <div class=note>کوکی‌ها برای دانلودِ اینستاگرام/X/تیک‌تاک لازم‌اند (نیاز به ورود). چند اکانت اضافه کن تا
-ربات بینشان بچرخد؛ اکانتی که بلاک بخورد خودکار برای ۳۰ دقیقه کنار گذاشته می‌شود. فایل باید
-فرمتِ <span class=mono>cookies.txt</span> (Netscape) باشد — با افزونهٔ مرورگر می‌گیری‌اش.
+ربات بینشان بچرخد؛ اکانتی که بلاک بخورد خودکار برای ۳۰ دقیقه کنار گذاشته می‌شود. هم فایلِ
+<span class=mono>cookies.txt</span> (Netscape) قبول است، هم خروجیِ <b>JSON</b>ِ افزونهٔ
+<span class=mono>Cookie-Editor</span> (دکمهٔ Export → متن را در یک فایلِ <span class=mono>.txt</span>
+بریز و همین‌جا آپلود کن). از اکانتِ یک‌بارمصرف استفاده کن، نه اصلی.
 {% if not dir_ok %}<br><b>توجه:</b> پوشهٔ کوکی‌ها (<span class=mono>{{cookies_dir or 'COOKIES_DIR'}}</span>) پیدا/نوشتنی نیست.{% endif %}</div>
 <div class=card style=margin-bottom:18px><h3>➕ افزودنِ کوکی</h3>
   <form method=post action=/cookies/upload enctype=multipart/form-data>
@@ -859,6 +861,51 @@ def _looks_like_cookiejar(text: str) -> bool:
     return False
 
 
+def _json_to_netscape(text: str) -> str | None:
+    """خروجیِ JSONِ افزونه‌ها (Cookie-Editor / EditThisCookie) را به cookies.txtِ
+    Netscape تبدیل می‌کند تا کاربر لازم نباشد فرمت را دستی عوض کند."""
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(data, dict):  # بعضی خروجی‌ها آرایه را می‌پیچند
+        for key in ("cookies", "Request Cookies", "data"):
+            if isinstance(data.get(key), list):
+                data = data[key]
+                break
+    if not isinstance(data, list):
+        return None
+    lines = ["# Netscape HTTP Cookie File", "# ساخته‌شده از خروجیِ JSON توسطِ پنلِ تل‌ابزار"]
+    used = False
+    for c in data:
+        if not isinstance(c, dict):
+            continue
+        name = c.get("name")
+        domain = c.get("domain") or c.get("host")
+        if not name or not domain:
+            continue
+        value = c.get("value", "") or ""
+        path = c.get("path") or "/"
+        secure = bool(c.get("secure"))
+        host_only = c.get("hostOnly")
+        if host_only is None:
+            host_only = not str(domain).startswith(".")
+        include_sub = not host_only
+        if include_sub and not str(domain).startswith("."):
+            domain = "." + str(domain)
+        exp = c.get("expirationDate") or c.get("expires") or c.get("expiry") or 0
+        try:
+            exp = max(0, int(float(exp)))
+        except (TypeError, ValueError):
+            exp = 0
+        lines.append("\t".join([
+            str(domain), "TRUE" if include_sub else "FALSE", str(path),
+            "TRUE" if secure else "FALSE", str(exp), str(name), str(value),
+        ]))
+        used = True
+    return "\n".join(lines) + "\n" if used else None
+
+
 async def cookies_upload(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
@@ -878,11 +925,16 @@ async def cookies_upload(request: web.Request) -> web.Response:
     if len(content) > 512 * 1024:
         raise web.HTTPFound("/cookies?err=" + "فایل خیلی بزرگ است.")
     try:
-        text = content.decode("utf-8", "replace")
+        text = content.decode("utf-8-sig", "replace")
     except Exception:  # noqa: BLE001
         raise web.HTTPFound("/cookies?err=" + "فایل خوانا نیست.")
     if not _looks_like_cookiejar(text):
-        raise web.HTTPFound("/cookies?err=" + "فرمتِ cookies.txt (Netscape) نیست.")
+        converted = _json_to_netscape(text)  # خروجیِ JSONِ Cookie-Editor را هم بپذیر
+        if converted:
+            text = converted
+        else:
+            raise web.HTTPFound(
+                "/cookies?err=" + "نه cookies.txt (Netscape) است نه JSONِ معتبرِ کوکی.")
     if platform not in {k for k, _ in COOKIE_PLATFORMS}:
         platform = "other"
     # نامِ فایل: پلتفرم + برچسب، تا `_pick_cookies` با substringِ platform تطبیقش دهد.
