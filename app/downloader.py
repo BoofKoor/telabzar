@@ -24,6 +24,9 @@ YTDLP = "yt-dlp"
 GALLERY_DL = "gallery-dl"
 
 _URL_RE = re.compile(r"https?://[^\s<>()]+", re.I)
+# همهٔ پسوندهای رسانه‌ای (fallbackِ یافتنِ خروجی وقتی پسوندِ موردِانتظار پیدا نشد).
+_MEDIA_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".m4v",
+               ".mp3", ".m4a", ".opus", ".ogg", ".oga", ".wav", ".flac", ".aac")
 _GALLERY_PLATFORMS = {"instagram", "pinterest"}
 # پلتفرم‌های صوتیِ تک‌استریم: منوی کیفیت بی‌معنی است → همیشه quick-grab.
 AUDIO_PLATFORMS = {"soundcloud", "bandcamp"}
@@ -278,6 +281,10 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
     media_exts = ((".mp3", ".m4a", ".opus", ".ogg", ".wav")
                   if audio_only else (".mp4", ".mkv", ".webm", ".mov"))
     path = _newest(workdir, media_exts)
+    if not path:
+        # منبعِ فقط-صوت (مثلِ ساندکلاود) حتی با selectorِ ویدیویی فایلِ صوتی می‌دهد؛
+        # هر رسانه‌ای که تولید شده را بردار تا «produced no file» بی‌خود رخ ندهد.
+        path = _newest(workdir, _MEDIA_EXTS)
     if not path:
         raise RuntimeError("download produced no file")
     thumb = _newest(workdir, (".jpg", ".jpeg"))
