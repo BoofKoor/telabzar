@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # سرعت/کیفیتِ کاهشِ حجم (پریستِ ffmpeg): fast=veryfast · balanced=medium ·
     # quality=slow. کندتر = فایلِ کوچک‌تر ولی زمانِ بیشتر. از پنل قابلِ تغییر.
     compress_speed: str = "fast"
+    # حالتِ «خیلی کم‌حجم» (کلاس/جلسه): هدفِ حجمِ خروجی (MB) و کفِ رزولوشن. ۴۸۰p با
+    # اُفتِ خودکار به ۳۶۰p در بیت‌ریتِ خیلی‌کم؛ ۱۵fps؛ صدای مونو. از پنل قابلِ تغییر.
+    compress_tiny_target_mb: int = 250
+    compress_tiny_height: int = 480
 
     # رونویسیِ صوت (faster-whisper) — اندازهٔ مدل: tiny/base/small/medium/large-v3.
     # پیش‌فرض base (تعادلِ RAM/دقت روی CPU). بعداً از پنلِ ادمین (M5) قابلِ تغییر

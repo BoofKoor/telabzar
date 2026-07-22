@@ -293,6 +293,8 @@ def compress_menu_kb(ref: str, file, lang: str) -> InlineKeyboardMarkup:
             continue
         label = f"🔻 {th}p" + (f"  ·  ~{est:g}MB" if (est and src) else "")
         b.button(text=label, callback_data=Cmp(ref=ref, res=str(th)))
+    if dur and dur >= 300:  # ویدیوی بلند (کلاس/جلسه) → حالتِ فوق‌فشرده
+        b.button(text=t(lang, "btn_tiny"), callback_data=Cmp(ref=ref, res="tiny"))
     b.button(text=t(lang, "btn_same_res"), callback_data=Cmp(ref=ref, res="same"))
     b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
     b.adjust(1)  # هر گزینه یک ردیف (با تخمینِ حجم خواناتر)

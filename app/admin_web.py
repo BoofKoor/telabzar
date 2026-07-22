@@ -86,6 +86,8 @@ GROUPS = [
     ("🎬 کاهشِ حجمِ ویدیو", [
         ("compress_speed", "سرعت / کیفیت", "کندتر = کوچک‌تر"),
         ("video_encoder", "انکودر", "nvenc فقط با GPU"),
+        ("compress_tiny_target_mb", "هدفِ «خیلی کم‌حجم» (MB)", "کلاس/جلسه"),
+        ("compress_tiny_height", "کفِ رزولوشنِ خیلی کم‌حجم", "۴۸۰ یا ۳۶۰"),
     ]),
     ("🎙 رونویسی و اکسترا", [
         ("whisper_model", "مدلِ Whisper", ""),

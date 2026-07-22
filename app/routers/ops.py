@@ -216,6 +216,8 @@ async def op_compress_pick(cq: CallbackQuery, callback_data: Cmp, session: Async
         return
     if callback_data.res == "same":
         args: dict = {}
+    elif callback_data.res == "tiny":  # حالتِ خیلی کم‌حجم (کلاس/جلسه)
+        args = {"tiny": True}
     else:
         h = int(callback_data.res)
         target = VIDEO_KBPS.get(h)
