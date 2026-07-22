@@ -41,8 +41,74 @@ PLATFORM_LABELS = {
     "dailymotion": "دیلی‌موشن", "bandcamp": "بندکمپ", "reddit": "ردیت",
     "streamable": "استریمبل", "other": "عمومی / سایر",
 }
+# برچسبِ انگلیسیِ پلتفرم‌ها (برای پیامِ کاربرِ en).
+PLATFORM_LABELS_EN = {
+    "youtube": "YouTube", "instagram": "Instagram", "twitter": "X / Twitter",
+    "tiktok": "TikTok", "pinterest": "Pinterest", "soundcloud": "SoundCloud",
+    "aparat": "Aparat", "vimeo": "Vimeo", "twitch": "Twitch",
+    "dailymotion": "Dailymotion", "bandcamp": "Bandcamp", "reddit": "Reddit",
+    "streamable": "Streamable", "other": "the site",
+}
 # پلتفرم‌های شناخته‌شده (برای متریکِ per-host؛ «other» شناخته‌شده نیست).
 KNOWN_PLATFORMS = tuple(k for k in PLATFORM_LABELS if k != "other")
+
+
+def platform_label(platform: str, lang: str = "fa") -> str:
+    """نامِ خواناـیِ پلتفرم به زبانِ کاربر."""
+    if lang == "en":
+        return PLATFORM_LABELS_EN.get(platform, platform.title())
+    return PLATFORM_LABELS.get(platform, platform)
+
+
+def describe_link(url: str, platform: str, lang: str = "fa") -> str:
+    """عبارتِ مشخصِ انسانی برای لینکِ شناسایی‌شده — بر پایهٔ مسیرِ URL (استوری/ریلز/…).
+
+    فقط وقتی زیرنوع را اعلام می‌کند که URL صریح باشد؛ وگرنه فقط نامِ پلتفرم.
+    مصرف‌کننده: پیامِ «… شناسایی شد» در همان لحظهٔ دریافتِ لینک.
+    """
+    fa = lang != "en"
+    path = (urlparse(url).path or "").lower()
+    if platform == "instagram":
+        if "/stories/" in path or "/story/" in path:
+            return "استوریِ اینستاگرام" if fa else "an Instagram story"
+        if "/reel" in path:
+            return "ریلزِ اینستاگرام" if fa else "an Instagram reel"
+        if "/tv/" in path:
+            return "ویدیوی اینستاگرام" if fa else "an Instagram video"
+        if "/p/" in path:
+            return "پستِ اینستاگرام" if fa else "an Instagram post"
+        return "لینکِ اینستاگرام" if fa else "an Instagram link"
+    if platform == "youtube":
+        if "/shorts/" in path:
+            return "شورتسِ یوتیوب" if fa else "a YouTube Short"
+        if "/playlist" in path or "list=" in (urlparse(url).query or ""):
+            return "پلی‌لیستِ یوتیوب" if fa else "a YouTube playlist"
+        return "ویدیوی یوتیوب" if fa else "a YouTube video"
+    if platform == "tiktok":
+        return "ویدیوی تیک‌تاک" if fa else "a TikTok video"
+    if platform == "pinterest":
+        return "پینِ پینترست" if fa else "a Pinterest pin"
+    label = platform_label(platform, lang)
+    if platform == "other":
+        return "لینک" if fa else "a link"
+    return f"لینکِ {label}" if fa else f"a {label} link"
+
+
+# نشانه‌های خطای «ربات نیستی؟» یوتیوب — نیازمندِ کوکیِ لاگین‌شده (نه صرفاً pot-token).
+_YT_BOTCHECK_HINTS = ("sign in to confirm", "confirm you're not a bot",
+                       "confirm you are not a bot", "--cookies", "cookies-from-browser")
+
+
+def is_youtube_botcheck(msg: str, platform: str | None = None) -> bool:
+    """آیا خطا همان «Sign in to confirm you're not a bot»ِ یوتیوب است؟
+
+    این خطا با IPِ دیتاسنتر حتی با pot-provider هم رخ می‌دهد؛ راهِ عملی، کوکیِ
+    یوتیوب (youtube_*.txt) و/یا پروکسیِ تمیز است. پیامِ کاربرپسندِ مخصوص می‌خواهد.
+    """
+    if platform not in (None, "youtube"):
+        return False
+    low = (msg or "").lower()
+    return any(h in low for h in _YT_BOTCHECK_HINTS)
 
 
 def find_url(text: str | None) -> str | None:

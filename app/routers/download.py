@@ -18,7 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import dl_cache, settings_store
 from ..callbacks import Dl
 from ..config import settings
-from ..downloader import AUDIO_PLATFORMS, engine_for, find_url, is_safe_url, platform_of
+from ..downloader import (
+    AUDIO_PLATFORMS, describe_link, engine_for, find_url, is_safe_url, platform_of,
+)
 from ..i18n import t
 from ..models import User
 
@@ -100,6 +102,8 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
         await message.reply(block)
         return
 
+    # همان لحظه‌ی دریافت، تشخیص را به کاربر نشان بده (استوریِ اینستاگرام/ویدیوی یوتیوب/…)
+    detected = t(lang, "dl_detected", what=describe_link(url, platform, lang))
     engine = engine_for(url, platform)
     ux = await _resolve_ux(platform)
     quick = not (ux == "probe" and engine == "ytdlp")
@@ -112,7 +116,7 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
         if cache is not None:
             await _charge(arq_pool, uid)
             # لینک را نگه‌دار و روی همان ریپلای بده (به‌جای حذفِ پیامِ کاربر)
-            status = await message.reply(t(lang, "dl_reading"))
+            status = await message.reply(detected)
             await dl_cache.deliver_from_cache(message.bot, session, message.chat.id, owner_id, cache,
                                               lang, anchor_mid=status.message_id)
             return
@@ -126,7 +130,7 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
         pass
 
     # لینک را نگه‌دار و وضعیت را روی همان ریپلای بده (تحویلِ نهایی همین را درجا عوض می‌کند)
-    status = await message.reply(t(lang, "dl_reading"))
+    status = await message.reply(detected)
 
     base = {"ref": ref, "chat_id": message.chat.id, "status_mid": status.message_id,
             "lang": lang, "url": url, "platform": platform, "engine": engine,

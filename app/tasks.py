@@ -24,8 +24,8 @@ from aiogram.types import FSInputFile
 from . import processing as P
 from . import settings_store
 from .cards import (
-    message_media_id, meta_editor_view, move_card_below, progress_note, send_card,
-    set_card_note, update_card,
+    _quality_label, message_media_id, meta_editor_view, move_card_below, progress_note,
+    send_card, set_card_note, update_card,
 )
 from .config import settings
 from .db import Sessionmaker
@@ -437,9 +437,23 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             # وضعیتِ زنده: یک «تیک‌زن» پس‌زمینه هر ~۴ ثانیه کارت را به‌روز می‌کند —
             # همیشه اسپینرِ چرخان + زمانِ سپری‌شده (و درصد اگر معلوم باشد). اینطوری هیچ
             # عملیاتی «قفل‌شده» به‌نظر نمی‌رسد، حتی آن‌هایی که درصد نمی‌دهند (اسکن/رونویسی).
-            pstate = {"pct": None, "eta": None}
-            pstart = time.monotonic()
             plabel = t(lang, _PROGRESS_LABEL.get(job.op, "processing"))
+            # کاهشِ حجمِ ویدیو → کیفیتِ تشخیص‌داده‌شده را در برچسب فاش کن (۴۸۰p/۷۲۰p…)
+            if job.op == "compress" and file.kind == "video":
+                q = _quality_label(file.width, file.height)
+                if q:
+                    plabel = f"{plabel} · {q}"
+            # آیا این عملیات درصدِ زنده می‌دهد؟ اگر بله ابتدا فازِ «سنجش» و با رسیدنِ اولین
+            # درصد سوییچ به برچسبِ کار؛ اگر نه، از همان اول برچسبِ کار (اسپینر زنده است).
+            reports_pct = (
+                (job.op in ("compress", "convert") and file.kind in ("video", "audio"))
+                or (job.op in ("to_gif", "extract_audio", "watermark") and file.kind == "video")
+                or (job.op in ("normalize", "speed") and file.kind == "audio")
+                or (job.op == "trim" and file.kind in ("audio", "video"))
+            )
+            pstate = {"pct": None, "eta": None,
+                      "label": t(lang, "pr_analyzing") if reports_pct else plabel}
+            pstart = time.monotonic()
             cancel_kb = cancel_job_kb(job_id, lang)
             redis = ctx.get("redis")
 
@@ -447,16 +461,20 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 pstate["pct"] = pct
                 elapsed = time.monotonic() - pstart
                 pstate["eta"] = (elapsed / pct * (100 - pct)) if pct > 3 else None
+                pstate["label"] = t(lang, "pr_almost") if pct >= 95 else plabel
 
             async def _ticker() -> None:
                 tick = 0
                 while True:
                     await asyncio.sleep(4.0)
                     tick += 1
+                    # ایمنی: عملیاتِ درصددار که چند ثانیه درصدی نداد از «سنجش» به کار برود
+                    if reports_pct and pstate["pct"] is None and tick >= 2:
+                        pstate["label"] = plabel
                     try:
                         await set_card_note(
                             bot, chat_id, card_mid, file, lang,
-                            note=progress_note(plabel, pstate["pct"], pstate["eta"],
+                            note=progress_note(pstate["label"], pstate["pct"], pstate["eta"],
                                                time.monotonic() - pstart, tick),
                             keyboard=cancel_kb)
                     except Exception:  # noqa: BLE001
@@ -473,7 +491,8 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             # فیدبکِ فوری (قبل از اولین تیک) تا کاربر بداند کار شروع شد
             try:
                 await set_card_note(bot, chat_id, card_mid, file, lang,
-                                    note=progress_note(plabel, None, None, 0, 0), keyboard=cancel_kb)
+                                    note=progress_note(pstate["label"], None, None, 0, 0),
+                                    keyboard=cancel_kb)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -585,6 +604,16 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 if os.path.exists(outpath):
                     file.size = os.path.getsize(outpath)
                 file.changelog = list(file.changelog or []) + [res["label"]]
+                # مرحلهٔ آپلود را برای فایلِ سنگین (ویدیو/صوت) نشان بده — آپلود به سرورِ
+                # لوکالِ Bot API طول می‌کشد و بدونِ این «قفل‌شده» به‌نظر می‌رسد.
+                if file.kind in ("video", "audio"):
+                    try:
+                        await set_card_note(bot, chat_id, card_mid, file, lang,
+                                            note=progress_note(t(lang, "pr_uploading"),
+                                                               None, None, None, 0),
+                                            keyboard=False)
+                    except Exception:  # noqa: BLE001
+                        pass
                 # کاورِ ویدیو بعد از پردازش نپرد: یک پوسترِ ≤۳۲۰px بساز و به‌عنوان تامبنیل بده
                 thumb = None
                 if file.kind == "video" and os.path.exists(outpath):

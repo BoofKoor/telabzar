@@ -91,7 +91,10 @@ MESSAGES: dict[str, str] = {
     # smart compress
     "compress_choose": "🗜 <b>Compress</b> — choose the output quality:",
     "btn_same_res": "♻️ Same quality, smaller",
-    # progress-bar labels
+    # progress-bar labels — live staged narrative
+    "pr_analyzing": "Analyzing the file",
+    "pr_almost": "Almost ready — finishing up",
+    "pr_uploading": "Sending it to you",
     "pr_compress": "Compressing…",
     "pr_convert": "Converting…",
     "pr_gif": "Making GIF…",
@@ -178,9 +181,21 @@ MESSAGES: dict[str, str] = {
     "cl_transcribe_srt": "🎬 SRT subtitles created",
     "cl_normalize": "🔊 Loudness normalized",
     "cl_speed": "⏩ Speed → {rate}×",
-    # downloader
+    # downloader — live staged narrative
     "dl_reading": "🔎 Reading the link…",
+    "dl_detected": "🔗 Detected {what}\nOne moment…",
+    "dl_probing": "🔎 Reading the available qualities…",
+    "dl_preparing": "Getting ready to fetch",
+    "dl_fetching": "Downloading",
+    "dl_almost": "Final moments — almost there",
+    "dl_uploading": "📤 Sending it to you…",
     "dl_downloading": "⬇️ Downloading… {pct}%",
+    "dl_youtube_botcheck": (
+        "🤖 YouTube asked to “confirm you're not a bot” for this download.\n"
+        "On a server this is usually fixed with a logged-in account's cookies — an admin "
+        "should upload a YouTube cookies file (name containing <code>youtube</code>, e.g. "
+        "<code>youtube_1.txt</code>) in the panel, or set a clean proxy."
+    ),
     "dl_pick_quality": "🎬 <b>{title}</b>\nChoose the output quality:",
     "btn_dl_best": "⭐ Best",
     "btn_dl_audio": "🎵 Audio only",
