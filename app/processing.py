@@ -451,6 +451,73 @@ async def compress_video(inp: str, out: str, height: int | None = None, kbps: in
             raise
 
 
+def _tiny_plan(duration: float | None, target_mb: int, height: int) -> tuple[int, int, int]:
+    """(video_kbps, audio_kbps, height) برای حالتِ خیلی کم‌حجم بر پایهٔ هدفِ حجم/مدت.
+
+    بودجهٔ کل = target_mb×۸۱۹۲÷مدت. صدا ~۳۰٪ (کفِ ۲۴، سقفِ ۴۸، مونو). ویدیو = بقیه،
+    کف ۴۸ و سقف ۹۰۰. بیت‌ریتِ ویدیوی خیلی‌کم → اُفتِ خودکار به ۳۶۰p (تمیزتر از ۴۸۰p).
+    """
+    total = int(target_mb * 8192 / duration) if duration and duration > 0 else 200
+    audio = int(min(48, max(24, total * 0.30)))
+    video = max(48, min(900, total - audio))
+    if video < 70 and height > 360:
+        height = 360
+    return video, audio, height
+
+
+async def compress_video_tiny(inp: str, out: str, duration: float | None = None,
+                              target_mb: int = 250, height: int = 480,
+                              encoder: str | None = None, speed: str | None = None,
+                              progress=None, cancel=None) -> None:
+    """حالتِ «خیلی کم‌حجم» برای کلاس/جلسه: ویدیوی ۳ساعت‌ونیمهٔ ۷۲۰p → ~۲۵۰MB.
+
+    اهرم‌ها: کوچک‌سازی به ۴۸۰p (اُفتِ خودکار به ۳۶۰p در بیت‌ریتِ خیلی‌کم) + کپِ ۱۵fps +
+    صدای مونوی کم‌بیت + بیت‌ریتِ ویدیوی هدف‌محورِ کران‌دار (capped-CRF: کیفیت وقتی صحنه
+    ثابت است، سقف وقتی حرکت دارد) + GOPِ بزرگ (محتوای ثابتِ کلاس فشرده‌تر می‌شود).
+
+    NVENC-ready: با encoder='nvenc' دیکود+انکودِ سخت‌افزاری (‎-hwaccel cuda) تا همان کار
+    در ~۵ دقیقه تمام شود؛ روی CPU با x264 (کندتر) و در صورتِ شکستِ nvenc خودکار fallback.
+    """
+    v_kbps, a_kbps, h = _tiny_plan(duration, target_mb, height)
+    preset = _resolve_preset(speed)
+    gop = 150  # کلیدفریم هر ~۱۰ثانیه در ۱۵fps
+
+    def build_x264() -> list[str]:
+        return [
+            FFMPEG, "-y", "-i", inp,
+            "-vf", f"fps=15,scale=-2:{h}",
+            "-c:v", "libx264", "-preset", preset, "-crf", "28",
+            "-maxrate", f"{v_kbps}k", "-bufsize", f"{v_kbps * 2}k",
+            "-pix_fmt", "yuv420p", "-g", str(gop),
+            "-c:a", "aac", "-ac", "1", "-b:a", f"{a_kbps}k",
+            "-movflags", "+faststart", out,
+        ]
+
+    def build_nvenc() -> list[str]:
+        return [
+            FFMPEG, "-y", "-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i", inp,
+            "-vf", f"scale_cuda=-2:{h},fps=15",
+            "-c:v", "h264_nvenc", "-preset", _NVENC_PRESET.get(preset, "p4"),
+            "-rc", "vbr", "-cq", "30", "-b:v", f"{v_kbps}k",
+            "-maxrate", f"{int(v_kbps * 1.5)}k", "-bufsize", f"{v_kbps * 2}k",
+            "-pix_fmt", "yuv420p", "-g", str(gop),
+            "-c:a", "aac", "-ac", "1", "-b:a", f"{a_kbps}k",
+            "-movflags", "+faststart", out,
+        ]
+
+    enc = (encoder or settings.video_encoder or "x264").lower()
+    try:
+        await _run(build_nvenc() if enc == "nvenc" else build_x264(),
+                   progress=progress, duration=duration, cancel=cancel)
+    except ProcessingCancelled:
+        raise
+    except RuntimeError:
+        if enc == "nvenc":  # GPU نبود/اشتباه → با x264 (نرم‌افزاری) دوباره
+            await _run(build_x264(), progress=progress, duration=duration, cancel=cancel)
+        else:
+            raise
+
+
 async def convert_video(inp: str, out: str, fmt: str, progress=None, duration=None, cancel=None) -> None:
     args = [FFMPEG, "-y", "-i", inp]
     if fmt.lower() == "mp4":

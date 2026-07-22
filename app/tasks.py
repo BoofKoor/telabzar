@@ -130,15 +130,23 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             out = os.path.join(workdir, f"{stem}-min.mp4")
             enc = await settings_store.get_str("video_encoder", settings.video_encoder)
             spd = await settings_store.get_str("compress_speed", settings.compress_speed)
-            await P.compress_video(inpath, out, height=args.get("height"), kbps=args.get("kbps"),
-                                   progress=progress, duration=dur, cancel=cancel,
-                                   encoder=enc, speed=spd)
+            if args.get("tiny"):  # حالتِ «خیلی کم‌حجم» (کلاس/جلسه)
+                target = await settings_store.get_int("compress_tiny_target_mb",
+                                                      settings.compress_tiny_target_mb)
+                th = await settings_store.get_int("compress_tiny_height", settings.compress_tiny_height)
+                await P.compress_video_tiny(inpath, out, duration=dur, target_mb=target, height=th,
+                                            encoder=enc, speed=spd, progress=progress, cancel=cancel)
+            else:
+                await P.compress_video(inpath, out, height=args.get("height"), kbps=args.get("kbps"),
+                                       progress=progress, duration=dur, cancel=cancel,
+                                       encoder=enc, speed=spd)
         elif file.kind == "audio":
             out = os.path.join(workdir, f"{stem}-min.mp3")
             await P.compress_audio(inpath, out, progress=progress, duration=dur, cancel=cancel)
         else:
             raise RuntimeError("compress not supported for this type")
-        return {"path": out, "filename": os.path.basename(out), "label": t(lang, "cl_compress")}
+        label = t(lang, "cl_tiny") if args.get("tiny") else t(lang, "cl_compress")
+        return {"path": out, "filename": os.path.basename(out), "label": label}
 
     if op == "convert":
         fmt = (args.get("target") or "").lower()

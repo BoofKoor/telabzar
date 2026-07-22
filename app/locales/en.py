@@ -91,6 +91,8 @@ MESSAGES: dict[str, str] = {
     # smart compress
     "compress_choose": "🗜 <b>Compress</b> — choose the output quality:",
     "btn_same_res": "♻️ Same quality, smaller",
+    "btn_tiny": "🪶 Super-small (lecture)",
+    "cl_tiny": "🪶 Super-compressed",
     # progress-bar labels — live staged narrative
     "pr_analyzing": "Analyzing the file",
     "pr_almost": "Almost ready — finishing up",
