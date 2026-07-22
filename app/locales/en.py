@@ -24,6 +24,7 @@ MESSAGES: dict[str, str] = {
     "btn_zip": "Zip",
     "btn_scan": "Malware scan",
     "btn_close": "✕ Close",
+    "btn_show_options": "⚙️ Show options",
     "btn_meta": "🎵 Metadata",
     "btn_transcribe": "🎙 Transcribe",
     "btn_bg_remove": "Remove BG",

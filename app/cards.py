@@ -20,7 +20,15 @@ from aiogram.types import (
 
 from .filetypes import human_size
 from .i18n import t
-from .keyboards import file_card_kb
+from .keyboards import collapsed_kb, file_card_kb
+
+
+def _initial_kb(file: File, lang: str):
+    """کیبوردِ اولیهٔ کارت: فایلِ ارسالیِ لینک (source='dl') جمع‌شده می‌آید (فقط دکمهٔ
+    «نمایش آپشن‌ها»)؛ بقیه منوی کامل. UIِ خلوت‌تر برای تحویلِ لینک."""
+    if file.source == "dl":
+        return collapsed_kb(file.ref, lang)
+    return file_card_kb(file.ref, file.kind, lang)
 from .models import File
 
 _ICON = {"document": "🗎", "image": "🖼", "video": "🎬", "audio": "🎵",
@@ -165,7 +173,7 @@ async def send_card(bot: Bot, chat_id: int, file: File, lang: str, *,
     """ارسالِ کارتِ فایل (فایل + کپشن + کیبورد). با fallback به سند.
     thumb: تامبنیلِ اختیاری (InputFile/file_id) — برای ویدیوهای دانلودی."""
     caption = card_caption(file, lang)
-    kb = file_card_kb(file.ref, file.kind, lang)
+    kb = _initial_kb(file, lang)
     try:
         return await _send_typed(bot, chat_id, file, _media_arg(file, path), caption, kb, thumb=thumb)
     except TelegramBadRequest:
@@ -178,7 +186,7 @@ async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang:
     (مثلاً پیامِ لنگرگاه متنی بود)، کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند.
     این تابع برای «ارسالِ درجای» دانلود هم استفاده می‌شود (عکسِ منو → ویدیو)."""
     caption = card_caption(file, lang)
-    kb = file_card_kb(file.ref, file.kind, lang)
+    kb = _initial_kb(file, lang)
     im_cls = _INPUT_MEDIA.get(file.kind, InputMediaDocument)
     extra: dict = {}
     if file.kind == "video":
@@ -251,7 +259,8 @@ async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lan
     """فقط کپشن/کیبوردِ کارت را عوض کن. keyboard: True=منوی اصلی · False/None=بدون کیبورد
     · یا یک InlineKeyboardMarkup دلخواه (مثلِ دکمهٔ لغوِ حین پردازش)."""
     if keyboard is True:
-        kb = file_card_kb(file.ref, file.kind, lang)
+        # منوی کامل؛ برای فایلِ لینک، «بستن» به‌جای حذف، منو را جمع می‌کند
+        kb = file_card_kb(file.ref, file.kind, lang, collapsible=(file.source == "dl"))
     elif not keyboard:
         kb = None
     else:
