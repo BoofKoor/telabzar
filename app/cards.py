@@ -98,14 +98,28 @@ def _info_line(file: File) -> str:
     return "  ·  ".join(parts)
 
 
-def progress_note(label: str, percent: float, eta: float | None = None) -> str:
-    """نوارِ پیشرفتِ تمیز برای کپشن: ⚙️ برچسب / ▰▰▰▱▱ ۵۲٪ · ⏳ ~۰:۱۸."""
+_SPIN = ("◐", "◓", "◑", "◒")  # فریمِ چرخان → کاربر می‌بیند کار زنده است
+
+
+def progress_note(label: str, percent: float | None = None, eta: float | None = None,
+                  elapsed: float | None = None, tick: int = 0) -> str:
+    """نوارِ پیشرفت/تپش برای کپشن. اگر درصد معلوم بود: ◐ برچسب / ▰▰▰▱▱ ۵۲٪ · ⏳ ~۰:۱۸.
+    اگر معلوم نبود (نامعین): ◐ برچسب · ⏱ ۰:۱۲ — با فریمِ چرخان و زمانِ سپری‌شده که
+    هر تیک عوض می‌شود تا هیچ‌وقت «قفل‌شده» به‌نظر نرسد."""
+    spin = _SPIN[tick % len(_SPIN)]
+    if percent is None:  # نامعین: فقط تپش (اسپینر + زمانِ سپری‌شده)
+        line = f"{spin} {label}"
+        if elapsed and elapsed > 0:
+            line += f"  ·  ⏱ {_fmt_dur(int(elapsed))}"
+        return line
     pct = max(0, min(100, int(percent)))
     filled = round(pct / 10)
     bar = "▰" * filled + "▱" * (10 - filled)
-    line = f"⚙️ {label}\n<code>{bar}</code>  <b>{pct}%</b>"
+    line = f"{spin} {label}\n<code>{bar}</code>  <b>{pct}%</b>"
     if eta and eta > 0:
         line += f"  ·  ⏳ ~{_fmt_dur(int(eta))}"
+    elif elapsed and elapsed > 0:
+        line += f"  ·  ⏱ {_fmt_dur(int(elapsed))}"
     return line
 
 
