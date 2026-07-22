@@ -640,26 +640,45 @@ def _parse_spotify_embed(html: str, kind: str, max_tracks: int) -> dict | None:
     return {"kind": kind, "title": title, "tracks": tracks[:max_tracks]}
 
 
-async def _spotify_scrape(url: str, max_tracks: int) -> dict:
+# هدرهای مرورگرِ واقعی — open.spotify.com به درخواستِ غیرِمرورگری اغلب 403 می‌دهد.
+_BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _http_proxy(proxy: str | None) -> str | None:
+    """aiohttp فقط پروکسیِ http(s) را می‌فهمد (نه socks) → فقط همان را پاس بده."""
+    return proxy if proxy and proxy.startswith(("http://", "https://")) else None
+
+
+async def _spotify_scrape(url: str, max_tracks: int, proxy: str | None = None) -> dict:
     """بدونِ credential: از صفحهٔ عمومیِ embedِ اسپاتیفای متادیتا را می‌خواند (بی‌لاگین).
 
     منبعِ اصلی: JSONِ __NEXT_DATA__ (نام/هنرمند/کاور/مدت). اگر ساختار عوض شده بود،
-    fallback به oEmbedِ رسمی (فقط عنوان + کاور برای تک‌آهنگ).
+    fallback به oEmbedِ رسمی. اگر اسپاتیفای درخواست را بلاک کرد (403 روی IPِ دیتاسنتر)،
+    خطای گویا می‌دهد تا کاربر بداند باید credential (APIِ رسمی) بگذارد.
     """
     import aiohttp
     kind, sid = spotify_id(url)
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; TelabzarBot)"}
-    async with aiohttp.ClientSession(headers=headers) as s:
-        async with s.get(f"https://open.spotify.com/embed/{kind}/{sid}") as r:
+    px = _http_proxy(proxy)
+    timeout = aiohttp.ClientTimeout(total=25)
+    async with aiohttp.ClientSession(headers=_BROWSER_HEADERS, timeout=timeout) as s:
+        async with s.get(f"https://open.spotify.com/embed/{kind}/{sid}", proxy=px) as r:
+            embed_status = r.status
             html = await r.text() if r.status == 200 else ""
     parsed = _parse_spotify_embed(html, kind, max_tracks)
     if parsed:
         return parsed
     # fallback: oEmbedِ رسمی (عنوان + کاور)
-    async with aiohttp.ClientSession(headers=headers) as s:
-        async with s.get(f"https://open.spotify.com/oembed?url={url}") as r:
+    async with aiohttp.ClientSession(headers=_BROWSER_HEADERS, timeout=timeout) as s:
+        async with s.get(f"https://open.spotify.com/oembed?url={url}", proxy=px) as r:
             if r.status != 200:
-                raise RuntimeError(f"spotify page unreadable (HTTP {r.status})")
+                raise RuntimeError(
+                    f"spotify blocked the request (embed HTTP {embed_status}, oembed HTTP {r.status}) "
+                    "— set Client ID/Secret in the panel")
             d = await r.json(content_type=None)
     if not d.get("title"):
         raise RuntimeError("spotify: could not read link metadata")
@@ -668,9 +687,10 @@ async def _spotify_scrape(url: str, max_tracks: int) -> dict:
                         "cover_url": d.get("thumbnail_url"), "duration": None, "isrc": None}]}
 
 
-async def spotify_resolve(url: str, client_id: str = "", secret: str = "", max_tracks: int = 20) -> dict:
-    """لینکِ اسپاتیفای → {kind, title, tracks[]}. با credential از API (کامل‌تر)، وگرنه
-    از صفحهٔ عمومیِ embed (بی‌لاگین). credential اختیاری است اما پایدارتر/کامل‌تر."""
+async def spotify_resolve(url: str, client_id: str = "", secret: str = "", max_tracks: int = 20,
+                          proxy: str | None = None) -> dict:
+    """لینکِ اسپاتیفای → {kind, title, tracks[]}. با credential از APIِ رسمی (پایدار روی
+    سرور)، وگرنه از صفحهٔ عمومیِ embed (که ممکن است IPِ دیتاسنتر را 403 کند)."""
     kind, _sid = spotify_id(url)
     if not kind:
         raise RuntimeError("unsupported spotify link")
@@ -679,7 +699,7 @@ async def spotify_resolve(url: str, client_id: str = "", secret: str = "", max_t
             return await _spotify_api_resolve(url, client_id, secret, max_tracks)
         except Exception as exc:  # noqa: BLE001  — API خطا داد → برگرد به اسکرَیپِ عمومی
             log.info("spotify API failed (%s); falling back to public embed", str(exc)[:120])
-    return await _spotify_scrape(url, max_tracks)
+    return await _spotify_scrape(url, max_tracks, proxy=proxy)
 
 
 async def _fetch_cover(url: str | None, dest_dir: str) -> str | None:
@@ -712,7 +732,7 @@ async def download_spotify(url: str, workdir: str, opts: dict,
     cid = opts.get("spotify_client_id") or ""
     secret = opts.get("spotify_client_secret") or ""
     max_tracks = int(opts.get("spotify_max_tracks") or 20)
-    resolved = await spotify_resolve(url, cid, secret, max_tracks)
+    resolved = await spotify_resolve(url, cid, secret, max_tracks, proxy=opts.get("proxy"))
     tracks = resolved["tracks"]
     if not tracks:
         raise RuntimeError("spotify: no tracks found")
