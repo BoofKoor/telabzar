@@ -720,6 +720,91 @@ async def _fetch_cover(url: str | None, dest_dir: str) -> str | None:
         return None
 
 
+# کلمه‌های نسخهٔ «نادرست» (لایو/کاور/ریمیکس/…) — اگر در عنوانِ خودِ ترکِ اسپاتیفای نباشند جریمه.
+_BAD_KW = ("live", "cover", "remix", "sped up", "slowed", "reverb", "karaoke", "instrumental",
+           "8d", "concert", "acoustic", "tribute", "parody", "reaction", "nightcore", "mashup",
+           "extended mix", "radio edit", "performance", "unplugged", "session")
+
+
+def _cand_url(c: dict) -> str | None:
+    v = c.get("id") or c.get("url") or ""
+    if not v:
+        return None
+    return v if v.startswith("http") else f"https://www.youtube.com/watch?v={v}"
+
+
+def _score_match(cand: dict, target_dur: int | None, target_title: str) -> float:
+    """امتیازِ تطبیقِ یک نتیجهٔ یوتیوب با ترکِ اسپاتیفای — مدتِ زمان مهم‌ترین سیگنال است."""
+    title = (cand.get("title") or "").lower()
+    channel = (cand.get("channel") or cand.get("uploader") or "").lower()
+    dur = cand.get("duration")
+    score = 0.0
+    if target_dur and dur:  # نزدیکیِ مدت = همان ضبط (لایو معمولاً بلندتر است)
+        diff = abs(dur - target_dur)
+        if diff <= 2:
+            score += 60
+        elif diff <= 5:
+            score += 45
+        elif diff <= 10:
+            score += 25
+        elif diff <= 20:
+            score += 5
+        else:
+            score -= min(60, diff - 20)
+    if " - topic" in channel:      # کانالِ Topicِ یوتیوب‌موزیک = صوتِ رسمی
+        score += 35
+    if "vevo" in channel:
+        score += 20
+    if "official audio" in title:
+        score += 20
+    elif "official" in title and "video" in title:
+        score += 8
+    tt = (target_title or "").lower()
+    for kw in _BAD_KW:
+        if kw in title and kw not in tt:  # اگر خودِ ترک «live/remix» نیست، جریمه‌اش کن
+            score -= 30
+    return score
+
+
+def _pick_best_match(candidates: list[dict], track: dict) -> dict | None:
+    best, best_score = None, -1e9
+    for c in candidates:
+        if not _cand_url(c):
+            continue
+        s = _score_match(c, track.get("duration"), track.get("title") or "")
+        if s > best_score:
+            best, best_score = c, s
+    return best
+
+
+async def _yt_search_candidates(query: str, opts: dict, limit: int = 6, timeout: float = 60) -> list[dict]:
+    """جست‌وجوی مسطحِ یوتیوب → فهرستِ نامزدها (id/title/duration/channel) بدونِ دانلود."""
+    ck = _writable_cookie(opts.get("cookies"))
+    flags = ["--flat-playlist", "-J", "--no-warnings"]
+    if opts.get("proxy"):
+        flags += ["--proxy", opts["proxy"]]
+    if ck or opts.get("cookies"):
+        flags += ["--cookies", ck or opts["cookies"]]
+    cmd = [YTDLP, *flags, f"ytsearch{limit}:{query}"]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out, _err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return []
+    finally:
+        _cleanup_cookie(ck)
+    if proc.returncode != 0:
+        return []
+    try:
+        return (json.loads(out.decode("utf-8", "ignore") or "{}").get("entries")) or []
+    except ValueError:
+        return []
+
+
 async def download_spotify(url: str, workdir: str, opts: dict,
                            progress=None, cancel=None) -> list[tuple[str, dict, str | None]]:
     """هر ترکِ اسپاتیفای را با تطبیق روی یوتیوب دانلود می‌کند → لیستِ (path, info, thumb).
@@ -744,15 +829,21 @@ async def download_spotify(url: str, workdir: str, opts: dict,
             raise ProcessingCancelled()
         tdir = os.path.join(workdir, f"t{i}")
         os.makedirs(tdir, exist_ok=True)
-        # ‎ytsearch روی خودِ یوتیوب جست‌وجو می‌کند؛ « - » وقتی هنرمند/عنوان خالی باشد اذیت می‌کند
-        query = "ytsearch1:" + " ".join(p for p in (tr.get("artist"), tr.get("title")) if p).strip()
+        query = " ".join(p for p in (tr.get("artist"), tr.get("title")) if p).strip()
+        # چند نامزد را بگیر و بهترین را بر اساسِ مدت/کانالِ رسمی انتخاب کن (نه اولین نتیجه که
+        # اغلب لایو/کاور است). اگر جست‌وجو نشد، به ytsearch1 برگرد.
+        candidates = await _yt_search_candidates(query, opts)
+        best = _pick_best_match(candidates, tr) if candidates else None
+        target = _cand_url(best) if best else None
+        if not target:
+            target = f"ytsearch1:{query}"
 
         async def _p(pct: float, _i=i) -> None:  # پیشرفتِ کلی روی همهٔ ترک‌ها
             if progress is not None:
                 await progress((_i * 100 + pct) / n)
 
         try:
-            path, yinfo, _thumb = await download_ytdlp(query, tdir, "audio", opts,
+            path, yinfo, _thumb = await download_ytdlp(target, tdir, "audio", opts,
                                                        progress=_p, cancel=cancel)
         except ProcessingCancelled:
             raise
@@ -762,7 +853,7 @@ async def download_spotify(url: str, workdir: str, opts: dict,
             if opts.get("pot_provider"):
                 try:
                     path, yinfo, _thumb = await download_ytdlp(
-                        query, tdir, "audio", {**opts, "pot_provider": None}, progress=_p, cancel=cancel)
+                        target, tdir, "audio", {**opts, "pot_provider": None}, progress=_p, cancel=cancel)
                 except ProcessingCancelled:
                     raise
                 except Exception as exc2:  # noqa: BLE001
