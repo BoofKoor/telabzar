@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import ssl
+import time
 from urllib.parse import quote
 
 from aiohttp import web
@@ -21,6 +22,11 @@ from .models import File
 
 log = logging.getLogger("telabzar.gateway")
 
+# کشِ token → (انقضا, مسیرِ دیسک, mime, نام). پخشِ ویدیو ده‌ها درخواستِ Range می‌سازد؛
+# بدونِ کش هرکدام یک کوئریِ DB + یک getFile به Bot API می‌زد (تأخیرِ زیاد در seek/لود).
+_META_TTL = 120.0  # ثانیه — کوتاه: بارِ رگبارِ Range را می‌گیرد ولی ابطالِ توکن هم کم‌تأخیر بماند
+_meta_cache: dict[str, tuple[float, str, str | None, str]] = {}
+
 
 async def _lookup(token: str) -> File | None:
     async with Sessionmaker() as session:
@@ -28,10 +34,12 @@ async def _lookup(token: str) -> File | None:
         return result.scalar_one_or_none()
 
 
-async def _serve(request: web.Request, *, inline: bool) -> web.StreamResponse:
-    token = request.match_info.get("token", "")
-    if not token or len(token) > 64:
-        raise web.HTTPNotFound()
+async def _resolve(request: web.Request, token: str) -> tuple[str, str | None, str]:
+    """token → (مسیرِ دیسک, mime, نام) با کشِ کوتاه‌مدت تا هر درخواستِ Range دوباره DB/getFile نزند."""
+    now = time.monotonic()
+    hit = _meta_cache.get(token)
+    if hit and hit[0] > now and os.path.exists(hit[1]):
+        return hit[1], hit[2], hit[3]
     file = await _lookup(token)
     if file is None:
         raise web.HTTPNotFound()
@@ -43,14 +51,27 @@ async def _serve(request: web.Request, *, inline: bool) -> web.StreamResponse:
     path = tg_file.file_path
     if not path or not os.path.exists(path):
         raise web.HTTPNotFound()
-
     name = file.name or "file"
+    if len(_meta_cache) > 2048:  # پاک‌سازیِ ورودی‌های منقضی وقتی کش بزرگ شد
+        for k, v in list(_meta_cache.items()):
+            if v[0] <= now:
+                _meta_cache.pop(k, None)
+    _meta_cache[token] = (now + _META_TTL, path, file.mime, name)
+    return path, file.mime, name
+
+
+async def _serve(request: web.Request, *, inline: bool) -> web.StreamResponse:
+    token = request.match_info.get("token", "")
+    if not token or len(token) > 64:
+        raise web.HTTPNotFound()
+    path, mime, name = await _resolve(request, token)
     disp = "inline" if inline else "attachment"
     # RFC 5987 برای نام‌های غیر-ASCII (فارسی)
-    headers = {"Content-Disposition": f"{disp}; filename*=UTF-8''{quote(name)}"}
+    headers = {"Content-Disposition": f"{disp}; filename*=UTF-8''{quote(name)}",
+               "Cache-Control": "private, max-age=600"}
     resp = web.FileResponse(path, headers=headers)  # FileResponse خودش Range را می‌فهمد
-    if file.mime:
-        resp.content_type = file.mime
+    if mime:
+        resp.content_type = mime
     return resp
 
 
