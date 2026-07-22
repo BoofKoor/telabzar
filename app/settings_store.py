@@ -59,6 +59,9 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "spotify_client_secret": ("str", settings.spotify_client_secret),
     "spotify_meta": ("bool", settings.spotify_meta),
     "spotify_max_tracks": ("int", settings.spotify_max_tracks),
+    "spotify_source": ("str", settings.spotify_source),
+    "spotify_match_min": ("int", settings.spotify_match_min),
+    "spotify_yt_fallback": ("bool", settings.spotify_yt_fallback),
 }
 
 # کلیدهایی با مقادیرِ مجازِ محدود (اعتبارسنجیِ /admin).
@@ -71,6 +74,7 @@ ENUM_VALUES: dict[str, tuple[str, ...]] = {
     "dl_ux_instagram": ("probe", "quick", ""),
     "dl_ux_twitter": ("probe", "quick", ""),
     "dl_ux_tiktok": ("probe", "quick", ""),
+    "spotify_source": ("ytmusic", "youtube"),
 }
 
 

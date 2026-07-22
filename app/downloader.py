@@ -12,13 +12,16 @@ processing._run با قراردادِ progress/cancel/ProcessingCancelled.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import shutil
 import tempfile
+import unicodedata
 from urllib.parse import urlparse
 
 from .exceptions import ProcessingCancelled
@@ -725,6 +728,14 @@ _BAD_KW = ("live", "cover", "remix", "sped up", "slowed", "reverb", "karaoke", "
            "8d", "concert", "acoustic", "tribute", "parody", "reaction", "nightcore", "mashup",
            "extended mix", "radio edit", "performance", "unplugged", "session")
 
+# کلمه‌های نویز که هنگامِ نرمال‌سازیِ عنوان حذف می‌شوند (تا تطبیقِ fuzzy واقعی‌تر شود).
+_NOISE_RE = re.compile(
+    r"\b(official|audio|video|lyric|lyrics|visualizer|hd|hq|mv|m/v|4k|"
+    r"remaster(?:ed)?|full|album|track|version|feat|ft|featuring|prod)\b", re.I)
+_PAREN_RE = re.compile(r"[\(\[\{][^)\]\}]*[\)\]\}]")     # (feat. X) [Official Video] {…}
+_FEAT_RE = re.compile(r"\b(?:feat|ft|featuring|with)\.?\s.*$", re.I)  # دنبالهٔ «feat …»
+_ARTIST_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\bx\b|\bvs\b|\band\b|feat\.?|ft\.?|featuring)\s*", re.I)
+
 
 def _cand_url(c: dict) -> str | None:
     v = c.get("id") or c.get("url") or ""
@@ -733,47 +744,144 @@ def _cand_url(c: dict) -> str | None:
     return v if v.startswith("http") else f"https://www.youtube.com/watch?v={v}"
 
 
-def _score_match(cand: dict, target_dur: int | None, target_title: str) -> float:
-    """امتیازِ تطبیقِ یک نتیجهٔ یوتیوب با ترکِ اسپاتیفای — مدتِ زمان مهم‌ترین سیگنال است."""
-    title = (cand.get("title") or "").lower()
-    channel = (cand.get("channel") or cand.get("uploader") or "").lower()
-    dur = cand.get("duration")
-    score = 0.0
-    if target_dur and dur:  # نزدیکیِ مدت = همان ضبط (لایو معمولاً بلندتر است)
-        diff = abs(dur - target_dur)
-        if diff <= 2:
-            score += 60
-        elif diff <= 5:
-            score += 45
-        elif diff <= 10:
-            score += 25
-        elif diff <= 20:
-            score += 5
-        else:
-            score -= min(60, diff - 20)
-    if " - topic" in channel:      # کانالِ Topicِ یوتیوب‌موزیک = صوتِ رسمی
-        score += 35
-    if "vevo" in channel:
-        score += 20
-    if "official audio" in title:
-        score += 20
-    elif "official" in title and "video" in title:
-        score += 8
-    tt = (target_title or "").lower()
+def _norm(s: str | None) -> str:
+    """نرمال‌سازیِ عنوان/نام برای تطبیقِ fuzzy: NFKC + casefold + حذفِ براکت/نویز/نگارش.
+
+    یونی‌کد را نگه می‌دارد (برای عنوان‌های فارسی)، فقط علائم را حذف می‌کند.
+    """
+    s = unicodedata.normalize("NFKC", s or "").casefold().strip()
+    s = _PAREN_RE.sub(" ", s)
+    s = _FEAT_RE.sub(" ", s)
+    s = _NOISE_RE.sub(" ", s)
+    s = re.sub(r"[^\w\s]", " ", s)  # \w یونی‌کدی است → حروفِ فارسی می‌مانند
+    return " ".join(s.split())
+
+
+def _ratio(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio() * 100.0
+
+
+def _cand_dur(cand: dict) -> int | None:
+    d = cand.get("duration_seconds") or cand.get("duration")
+    try:
+        return int(d) if d else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _cand_artists(cand: dict) -> list[str]:
+    """نامِ هنرمند(ها)ی نامزد: از YT Music لیستِ artists، از ytsearch کانالِ «X - Topic»/VEVO."""
+    a = cand.get("artists")
+    if isinstance(a, list) and a:
+        return [x.get("name") if isinstance(x, dict) else str(x) for x in a if x]
+    chan = cand.get("channel") or cand.get("uploader") or ""
+    chan = re.sub(r"\s*-\s*topic\s*$", "", chan, flags=re.I)
+    chan = re.sub(r"vevo\s*$", "", chan, flags=re.I).strip()
+    return [chan] if chan else []
+
+
+def _track_artists(track: dict) -> list[str]:
+    return [x.strip() for x in _ARTIST_SPLIT_RE.split(track.get("artist") or "") if x.strip()]
+
+
+def _name_match(track: dict, cand: dict) -> float:
+    """تطبیقِ نامِ ترک با عنوانِ نامزد؛ هم «Title» (YT Music) هم «Artist - Title» (یوتیوب)."""
+    ct = _norm(cand.get("title"))
+    plain = _ratio(_norm(track.get("title")), ct)
+    enriched = _ratio(_norm(f"{track.get('artist','')} {track.get('title','')}"), ct)
+    return max(plain, enriched)
+
+
+def _artist_match(track: dict, cand: dict) -> float | None:
+    """میانگینِ وزن‌دارِ تطبیقِ هنرمندان (هنرمندِ اصلی مهم‌تر). None اگر شواهدی نبود."""
+    ta = _track_artists(track)
+    ca = _cand_artists(cand)
+    if not ta:
+        return None
+    if not ca:  # نامزد نامِ هنرمند نداشت → دستِ‌کم حضورِ نامِ هنرمند در عنوان را بسنج
+        ct = _norm(cand.get("title"))
+        return max(_ratio(_norm(a), ct) for a in ta) if ct else None
+    nc = [_norm(x) for x in ca if x]
+    if not nc:
+        return None
+    scores = [max(_ratio(_norm(a), c) for c in nc) for a in ta]
+    main = scores[0]
+    rest = scores[1:]
+    return main * 0.6 + (sum(rest) / len(rest)) * 0.4 if rest else main
+
+
+def _album_match(track: dict, cand: dict) -> float | None:
+    ta = track.get("album")
+    ca = cand.get("album")
+    if isinstance(ca, dict):
+        ca = ca.get("name")
+    if not ta or not ca:
+        return None
+    return _ratio(_norm(ta), _norm(str(ca)))
+
+
+def _time_match(cand_dur: int | None, target_dur: int | None) -> float | None:
+    """کاهشِ نماییِ اختلافِ مدت → ۰..۱۰۰ (روشِ spotDL). None اگر یکی نامعلوم بود."""
+    if not cand_dur or not target_dur:
+        return None
+    return math.exp(-0.1 * abs(cand_dur - target_dur)) * 100.0
+
+
+def _duration_reject(cand: dict, track: dict) -> bool:
+    """گیتِ سختِ مدت: اختلافِ زیاد = نسخهٔ دیگر (لایو/اکستندد/رادیو-ادیت) → رد."""
+    td = track.get("duration")
+    cd = _cand_dur(cand)
+    if not td or not cd:
+        return False
+    diff = abs(cd - td)
+    return diff > 30 and diff / td > 0.15
+
+
+def _match_score(cand: dict, track: dict) -> float:
+    """امتیازِ ترکیبیِ ۰..۱۰۰+ (وزن‌دار) + بونوس/جریمه. بالاتر = تطبیقِ بهتر."""
+    name = _name_match(track, cand)
+    artist = _artist_match(track, cand)
+    tscore = _time_match(_cand_dur(cand), track.get("duration"))
+    album = _album_match(track, cand)
+    parts: list[tuple[float, float]] = [(name, 0.40)]
+    if artist is not None:
+        parts.append((artist, 0.25))
+    if tscore is not None:
+        parts.append((tscore, 0.27))
+    if album is not None:
+        parts.append((album, 0.08))
+    tot = sum(w for _, w in parts)
+    score = sum(v * w for v, w in parts) / tot if tot else 0.0
+    # جریمهٔ کلمه‌های نسخهٔ نادرست (اگر خودِ ترک آن کلمه را ندارد)
+    ct = _norm(cand.get("title"))
+    tt = _norm(track.get("title"))
     for kw in _BAD_KW:
-        if kw in title and kw not in tt:  # اگر خودِ ترک «live/remix» نیست، جریمه‌اش کن
-            score -= 30
+        if kw in ct and kw not in tt:
+            score -= 12
+    if cand.get("art_track"):   # نتیجهٔ فیلترِ «songs» = Art Trackِ رسمی
+        score += 6
+    if cand.get("isrc_hit"):    # از سرچِ ISRC آمده = تطبیقِ قطعی
+        score += 20
     return score
 
 
-def _pick_best_match(candidates: list[dict], track: dict) -> dict | None:
+def _pick_best_match(candidates: list[dict], track: dict, min_score: float = 55.0) -> dict | None:
+    """بهترین نامزدِ بالای آستانه؛ نامزدهای با نام/مدتِ آشکارا نادرست رد می‌شوند."""
     best, best_score = None, -1e9
     for c in candidates:
         if not _cand_url(c):
             continue
-        s = _score_match(c, track.get("duration"), track.get("title") or "")
+        if _name_match(track, c) < 45:   # عنوان آشکارا ربطی ندارد
+            continue
+        if _duration_reject(c, track):   # طولِ آشکارا متفاوت (لایو/اکستندد)
+            continue
+        s = _match_score(c, track)
         if s > best_score:
             best, best_score = c, s
+    if best is None or best_score < min_score:
+        return None
     return best
 
 
@@ -805,6 +913,75 @@ async def _yt_search_candidates(query: str, opts: dict, limit: int = 6, timeout:
         return []
 
 
+# ── YouTube Music (ytmusicapi): سرچِ کاتالوگِ «songs» = ضبطِ رسمی، نه لایو/کاور ──
+_YTM_CACHE: dict[str, object] = {}
+
+
+def _get_ytmusic(proxy: str | None):
+    """کلاینتِ YTMusic (بی‌لاگین) با کشِ سطحِ‌پروسه؛ روی خطا از کش حذف می‌شود."""
+    key = proxy or ""
+    cli = _YTM_CACHE.get(key)
+    if cli is None:
+        from ytmusicapi import YTMusic  # importِ تنبل (وابستگیِ ورکرِ دانلود)
+        px = {"http": proxy, "https": proxy} if proxy else None
+        cli = YTMusic(proxies=px)
+        _YTM_CACHE[key] = cli
+    return cli
+
+
+def _norm_ytm(item: dict, filt: str) -> dict:
+    """آیتمِ ytmusicapi → نامزدِ یکدست (id/title/artists/album/duration/art_track)."""
+    album = item.get("album")
+    if isinstance(album, dict):
+        album = album.get("name")
+    return {
+        "id": item.get("videoId"),
+        "title": item.get("title"),
+        "artists": [a.get("name") for a in (item.get("artists") or []) if isinstance(a, dict) and a.get("name")],
+        "album": album,
+        "duration_seconds": item.get("duration_seconds"),
+        "art_track": filt == "songs",
+        "source": "ytmusic",
+    }
+
+
+async def _ytmusic_search(query: str, filt: str, proxy: str | None,
+                          limit: int = 6, timeout: float = 20) -> list[dict]:
+    """سرچِ YouTube Music (sync → to_thread). خطا/تایم‌اوت → لیستِ خالی (fallback بالادست)."""
+    def _run() -> list[dict]:
+        try:
+            return _get_ytmusic(proxy).search(query, filter=filt, limit=limit) or []
+        except Exception as exc:  # noqa: BLE001  — بلاک/۴۲۹/ساختارِ عوض‌شده → کشِ کلاینت را تازه کن
+            log.info("ytmusic search failed (%s): %s", filt, str(exc)[:120])
+            _YTM_CACHE.pop(proxy or "", None)
+            return []
+    try:
+        raw = await asyncio.wait_for(asyncio.to_thread(_run), timeout=timeout)
+    except asyncio.TimeoutError:
+        return []
+    out = [_norm_ytm(x, filt) for x in raw if isinstance(x, dict) and x.get("videoId")]
+    return out
+
+
+async def _gather_candidates(track: dict, opts: dict, source: str) -> list[dict]:
+    """نامزدهای یک ترک: YT Music (ISRC→songs→videos) اول، وگرنه fallback به ytsearch."""
+    query = " ".join(p for p in (track.get("artist"), track.get("title")) if p).strip()
+    proxy = opts.get("proxy")
+    cands: list[dict] = []
+    if source != "youtube":  # پیش‌فرض: YouTube Music
+        isrc = track.get("isrc")
+        if isrc:  # تلاشِ اول: تطبیقِ قطعی با ISRC (روشِ spotDL)
+            for h in await _ytmusic_search(isrc, "songs", proxy, limit=3):
+                h["isrc_hit"] = True
+                cands.append(h)
+        cands += await _ytmusic_search(query, "songs", proxy)
+        if len(cands) < 2:  # کاتالوگِ songs کم بود → ویدیوهای موزیک را هم بگیر
+            cands += await _ytmusic_search(query, "videos", proxy)
+    if not cands:  # YT Music خالی/بلاک بود یا source=youtube → موتورِ قدیمِ ytsearch
+        cands += await _yt_search_candidates(query, opts)
+    return cands
+
+
 async def download_spotify(url: str, workdir: str, opts: dict,
                            progress=None, cancel=None) -> list[tuple[str, dict, str | None]]:
     """هر ترکِ اسپاتیفای را با تطبیق روی یوتیوب دانلود می‌کند → لیستِ (path, info, thumb).
@@ -821,6 +998,12 @@ async def download_spotify(url: str, workdir: str, opts: dict,
     tracks = resolved["tracks"]
     if not tracks:
         raise RuntimeError("spotify: no tracks found")
+    source = (opts.get("spotify_source") or "ytmusic").lower()
+    try:
+        min_score = float(opts.get("spotify_match_min") or 55)
+    except (TypeError, ValueError):
+        min_score = 55.0
+    yt_fallback = opts.get("spotify_yt_fallback", True)
     n = len(tracks)
     results: list[tuple[str, dict, str | None]] = []
     last_err: Exception | None = None
@@ -830,13 +1013,16 @@ async def download_spotify(url: str, workdir: str, opts: dict,
         tdir = os.path.join(workdir, f"t{i}")
         os.makedirs(tdir, exist_ok=True)
         query = " ".join(p for p in (tr.get("artist"), tr.get("title")) if p).strip()
-        # چند نامزد را بگیر و بهترین را بر اساسِ مدت/کانالِ رسمی انتخاب کن (نه اولین نتیجه که
-        # اغلب لایو/کاور است). اگر جست‌وجو نشد، به ytsearch1 برگرد.
-        candidates = await _yt_search_candidates(query, opts)
-        best = _pick_best_match(candidates, tr) if candidates else None
+        # نامزدها را از کاتالوگِ «songs»ی YouTube Music بگیر (ضبطِ رسمی، نه لایو/کاور) و با
+        # امتیازِ fuzzyِ وزن‌دار (نام/هنرمند/آلبوم/مدت) بهترینِ بالای آستانه را انتخاب کن.
+        candidates = await _gather_candidates(tr, opts, source)
+        best = _pick_best_match(candidates, tr, min_score) if candidates else None
         target = _cand_url(best) if best else None
-        if not target:
-            target = f"ytsearch1:{query}"
+        if not target:  # هیچ نامزدی از آستانه رد نشد
+            if not yt_fallback:  # این ترک را رد کن، اشتباه نفرست
+                last_err = RuntimeError(f"no confident match: {query}")
+                continue
+            target = f"ytsearch1:{query}"  # آخرین‌چاره: نتیجهٔ اولِ یوتیوب
 
         async def _p(pct: float, _i=i) -> None:  # پیشرفتِ کلی روی همهٔ ترک‌ها
             if progress is not None:
