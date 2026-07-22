@@ -80,8 +80,13 @@ def _collect_note(lang: str, purpose: str, members: list[dict], last: str | None
     return "\n".join(lines)
 
 
-def _too_large(size: int | None) -> bool:
-    return bool(size and size > settings.max_file_mb * 1024 * 1024)
+async def _max_mb() -> int:
+    """سقفِ حجمِ فایل از پنل (قابلِ‌تغییر بدونِ ری‌استارت)، وگرنه پیش‌فرضِ env."""
+    return await settings_store.get_int("max_file_mb", settings.max_file_mb)
+
+
+async def _too_large(size: int | None) -> bool:
+    return bool(size and size > (await _max_mb()) * 1024 * 1024)
 
 
 async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
@@ -183,8 +188,8 @@ async def op_compress(cq: CallbackQuery, callback_data: Act, session: AsyncSessi
     if file.kind not in _PROCESSING_KINDS:
         await cq.answer(t(lang, "coming_soon"), show_alert=True)
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     if file.kind == "video":  # منوی کیفیت (رزولوشن‌های پایین‌تر + تخمینِ حجم)
         try:
@@ -206,8 +211,8 @@ async def op_compress_pick(cq: CallbackQuery, callback_data: Cmp, session: Async
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     if callback_data.res == "same":
         args: dict = {}
@@ -227,8 +232,8 @@ async def op_scan(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     await _start(cq, file, lang, arq_pool, session, "scan", {}, user)
 
@@ -278,8 +283,8 @@ async def op_direct(cq: CallbackQuery, callback_data: Act, session: AsyncSession
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     await _start(cq, file, lang, arq_pool, session, callback_data.op, {}, user)
 
@@ -299,8 +304,8 @@ async def op_image_direct(cq: CallbackQuery, callback_data: Act, session: AsyncS
     if file.kind != "image":
         await cq.answer(t(lang, "coming_soon"), show_alert=True)
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     await _start(cq, file, lang, arq_pool, session, callback_data.op, {}, user)
 
@@ -332,8 +337,8 @@ async def op_resize_pick(cq: CallbackQuery, callback_data: Rsz, session: AsyncSe
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     await _start(cq, file, lang, arq_pool, session, "resize", {"w": callback_data.w}, user)
 
@@ -365,8 +370,8 @@ async def op_rotate_pick(cq: CallbackQuery, callback_data: Rot, session: AsyncSe
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     await _start(cq, file, lang, arq_pool, session, "rotate", {"mode": callback_data.mode}, user)
 
@@ -413,8 +418,8 @@ async def op_convert_pick(cq: CallbackQuery, callback_data: Conv, session: Async
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     await _start(cq, file, lang, arq_pool, session, "convert", {"target": callback_data.fmt}, user)
 
@@ -752,8 +757,8 @@ async def op_transcribe_pick(cq: CallbackQuery, callback_data: Tr, session: Asyn
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     await _start(cq, file, lang, arq_pool, session, "transcribe", {"mode": callback_data.mode}, user)
 
@@ -768,8 +773,8 @@ async def op_normalize(cq: CallbackQuery, callback_data: Act, session: AsyncSess
     if file.kind != "audio":
         await cq.answer(t(lang, "coming_soon"), show_alert=True)
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     await _start(cq, file, lang, arq_pool, session, "normalize", {}, user)
 
@@ -800,8 +805,8 @@ async def op_speed_pick(cq: CallbackQuery, callback_data: Spd, session: AsyncSes
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if _too_large(file.size):
-        await cq.answer(t(lang, "too_large", mb=settings.max_file_mb), show_alert=True)
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return
     await _start(cq, file, lang, arq_pool, session, "speed", {"rate": callback_data.rate}, user)
 

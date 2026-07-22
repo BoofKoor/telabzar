@@ -210,6 +210,7 @@ MESSAGES: dict[str, str] = {
     "dl_failed": "❌ Download failed.",
     "dl_need_cookies": "🔒 “{platform}” requires a logged-in account to download; an admin must add cookies.",
     "dl_too_large": "⚠️ Output ({mb}MB) exceeds the {cap}MB limit — pick a lower quality.",
+    "dl_too_long": "⏱ This media is longer than the {min}-minute limit.",
     "dl_busy": "⌛ Server is busy; try again in a moment.",
     "dl_no_disk": "⚠️ Not enough disk space to download; try again shortly.",
     "dl_cooldown": "⏳ Please wait a bit before the next link.",

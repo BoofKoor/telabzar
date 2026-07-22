@@ -63,6 +63,16 @@ async def _precheck(pool: ArqRedis, uid: int, lang: str) -> str | None:
                 return t(lang, "dl_daily_limit")
         except Exception:  # noqa: BLE001
             pass
+    mb_cap = await settings_store.get_int("dl_daily_mb", settings.dl_daily_mb)
+    if mb_cap > 0:  # سقفِ حجمِ روزانه (شمارندهٔ dlq:mb توسطِ ورکر پر می‌شود)
+        try:
+            raw = await pool.get(f"dlq:mb:{uid}:{_today()}")
+            if isinstance(raw, bytes):
+                raw = raw.decode()
+            if (int(raw) if raw else 0) >= mb_cap:
+                return t(lang, "dl_daily_limit")
+        except Exception:  # noqa: BLE001
+            pass
     return None
 
 

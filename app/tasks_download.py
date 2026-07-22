@@ -373,6 +373,10 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 await _edit(bot, chat_id, status_mid,
                             t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
+        cap_min = await settings_store.get_int("dl_max_duration_min", settings.dl_max_duration_min)
+        if cap_min > 0 and (info.get("duration") or 0) > cap_min * 60:
+            await _edit(bot, chat_id, status_mid, t(lang, "dl_too_long", min=cap_min))
+            return
         opts = info.get("options") or []
         if redis is not None and opts:
             try:
@@ -545,6 +549,14 @@ async def run_download(ctx: dict, payload: dict) -> None:
                             t(lang, "dl_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
         await _stop_ticker()
+
+        # سقفِ مدت (backstopِ quick-grab که probe نکرده) — قبل از آپلود
+        cap_min = await settings_store.get_int("dl_max_duration_min", settings.dl_max_duration_min)
+        if cap_min > 0:
+            longest = max((int(i.get("duration") or 0) for _p, i, _t in paths), default=0)
+            if longest > cap_min * 60:
+                await _edit(bot, chat_id, status_mid, t(lang, "dl_too_long", min=cap_min))
+                return
 
         # چکِ قطعیِ حجم روی دیسک قبل از آپلود (نقدِ #۱: --max-filesize کافی نیست)
         max_mb = await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb)
