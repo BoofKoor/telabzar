@@ -75,8 +75,8 @@ GROUPS = [
         ("dl_daily_count", "سقفِ روزانهٔ دانلود", "هر کاربر · ۰ = نامحدود"),
     ]),
     ("🎧 اسپاتیفای", [
-        ("spotify_enabled", "اسپاتیفای فعال", "لینک را با تطبیقِ یوتیوب دانلود کن"),
-        ("spotify_client_id", "Client ID", "از اپِ رایگانِ Spotify Developer"),
+        ("spotify_enabled", "اسپاتیفای فعال", "بدونِ credential هم کار می‌کند"),
+        ("spotify_client_id", "Client ID", "اختیاری · پایدارتر/کامل‌تر"),
         ("spotify_client_secret", "Client Secret", ""),
         ("spotify_meta", "متادیتا از اسپاتیفای", "خاموش = از یوتیوب · روشن = از اسپاتیفای"),
         ("spotify_max_tracks", "سقفِ ترک (آلبوم/پلی‌لیست)", ""),
