@@ -98,3 +98,4 @@ docker run -d --name telabzar-node --restart unless-stopped --network host \
   telabzar-node:$ROLE "${RUN_ARGS[@]}"
 
 say "تمام شد ✅  نودِ «$ROLE» ($NODE_ID) وصل شد. در پنل → نودها آنلاین می‌شود."
+say "به‌روزرسانیِ بعدیِ کدِ نود (بدونِ re-join):  cd $WORKDIR/repo && sudo git pull && sudo bash node/update.sh"
