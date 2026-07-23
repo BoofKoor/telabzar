@@ -163,9 +163,12 @@ EOF
 install_cli() {
   # نصب یک CLIِ کمکی سبک برای مدیریت روزمره
   local target="/usr/local/bin/telabzar" here; here=$(pwd)
+  local COMPOSE="${COMPOSE:-docker compose}"   # اگر headless صدا زده شد و ست نبود
   if [[ -w "$(dirname "$target")" ]] || sudo -n true 2>/dev/null; then
     local SUDO=""; [[ -w "$(dirname "$target")" ]] || SUDO="sudo"
-    $SUDO tee "$target" >/dev/null <<EOF
+    # نوشتنِ اتمی (temp سپس mv) تا حتی اگر `telabzar update` در حالِ اجرا این را دوباره
+    # بنویسد، پروسهٔ در حالِ اجرا (inodeِ قدیم) نشکند.
+    $SUDO tee "$target.tmp" >/dev/null <<EOF
 #!/usr/bin/env bash
 cd "$here" || exit 1
 # اگر نودها فعال باشند، overlayِ WG را هم به compose بده (انتشارِ سرویس‌ها روی IPِ WG)
@@ -177,14 +180,19 @@ case "\${1:-}" in
   status|ps)   ${COMPOSE} \$FILES ps ;;
   logs)        ${COMPOSE} \$FILES logs --tail=200 \${2:-} ;;
   logf)        ${COMPOSE} \$FILES logs -f --tail=100 \${2:-} ;;
-  update)      git fetch origin main && git checkout -f -B main origin/main && ${COMPOSE} \$FILES up -d --build ;;
+  # آپدیت: کد را بکش، استک را بالا بیاور، سپس CLI را هم دوباره بنویس تا زیرفرمان‌های
+  # جدید (و منطقِ overlay) روی دیسک بیایند — وگرنه CLI کهنه می‌ماند.
+  update)      git fetch origin main && git checkout -f -B main origin/main \\
+                 && ${COMPOSE} \$FILES up -d --build \\
+                 && bash "$here/install.sh" refresh-cli ;;
   nodes-enable) sudo bash "$here/node/master-setup.sh" \${2:-} ;;   # آماده‌سازیِ خودکارِ WG/زیرساخت
   wg-sync)     sudo /usr/local/sbin/telabzar-wg-sync ;;             # همگام‌سازیِ دستیِ peerها
   reconfigure) exec bash "$here/install.sh" ;;
-  *) echo "استفاده: telabzar {up|down|status|logs|update|nodes-enable|wg-sync|reconfigure}" ;;
+  *) echo "استفاده: telabzar {up|down|status|logs|logf|update|nodes-enable|wg-sync|reconfigure}" ;;
 esac
 EOF
-    $SUDO chmod +x "$target"
+    $SUDO chmod +x "$target.tmp"
+    $SUDO mv -f "$target.tmp" "$target"
     ok "CLI نصب شد: ${BOLD}telabzar${RESET}"
   else
     warn "دسترسی نوشتن در /usr/local/bin نبود؛ CLI نصب نشد (اختیاری)."
@@ -199,6 +207,11 @@ install_node() {
 }
 
 main() {
+  # حالتِ headless: فقط CLI را دوباره بنویس (بدونِ پرسش). `telabzar update` این را صدا
+  # می‌زند تا زیرفرمان‌های جدید (nodes-enable/wg-sync/overlay) پس از هر آپدیت روی دیسک بیایند.
+  case "${1:-}" in
+    refresh-cli|cli) require_docker >/dev/null 2>&1 || true; install_cli; exit 0 ;;
+  esac
   banner
   require_docker
   say ""
