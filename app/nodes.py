@@ -235,6 +235,15 @@ def peer_block(pubkey: str, ip: str) -> str:
     return f"\n[Peer]\n# telabzar-node {ip}\nPublicKey = {pubkey}\nAllowedIPs = {ip}/32\n"
 
 
+def render_peers(peers: list[tuple[str, str]]) -> str:
+    """همهٔ [Peer]های نودها را از رویِ (pubkey, ip)ها می‌سازد (منبعِ حقیقت = جدولِ Node).
+
+    مبنایِ همگام‌سازیِ **اعلانی**: هاست‌ساید `wg-sync` این خروجی را به [Interface]ِ ثابتِ
+    مستر می‌چسباند و `wg syncconf` می‌زند — پس افزودن/حذفِ نود از پنل خودکار روی تونل
+    اعمال می‌شود و self-healing است. خالص/تست‌پذیر (ترتیبِ پایدار)."""
+    return "".join(peer_block(pk, ip) for pk, ip in sorted(peers))
+
+
 def _syncconf() -> None:
     """کانفیگِ فایل را بدونِ قطعِ تونل روی اینترفیس اعمال می‌کند (best-effort، سرورِ مستر)."""
     iface = settings.wg_interface

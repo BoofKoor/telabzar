@@ -137,6 +137,23 @@ EOF
   $COMPOSE up -d --build
 
   install_cli
+
+  # ── نودهای توزیع‌شده (اختیاری) — آماده‌سازیِ خودکارِ WireGuard/زیرساختِ مستر ──
+  say ""
+  say "${BOLD}نودهای توزیع‌شده${RESET} ${DIM}(اختیاری — افزودنِ سرورهای دانلود/پردازش/استریم)${RESET}"
+  say "${DIM}اگر بله بزنی، WireGuard و زیرساختِ لازم روی همین مستر خودکار ساخته و تنظیم می‌شود؛${RESET}"
+  say "${DIM}بعد نودها را از پنل → «نودها» اضافه می‌کنی. بدونِ نود هم همه‌چیز روی مستر کار می‌کند.${RESET}"
+  local WANT_NODES
+  ask WANT_NODES "الان زیرساختِ نودها آماده شود؟ (y/n)" "n"
+  if [[ "$WANT_NODES" =~ ^[Yy]$ ]]; then
+    if [[ $EUID -eq 0 ]] || sudo -n true 2>/dev/null; then
+      local SUDO=""; [[ $EUID -eq 0 ]] || SUDO="sudo"
+      $SUDO bash "$(pwd)/node/master-setup.sh" || warn "آماده‌سازیِ نود ناموفق بود؛ بعداً 'telabzar nodes-enable' را بزن."
+    else
+      warn "برای آماده‌سازیِ نود root لازم است؛ بعداً 'sudo telabzar nodes-enable' را بزن."
+    fi
+  fi
+
   say ""
   ok "بالا آمد. ربات هنگام استارت، وبهوک را خودش ثبت می‌کند."
   say "${DIM}وضعیت:${RESET}  telabzar status    ${DIM}|${RESET}   ${DIM}لاگ:${RESET}  telabzar logs"
@@ -151,15 +168,20 @@ install_cli() {
     $SUDO tee "$target" >/dev/null <<EOF
 #!/usr/bin/env bash
 cd "$here" || exit 1
+# اگر نودها فعال باشند، overlayِ WG را هم به compose بده (انتشارِ سرویس‌ها روی IPِ WG)
+FILES="-f docker-compose.yml"
+[ -f "$here/.nodes-enabled" ] && FILES="\$FILES -f docker-compose.nodes.yml"
 case "\${1:-}" in
-  up)          ${COMPOSE} up -d --build ;;
-  down)        ${COMPOSE} down ;;
-  status|ps)   ${COMPOSE} ps ;;
-  logs)        ${COMPOSE} logs --tail=200 \${2:-} ;;
-  logf)        ${COMPOSE} logs -f --tail=100 \${2:-} ;;
-  update)      git fetch origin main && git checkout -f -B main origin/main && ${COMPOSE} up -d --build ;;
+  up)          ${COMPOSE} \$FILES up -d --build ;;
+  down)        ${COMPOSE} \$FILES down ;;
+  status|ps)   ${COMPOSE} \$FILES ps ;;
+  logs)        ${COMPOSE} \$FILES logs --tail=200 \${2:-} ;;
+  logf)        ${COMPOSE} \$FILES logs -f --tail=100 \${2:-} ;;
+  update)      git fetch origin main && git checkout -f -B main origin/main && ${COMPOSE} \$FILES up -d --build ;;
+  nodes-enable) sudo bash "$here/node/master-setup.sh" \${2:-} ;;   # آماده‌سازیِ خودکارِ WG/زیرساخت
+  wg-sync)     sudo /usr/local/sbin/telabzar-wg-sync ;;             # همگام‌سازیِ دستیِ peerها
   reconfigure) exec bash "$here/install.sh" ;;
-  *) echo "استفاده: telabzar {up|down|status|logs|update|reconfigure}" ;;
+  *) echo "استفاده: telabzar {up|down|status|logs|update|nodes-enable|wg-sync|reconfigure}" ;;
 esac
 EOF
     $SUDO chmod +x "$target"

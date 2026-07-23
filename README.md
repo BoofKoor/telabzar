@@ -74,10 +74,16 @@ telabzar reconfigure
 و خروجی multipart آپلود می‌شود (`tasks._localize`)؛ `scan` (که به ClamAVِ مستر وصل است) روی
 مستر می‌ماند.
 
-**پیش‌نیازِ مستر** (یک‌بار): روی مستر WireGuard راه بینداز و در `.env` این‌ها را بگذار:
-`WG_ENDPOINT` (مثل `1.2.3.4:51820`)، `WG_MASTER_PUBKEY`، `WG_MASTER_IP` (پیش‌فرض `10.51.0.1`)،
-و `ADMIN_BASE` (URLِ عمومیِ پنل). آدرس‌های داخلیِ نود (`NODE_REDIS_URL`/`NODE_POSTGRES_DSN`/
-`NODE_API_BASE`) روی IPِ WGِ مستر هستند. Redis/Postgres/Bot API فقط روی تونل شنیده شوند.
+**آماده‌سازیِ خودکارِ مستر** (یک‌بار): زیرساختِ WireGuard دستی نیست — نصب‌کننده در پایان می‌پرسد،
+یا هر وقت خواستی روی مستر (با root) بزن:
+```bash
+telabzar nodes-enable        # = sudo bash node/master-setup.sh
+```
+این خودکار: WireGuard را نصب و `wg0` را بالا می‌آورد، کلیدِ مستر را می‌سازد، **IPِ عمومی را تشخیص
+می‌دهد** و همهٔ `WG_*`/`NODE_*` را در `.env` می‌نویسد، سرویس‌های redis/postgres/bot-api/pot/gateway را
+روی IPِ WG (نه عمومی) منتشر می‌کند ([`docker-compose.nodes.yml`](docker-compose.nodes.yml))، و یک تایمرِ
+`telabzar-wg-sync` نصب می‌کند که peerهای WireGuard را از جدولِ نودها همگام نگه می‌دارد (self-healing).
+بعد فقط از پنل نود اضافه کن. **بدونِ نود، همه‌چیز روی مستر کار می‌کند** (fallbackِ خودکار).
 
 **افزودنِ نود:** در پنل → **🖧 نودها** → «افزودنِ نود» → نقش را انتخاب کن؛ یک دستور می‌سازد.
 روی سرورِ نود (Ubuntu/Debian، با root) اجرا کن:

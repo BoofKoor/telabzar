@@ -1,0 +1,31 @@
+# overlayِ نودهای توزیع‌شده (فاز N5) — سرویس‌های مستر را روی IPِ WireGuard منتشر می‌کند
+# تا نودها (روی تونل) به redis/postgres/bot-api/pot/gateway برسند.
+#
+# فعال‌سازی:  node/master-setup.sh این را می‌سازد/اعمال می‌کند، و CLIِ telabzar وقتی نود
+# فعال است با  -f docker-compose.yml -f docker-compose.nodes.yml  بالا می‌آورد.
+#
+# ایمنی: bind فقط روی ${WG_MASTER_IP} (اینترفیسِ WG)، نه IPِ عمومی — پس این سرویس‌ها
+# فقط از طریقِ peerهای WireGuard در دسترس‌اند. اینترفیسِ wg0 باید قبل از compose بالا باشد
+# (master-setup ترتیبِ بوت را هم تنظیم می‌کند). حالتِ standalone (بدونِ این overlay)
+# دست‌نخورده می‌ماند و همه‌چیز روی مستر کار می‌کند.
+services:
+  redis:
+    ports:
+      - "${WG_MASTER_IP:-10.51.0.1}:6379:6379"
+
+  postgres:
+    ports:
+      - "${WG_MASTER_IP:-10.51.0.1}:5432:5432"
+
+  local-bot-api:
+    ports:
+      - "${WG_MASTER_IP:-10.51.0.1}:8081:8081"
+
+  bgutil-pot-provider:
+    ports:
+      - "${WG_MASTER_IP:-10.51.0.1}:4416:4416"
+
+  gateway:
+    # نودِ استریم روی WG به این می‌زند (NODE_GATEWAY_URL = http://WG_MASTER_IP:8080)
+    ports:
+      - "${WG_MASTER_IP:-10.51.0.1}:8080:8080"
