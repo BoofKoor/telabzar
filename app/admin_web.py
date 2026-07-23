@@ -677,7 +677,8 @@ _NODES = """{% extends 'base' %}{% block title %}نودها{% endblock %}{% bloc
 {% endblock %}
 {% block body %}
 <div class=card>
-  <h3>🖧 نودها <span class=tag>{{nodes|length}} نود · {{online}} آنلاین</span></h3>
+  <h3>🖧 نودها <span class=tag>{{nodes|length}} نود · {{online}} آنلاین</span>
+    {% if reaped %}<span class=tag style="background:#fef3c7;color:#92400e">↩ {{reaped}} جابِ برگردانده‌شده</span>{% endif %}</h3>
   <div class=pad>
     {% if not master_ready %}<div class=errbox>⚠️ WireGuardِ مستر پیکربندی نشده (WG_MASTER_PUBKEY / WG_ENDPOINT / ADMIN_BASE). راهنما در README.</div>{% endif %}
     {% if not nodes %}<div class=empty>هنوز نودی وصل نشده. با «افزودن نود» یک دستورِ نصب بساز.</div>{% endif %}
@@ -685,7 +686,7 @@ _NODES = """{% extends 'base' %}{% block title %}نودها{% endblock %}{% bloc
     <div class=nd>
       <span class="st {{'on' if n.online else 'off'}}"></span>
       <div class=meta><b>{{n.emoji}} {{n.name}}</b>
-        <small>{{n.role_label}} · {{n.wg_ip}} · {% if n.online %}بار: {{n.load}} · نسخه {{n.ver}}{% else %}آفلاین{% endif %}</small></div>
+        <small>{{n.role_label}} · {{n.wg_ip}} · {% if n.online %}بار: {{n.load}} · انجام: {{n.done}} · نسخه {{n.ver}}{% else %}آفلاین{% endif %}</small></div>
       <span class=rl>{{n.role}}</span>
       <form method=post action=/nodes/remove onsubmit="return confirm('این نود حذف شود؟')">
         <input type=hidden name=id value="{{n.id}}">
@@ -1383,15 +1384,17 @@ async def nodes_page(request: web.Request) -> web.Response:
         items.append({"id": n.id, "name": n.name, "role": n.role,
                       "role_label": role.get("label", n.role), "emoji": role.get("emoji", "🖧"),
                       "wg_ip": n.wg_ip, "online": bool(hb), "load": hb.get("load", 0),
-                      "ver": hb.get("ver", "—")})
+                      "ver": hb.get("ver", "—"), "done": hb.get("done", 0)})
     token = request.query.get("tok", "")
     base = settings.admin_base or (settings.public_base or "")
     install_cmd = f"curl -fsSL {base}/node/install.sh | sudo bash -s -- {token}" if token else ""
     master_ready = bool(settings.wg_master_pubkey and settings.wg_endpoint and base)
+    reaped = await node_mod.reaped_count(request.app["redis"])
     return _render("nodes", admin_id=_session_admin(request), active="nodes",
                    pill_ok=await _pill_ok(request.app), nodes=items,
                    online=sum(1 for i in items if i["online"]), roles=node_mod.ROLES,
-                   token=token, install_cmd=install_cmd, master_ready=master_ready)
+                   token=token, install_cmd=install_cmd, master_ready=master_ready,
+                   reaped=reaped)
 
 
 async def nodes_add(request: web.Request) -> web.Response:

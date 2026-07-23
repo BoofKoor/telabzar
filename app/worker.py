@@ -39,6 +39,13 @@ async def startup(ctx: dict) -> None:
     log.info("Worker ready%s.", f" (node: {settings.node_role})" if settings.node_role else "")
 
 
+async def startup_master(ctx: dict) -> None:
+    """startupِ ورکرِ اصلیِ مستر + یک reaper که جاب‌های یتیمِ نودِ آفلاین را برمی‌گرداند."""
+    await startup(ctx)
+    if not settings.node_role:  # فقط روی مستر (نه روی نودها)
+        ctx["reaper"] = asyncio.create_task(_reaper())
+
+
 async def _node_heartbeat() -> None:
     """هر ~۲۰ ثانیه وضعیتِ نود را در Redisِ مستر ثبت می‌کند (پنل از رویش نودها را نشان می‌دهد)."""
     from . import nodes
@@ -51,11 +58,30 @@ async def _node_heartbeat() -> None:
             depth = 0
         await nodes.write_heartbeat(store.r, nid, {
             "name": settings.node_name or nid, "role": settings.node_role,
-            "ver": "1", "load": depth})
+            "ver": "1", "load": depth, "done": nodes.jobs_done()})
         await asyncio.sleep(20)
 
 
+async def _reaper() -> None:
+    """هر ~۳۰ ثانیه: اگر نودِ processing زنده نیست، جاب‌های ماندهٔ صفِ proc را به صفِ
+    مستر برمی‌گرداند تا معلق نمانند (بستنِ حفرهٔ N2: نودی که وسطِ کار می‌افتد)."""
+    from . import nodes
+    store = settings_store.get_store()
+    while True:
+        await asyncio.sleep(30)
+        try:
+            n = await nodes.reap_orphan_jobs(store.r)
+            if n:
+                log.warning("reaped %d orphan proc-job(s) → master queue", n)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def shutdown(ctx: dict) -> None:
+    for key in ("hb_task", "reaper"):
+        task = ctx.get(key)
+        if task is not None:
+            task.cancel()
     bot = ctx.get("bot")
     if bot is not None:
         await bot.session.close()
@@ -63,7 +89,7 @@ async def shutdown(ctx: dict) -> None:
 
 class WorkerSettings:
     functions = [run_op]
-    on_startup = startup
+    on_startup = startup_master
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 4
