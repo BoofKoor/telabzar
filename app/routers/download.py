@@ -15,7 +15,7 @@ from aiogram.types import CallbackQuery, Message
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import dl_cache, settings_store
+from .. import dl_cache, nodes, settings_store
 from ..callbacks import Dl
 from ..config import settings
 from ..downloader import (
@@ -26,7 +26,20 @@ from ..models import User
 
 router = Router(name="download")
 
-_DL_QUEUE = "arq:queue:dl"
+_DL_QUEUE = "arq:queue:dl"                 # نودِ دانلود این را برمی‌دارد (IPِ تمیز)
+_DL_QUEUE_MASTER = "arq:queue:dl:master"   # ورکرِ دانلودِ مستر این را برمی‌دارد (fallback)
+
+
+async def _dl_queue(arq_pool: ArqRedis) -> str:
+    """صفِ مقصدِ دانلود: اگر نودِ دانلود آنلاین است → صفِ نود (`arq:queue:dl`، فقط نود
+    برش می‌دارد، IPِ تمیز)؛ وگرنه صفِ مسترِ `arq:queue:dl:master`. اینطوری وقتی نود هست
+    هیچ دانلودی روی مستر (IPِ فلگ‌شده) نمی‌افتد و بات‌چکِ «یکی‌درمیان»‌ِ یوتیوب حذف می‌شود."""
+    try:
+        if await nodes.role_online(arq_pool, "download"):
+            return _DL_QUEUE
+    except Exception:  # noqa: BLE001  — خطای رجیستری نباید enqueue را بشکند
+        pass
+    return _DL_QUEUE_MASTER
 
 
 def _today() -> str:
@@ -150,12 +163,13 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
             "lang": lang, "url": url, "platform": platform, "engine": engine,
             "owner_id": owner_id, "tg_user_id": uid}
 
+    dlq = await _dl_queue(arq_pool)
     if quick:  # quick-grab: بهترین کیفیت (صوت برای پلتفرمِ صوتی)
         await _charge(arq_pool, uid)
         await arq_pool.enqueue_job(
-            "run_download", {**base, "phase": "fetch", "selector": quick_sel}, _queue_name=_DL_QUEUE)
+            "run_download", {**base, "phase": "fetch", "selector": quick_sel}, _queue_name=dlq)
     else:
-        await arq_pool.enqueue_job("run_download", {**base, "phase": "probe"}, _queue_name=_DL_QUEUE)
+        await arq_pool.enqueue_job("run_download", {**base, "phase": "probe"}, _queue_name=dlq)
 
 
 @router.callback_query(Dl.filter())
@@ -205,5 +219,5 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
                "lang": lang, "url": ctx["url"], "platform": ctx["platform"],
                "engine": ctx["engine"], "owner_id": ctx["owner_id"], "tg_user_id": uid,
                "phase": "fetch", "selector": sel}
-    await arq_pool.enqueue_job("run_download", payload, _queue_name=_DL_QUEUE)
+    await arq_pool.enqueue_job("run_download", payload, _queue_name=await _dl_queue(arq_pool))
     await cq.answer()

@@ -769,7 +769,8 @@ async def _health(app: web.Application) -> dict:
     try:
         h["q_main"] = await r.zcard("arq:queue")
         h["q_proc"] = await r.zcard("arq:queue:proc")
-        h["q_dl"] = await r.zcard("arq:queue:dl")
+        # صفِ دانلود = صفِ نود (arq:queue:dl) + صفِ مسترِ fallback (arq:queue:dl:master)
+        h["q_dl"] = (await r.zcard("arq:queue:dl")) + (await r.zcard("arq:queue:dl:master"))
     except Exception:  # noqa: BLE001
         h["q_main"] = h["q_proc"] = h["q_dl"] = 0
     h["dl_active"] = await _int("dl:active")
