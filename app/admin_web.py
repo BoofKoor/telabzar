@@ -262,6 +262,7 @@ _HEALTH_CARDS = """
 <div class=card><h3>📦 صف و دیسک</h3><div class=rows>
   <div class=mini style=padding-inline:0>
     <div class=kpi><b>{{health.q_main}}</b><span>صفِ پردازش</span></div>
+    <div class=kpi><b>{{health.q_proc}}</b><span>صفِ نودِ پردازش</span></div>
     <div class=kpi><b>{{health.q_dl}}</b><span>صفِ دانلود</span></div>
     <div class=kpi><b>{{health.dl_active}}</b><span>دانلودِ فعال</span></div>
   </div>
@@ -762,9 +763,10 @@ async def _health(app: web.Application) -> dict:
 
     try:
         h["q_main"] = await r.zcard("arq:queue")
+        h["q_proc"] = await r.zcard("arq:queue:proc")
         h["q_dl"] = await r.zcard("arq:queue:dl")
     except Exception:  # noqa: BLE001
-        h["q_main"] = h["q_dl"] = 0
+        h["q_main"] = h["q_proc"] = h["q_dl"] = 0
     h["dl_active"] = await _int("dl:active")
     try:
         du = shutil.disk_usage(settings.work_dir)

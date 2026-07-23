@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import settings_store
+from .. import nodes, settings_store
 from ..cards import card_caption, meta_editor_view, set_card_note, update_card
 from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Spd, Tr, Wm
 from ..config import settings
@@ -123,6 +123,23 @@ async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
     return None
 
 
+async def _op_queue(arq_pool: ArqRedis, op: str) -> str | None:
+    """صفِ مقصدِ این op را انتخاب می‌کند (مسیریابیِ نودِ پردازش).
+
+    اگر op سنگین باشد **و** یک نودِ processing زنده باشد → صفِ `arq:queue:proc`
+    (نود برش می‌دارد). وگرنه None = صفِ پیش‌فرضِ مستر (`arq:queue`). یعنی نبودِ نود
+    = رفتارِ امروز، بدونِ رگرسیون. اگر نود بعد از enqueue بیفتد، جابِ در-صفِ proc
+    منتظرِ برگشتش می‌ماند (جاب‌های جدید به مستر برمی‌گردند)."""
+    if op not in nodes.OFFLOAD_OPS:
+        return None
+    try:
+        if await nodes.role_online(arq_pool, "processing"):
+            return nodes.ROLES["processing"]["queue"]
+    except Exception:  # noqa: BLE001  — خطای رجیستری نباید enqueue را بشکند
+        pass
+    return None
+
+
 async def _enqueue(bot, arq_pool: ArqRedis, session: AsyncSession, file, op: str,
                    args: dict, chat_id: int, card_mid: int, lang: str) -> None:
     """جاب می‌سازد، کارت را به حالتِ «پردازش + دکمهٔ لغو» می‌برد، و enqueue می‌کند."""
@@ -131,7 +148,8 @@ async def _enqueue(bot, arq_pool: ArqRedis, session: AsyncSession, file, op: str
     await session.commit()
     await set_card_note(bot, chat_id, card_mid, file, lang,
                         note=t(lang, "processing"), keyboard=cancel_job_kb(job.id, lang))
-    await arq_pool.enqueue_job("run_op", job.id, chat_id, card_mid, lang)
+    queue = await _op_queue(arq_pool, op)
+    await arq_pool.enqueue_job("run_op", job.id, chat_id, card_mid, lang, _queue_name=queue)
 
 
 async def _queue_quiet(arq_pool: ArqRedis, session: AsyncSession, file_id: int, op: str,
@@ -140,7 +158,8 @@ async def _queue_quiet(arq_pool: ArqRedis, session: AsyncSession, file_id: int, 
     job = Job(file_id=file_id, op=op, args=args, status="queued")
     session.add(job)
     await session.commit()
-    await arq_pool.enqueue_job("run_op", job.id, chat_id, card_mid, lang)
+    queue = await _op_queue(arq_pool, op)
+    await arq_pool.enqueue_job("run_op", job.id, chat_id, card_mid, lang, _queue_name=queue)
 
 
 # عملیاتِ گران که وقتی روی یک فایلِ «دانلودی» اجرا شوند، در بودجهٔ روزانه حساب می‌شوند
