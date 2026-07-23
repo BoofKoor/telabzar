@@ -124,10 +124,20 @@ async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
 
 
 async def _link_base() -> str:
-    """پایهٔ عمومیِ لینک‌های /dl و /s: نودِ استریم (`stream_base`) اگر ست باشد، وگرنه
-    `public_base`. از settings_store خوانده می‌شود تا تغییرِ پنل بدونِ ری‌استارت اثر کند."""
-    return (await settings_store.get_str("stream_base", settings.stream_base)
-            or settings.public_base).rstrip("/")
+    """پایهٔ عمومیِ لینک‌های /dl و /s.
+
+    اگر `stream_base` (دامنهٔ نودِ استریم) ست است **و یک نودِ gateway آنلاین است** →
+    روی نود؛ وگرنه `public_base`ِ مستر. یعنی نبودِ نود (یا افتادنش) → لینک‌ها خودکار به
+    مستر برمی‌گردند و نمی‌شکنند («نبودِ نود → همه‌چیز روی مستر»)."""
+    base = (await settings_store.get_str("stream_base", settings.stream_base) or "").rstrip("/")
+    if base:
+        store = settings_store.get_store()
+        try:
+            if store is not None and await nodes.role_online(store.r, "gateway"):
+                return base
+        except Exception:  # noqa: BLE001  — خطای رجیستری نباید لینک را بشکند
+            pass
+    return (settings.public_base or "").rstrip("/")
 
 
 async def _op_queue(arq_pool: ArqRedis, op: str) -> str | None:

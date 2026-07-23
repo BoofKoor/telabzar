@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import glob
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -1193,6 +1194,7 @@ def _texts_redirect(lang: str, q: str, **extra) -> web.HTTPFound:
 async def texts_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
+    await textstore.refresh_if_stale()  # همیشه از DB تازه؛ نمای کهنه نده (باگِ ریست پس از update)
     lang = request.query.get("lang", "fa")
     if lang not in ("fa", "en"):
         lang = "fa"
@@ -1309,6 +1311,7 @@ def _menu_preview(items: list[dict]) -> tuple[list[list[dict]], list[dict]]:
 async def buttons_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
+    await textstore.refresh_if_stale()  # همیشه از DB تازه؛ نمای کهنه نده (باگِ ریست پس از update)
     kind = request.query.get("kind", "video")
     if kind not in _KIND_LABEL:
         kind = "video"
@@ -1466,6 +1469,20 @@ async def node_install(request: web.Request) -> web.Response:
     base = settings.admin_base or settings.public_base or ""
     script = script.replace("__MASTER_BASE__", base)
     return web.Response(text=script, content_type="text/plain")
+
+
+async def node_peers(request: web.Request) -> web.Response:
+    """پیکربندیِ [Peer]های WG از رویِ جدولِ Node (منبعِ حقیقت). هاست‌سایدِ `wg-sync`
+    این را می‌گیرد و به [Interface]ِ ثابتِ مستر می‌چسباند + `wg syncconf`. با NODE_SECRET
+    (یا BOT_TOKEN) گِیت می‌شود — روی WG/لوکال صدا زده می‌شود، نه عمومی."""
+    key = request.query.get("key") or request.headers.get("X-Node-Key") or ""
+    secret = settings.node_secret or settings.bot_token or ""
+    if not secret or not hmac.compare_digest(key, secret):
+        return web.Response(text="# forbidden\n", status=403)
+    async with Sessionmaker() as s:
+        rows = (await s.execute(select(Node.wg_pubkey, Node.wg_ip))).all()
+    peers = [(pk, ip) for (pk, ip) in rows if pk and ip]
+    return web.Response(text=node_mod.render_peers(peers), content_type="text/plain")
 
 
 async def cookies_page(request: web.Request) -> web.Response:
@@ -1658,6 +1675,13 @@ async def healthz(_: web.Request) -> web.Response:
 async def _on_startup(app: web.Application) -> None:
     settings_store.init_store(settings.redis_url)
     app["redis"] = aioredis.from_url(settings.redis_url, decode_responses=True)
+    # مهم: بدونِ این، پس از ری‌استارت (telabzar update) دیکشنریِ متن‌ها/کلیدها خالی می‌ماند
+    # و پنل «دیفالت» نشان می‌دهد — و ذخیرهٔ باتنی از رویِ آن نمای کهنه، override‌های واقعی
+    # را با دیفالت بازنویسی می‌کند. پس در startup و سرِ هر صفحه از DB تازه می‌کنیم.
+    try:
+        await textstore.load()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("panel: textstore preload failed: %s", exc)
 
 
 async def _on_cleanup(app: web.Application) -> None:
@@ -1694,6 +1718,7 @@ def build_app() -> web.Application:
     app.router.add_post("/nodes/remove", nodes_remove)
     app.router.add_post("/node/join", node_join)      # عمومی (توکن گِیت)
     app.router.add_get("/node/install.sh", node_install)  # عمومی
+    app.router.add_get("/node/peers", node_peers)         # گِیت با NODE_SECRET (wg-sync)
     app.router.add_get("/healthz", healthz)
     if os.path.isdir(_STATIC_DIR):
         app.router.add_static("/static", _STATIC_DIR)
