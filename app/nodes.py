@@ -175,6 +175,14 @@ _DEFAULT_QUEUE = "arq:queue"        # صفِ پیش‌فرضِ مستر (main wo
 _PROC_QUEUE = "arq:queue:proc"      # صفِ نودِ پردازش (فقط نودِ زنده برش می‌دارد)
 _REAPED_KEY = "nodes:reaped"        # شمارندهٔ کلِ جاب‌های برگردانده‌شده به مستر
 
+# نگاشتِ reaper: (صفِ نود, نقش, صفِ fallbackِ مستر) — وقتی آن نقش هیچ نودِ زنده‌ای ندارد،
+# جاب‌های ماندهٔ صفِ نود به صفِ مستر برگردانده می‌شوند تا معلق نمانند.
+# دانلود: نود روی `arq:queue:dl` است؛ ورکرِ دانلودِ مستر روی `arq:queue:dl:master`.
+_REAP_MAP = [
+    (_PROC_QUEUE, "processing", _DEFAULT_QUEUE),
+    ("arq:queue:dl", "download", "arq:queue:dl:master"),
+]
+
 # شمارندهٔ محلیِ کارِ انجام‌شده روی همین پروسهٔ نود (heartbeat آن را به پنل می‌رساند).
 _LOCAL = {"done": 0}
 
@@ -189,35 +197,36 @@ def jobs_done() -> int:
 
 
 async def reap_orphan_jobs(redis) -> int:
-    """اگر **هیچ نودِ processing زنده نیست**، جاب‌های ماندهٔ صفِ `arq:queue:proc` را به
-    صفِ پیش‌فرضِ مستر برمی‌گرداند تا معلق نمانند (نودِ زنده باشد دست نمی‌زند). روی مستر
-    اجرا می‌شود؛ تعدادِ برگردانده‌شده را می‌دهد.
+    """برای هر نقشِ نود که **هیچ نودِ زنده‌ای ندارد**، جاب‌های ماندهٔ صفِ آن نقش را به صفِ
+    fallbackِ مستر برمی‌گرداند تا معلق نمانند (نقشی که نودِ زنده دارد دست نمی‌خورد). روی
+    مستر اجرا می‌شود؛ مجموعِ برگردانده‌شده را می‌دهد.
 
-    اتمی‌بودن: اول `zrem` (claim) بعد `zadd` — پس دو reaperِ هم‌زمان یک جاب را دوبار
-    اضافه نمی‌کنند (زیانِ نظری فقط در کرشِ بینِ دو دستور، بسیار نادر). چون هیچ مصرف‌کننده‌ای
-    روی صفِ proc نیست (نودِ زنده نداریم)، رقابتی هم با pickup وجود ندارد."""
-    try:
-        if await role_online(redis, "processing"):
-            return 0  # نودِ زنده هست → صفِ proc را دست نزن
-        items = await redis.zrange(_PROC_QUEUE, 0, -1, withscores=True)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("reap scan failed: %s", exc)
-        return 0
-    moved = 0
-    for member, score in items or []:
-        jid = member if isinstance(member, str) else member.decode()
+    اتمی‌بودن: اول `zrem` (claim) بعد `zadd` — پس دو reaperِ هم‌زمان یک جاب را دوبار اضافه
+    نمی‌کنند (زیانِ نظری فقط در کرشِ بینِ دو دستور، بسیار نادر). چون نقشی که نود ندارد
+    مصرف‌کننده‌ای روی صفش نیست، رقابتی هم با pickup وجود ندارد."""
+    total = 0
+    for node_q, role, fallback_q in _REAP_MAP:
         try:
-            if await redis.zrem(_PROC_QUEUE, jid):        # claim
-                await redis.zadd(_DEFAULT_QUEUE, {jid: score})
-                moved += 1
+            if await role_online(redis, role):
+                continue  # نودِ زنده هست → صفِ این نقش را دست نزن
+            items = await redis.zrange(node_q, 0, -1, withscores=True)
         except Exception as exc:  # noqa: BLE001
-            log.warning("reap move failed for %s: %s", jid, exc)
-    if moved:
+            log.warning("reap scan failed (%s): %s", node_q, exc)
+            continue
+        for member, score in items or []:
+            jid = member if isinstance(member, str) else member.decode()
+            try:
+                if await redis.zrem(node_q, jid):        # claim
+                    await redis.zadd(fallback_q, {jid: score})
+                    total += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning("reap move failed for %s: %s", jid, exc)
+    if total:
         try:
-            await redis.incrby(_REAPED_KEY, moved)
+            await redis.incrby(_REAPED_KEY, total)
         except Exception:  # noqa: BLE001
             pass
-    return moved
+    return total
 
 
 async def reaped_count(redis) -> int:

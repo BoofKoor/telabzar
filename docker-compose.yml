@@ -197,6 +197,9 @@ services:
     build:
       context: .
       dockerfile: docker/download-worker.Dockerfile   # ایمیجِ لاغر (بدونِ استکِ سنگینِ پردازش)
+    # صفِ اختصاصیِ مستر: وقتی نودِ دانلود آنلاین است، دانلودها به نود (arq:queue:dl) می‌روند
+    # و مستر اینجا فقط fallback است (رجوع به download._dl_queue + reaper).
+    command: ["arq", "app.worker.MasterDownloadWorkerSettings"]
     restart: unless-stopped
     env_file: .env
     environment:

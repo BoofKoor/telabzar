@@ -123,3 +123,16 @@ class DownloadWorkerSettings:
     max_jobs = 3          # سقفِ سختِ هم‌زمانی (علاوه بر گاردِ runtimeِ dl_concurrency)
     job_timeout = 5400    # دانلودِ بزرگ ممکن است طول بکشد (۱.۵ ساعت)
     keep_result = 600
+
+
+class MasterDownloadWorkerSettings(DownloadWorkerSettings):
+    """ورکرِ دانلودِ **مستر** روی صفِ جدا `arq:queue:dl:master`.
+
+    وقتی یک نودِ دانلود آنلاین است، `download.py` جاب‌ها را به `arq:queue:dl` می‌فرستد که
+    **فقط نود** برش می‌دارد (IPِ تمیز) — پس دانلودها روی مستر (IPِ دیتاسنترِ فلگ‌شده) نمی‌افتند
+    و «یکی‌درمیان»‌شدنِ بات‌چکِ یوتیوب از بین می‌رود. نودی نباشد → `download.py` به همین صف
+    می‌فرستد و مستر همه را برمی‌دارد (fallback). اگر نود وسطِ کار بیفتد، reaper جاب‌های ماندهٔ
+    `arq:queue:dl` را به این صف برمی‌گرداند. نود دست‌نخورده می‌ماند (همان `DownloadWorkerSettings`
+    روی `arq:queue:dl`) — پس نیازی به نصبِ دوبارهٔ نود نیست."""
+
+    queue_name = "arq:queue:dl:master"
