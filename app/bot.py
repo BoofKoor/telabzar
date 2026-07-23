@@ -15,14 +15,19 @@ from .routers import admin, download, files, ops, start
 
 
 def create_bot(request_timeout: float = 60.0) -> Bot:
-    """ساختِ Bot متصل به سرورِ محلی.
+    """ساختِ Bot متصل به سرورِ محلیِ Bot API.
 
     request_timeout: برای ورکر باید بزرگ باشد — getFile روی سرورِ محلی یعنی
     دانلودِ کاملِ فایل از تلگرام، و آپلودِ خروجی هم برای فایل‌های بزرگ از
     ۶۰ ثانیهٔ پیش‌فرضِ aiogram رد می‌شود.
+
+    is_local: روی مستر True (فایل‌ها روی دیسکِ مشترک، مسیرِ محلی پاس می‌شود). روی
+    **نود** (`node_role` ست است) False — نود هم‌مکانِ فایل‌ها نیست، پس خروجی را با
+    multipart آپلود و ورودی را با `download_file` از HTTPِ Bot API (روی WireGuard) می‌گیرد.
     """
+    is_local = not settings.node_role
     session = AiohttpSession(
-        api=TelegramAPIServer.from_base(settings.local_api_base, is_local=True),
+        api=TelegramAPIServer.from_base(settings.local_api_base, is_local=is_local),
         timeout=request_timeout,
     )
     return Bot(

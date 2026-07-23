@@ -29,6 +29,7 @@ from jinja2 import Environment, DictLoader, select_autoescape
 from markupsafe import Markup
 from sqlalchemy import func, select, text as sql_text
 
+from . import nodes as node_mod
 from . import settings_store
 from . import textstore
 from .config import settings
@@ -36,7 +37,7 @@ from .db import Sessionmaker
 from .downloader import KNOWN_PLATFORMS, PLATFORM_LABELS
 from .i18n import CATALOG, t as _t
 from .keyboards import OPS_BY_KIND
-from .models import File, Job, User
+from .models import File, Job, Node, User
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
 
 log = logging.getLogger("telabzar.admin")
@@ -240,6 +241,7 @@ _BASE = """<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
   <a class="{{'on' if active=='buttons'}}" href=/buttons>🎨 کلیدها</a>
   <a class="{{'on' if active=='cookies'}}" href=/cookies>🍪 کوکی‌ها</a>
   <a class="{{'on' if active=='health'}}" href=/health>🩺 سلامت</a>
+  <a class="{{'on' if active=='nodes'}}" href=/nodes>🖧 نودها</a>
   <a class="{{'on' if active=='users'}}" href=/users>👤 کاربران</a>
   <a class="{{'on' if active=='stats'}}" href=/stats>📊 آمار</a>
 </nav>
@@ -658,11 +660,60 @@ function rebuildPreview(){
 })();
 </script>{% endblock %}"""
 
+_NODES = """{% extends 'base' %}{% block title %}نودها{% endblock %}{% block heading %}نودهای توزیع‌شده{% endblock %}
+{% block style %}
+.nd{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:9px}
+.nd .st{width:9px;height:9px;border-radius:50%;flex:none}
+.nd .on{background:#16a34a}.nd .off{background:#cbd5e1}
+.nd .meta{flex:1;min-width:0}.nd .meta b{font-size:14px}.nd .meta small{color:#94a3b8;font-size:11.5px;display:block}
+.nd .rl{font-size:12px;background:#f0fdfa;color:var(--teal);padding:3px 9px;border-radius:8px;white-space:nowrap}
+.cmd{background:#0b1220;color:#7dd3fc;font-family:ui-monospace,monospace;font-size:12.5px;padding:12px;border-radius:10px;
+  word-break:break-all;line-height:1.9;user-select:all}
+.note{background:#eff6ff;color:#1d4ed8;font-size:12.5px;padding:10px 14px;border-radius:10px;line-height:1.9}
+{% endblock %}
+{% block body %}
+<div class=card>
+  <h3>🖧 نودها <span class=tag>{{nodes|length}} نود · {{online}} آنلاین</span></h3>
+  <div class=pad>
+    {% if not master_ready %}<div class=errbox>⚠️ WireGuardِ مستر پیکربندی نشده (WG_MASTER_PUBKEY / WG_ENDPOINT / ADMIN_BASE). راهنما در README.</div>{% endif %}
+    {% if not nodes %}<div class=empty>هنوز نودی وصل نشده. با «افزودن نود» یک دستورِ نصب بساز.</div>{% endif %}
+    {% for n in nodes %}
+    <div class=nd>
+      <span class="st {{'on' if n.online else 'off'}}"></span>
+      <div class=meta><b>{{n.emoji}} {{n.name}}</b>
+        <small>{{n.role_label}} · {{n.wg_ip}} · {% if n.online %}بار: {{n.load}} · نسخه {{n.ver}}{% else %}آفلاین{% endif %}</small></div>
+      <span class=rl>{{n.role}}</span>
+      <form method=post action=/nodes/remove onsubmit="return confirm('این نود حذف شود؟')">
+        <input type=hidden name=id value="{{n.id}}">
+        <button class=btn-sm>حذف</button></form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+<div class=card>
+  <h3>➕ افزودنِ نود</h3>
+  <div class=pad>
+    {% if token %}
+      <div class=note>روی سرورِ نود (Ubuntu/Debian، با root) این را اجرا کن — توکن یک‌بارمصرف و ۳۰ دقیقه معتبر است:</div>
+      <div class=cmd style="margin-top:10px">{{install_cmd}}</div>
+    {% else %}
+      <div class=note>نقشِ نود را انتخاب کن؛ یک دستورِ نصب برایت می‌سازد.</div>
+      <form method=post action=/nodes/add style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <select class=sel name=role style="min-width:220px">
+          {% for k, r in roles.items() %}<option value="{{k}}">{{r.emoji}} {{r.label}}</option>{% endfor %}
+        </select>
+        <input class=inp name=name placeholder="نامِ نود (مثلاً de-1)" style="width:200px;text-align:right">
+        <button class=btn-sm>ساختِ دستورِ نصب</button>
+      </form>
+    {% endif %}
+  </div>
+</div>{% endblock %}"""
+
 ENV = Environment(
     loader=DictLoader({
         "base": _BASE, "settings": _SETTINGS, "cookies": _COOKIES,
         "health": _HEALTH, "users": _USERS, "stats": _STATS, "login": _LOGIN,
-        "texts": _TEXTS, "buttons": _BUTTONS,
+        "texts": _TEXTS, "buttons": _BUTTONS, "nodes": _NODES,
     }),
     autoescape=select_autoescape(default=True, default_for_string=True),
 )
@@ -1313,6 +1364,102 @@ async def buttons_reset(request: web.Request) -> web.Response:
     raise web.HTTPFound(f"/buttons?kind={kind}&lang={lang}&ok=r")
 
 
+# ── نودهای توزیع‌شده (master/node روی WireGuard) ────────────────
+async def nodes_page(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    live = await node_mod.list_live(request.app["redis"])
+    async with Sessionmaker() as s:
+        rows = (await s.execute(select(Node))).scalars().all()
+    items = []
+    for n in rows:
+        hb = live.get(n.id) or {}
+        role = node_mod.ROLES.get(n.role, {})
+        items.append({"id": n.id, "name": n.name, "role": n.role,
+                      "role_label": role.get("label", n.role), "emoji": role.get("emoji", "🖧"),
+                      "wg_ip": n.wg_ip, "online": bool(hb), "load": hb.get("load", 0),
+                      "ver": hb.get("ver", "—")})
+    token = request.query.get("tok", "")
+    base = settings.admin_base or (settings.public_base or "")
+    install_cmd = f"curl -fsSL {base}/node/install.sh | sudo bash -s -- {token}" if token else ""
+    master_ready = bool(settings.wg_master_pubkey and settings.wg_endpoint and base)
+    return _render("nodes", admin_id=_session_admin(request), active="nodes",
+                   pill_ok=await _pill_ok(request.app), nodes=items,
+                   online=sum(1 for i in items if i["online"]), roles=node_mod.ROLES,
+                   token=token, install_cmd=install_cmd, master_ready=master_ready)
+
+
+async def nodes_add(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    role = (form.get("role") or "").strip()
+    if role not in node_mod.ROLES:
+        raise web.HTTPFound("/nodes")
+    tok = await node_mod.make_join_token(request.app["redis"], role)
+    raise web.HTTPFound(f"/nodes?tok={tok}")
+
+
+async def nodes_remove(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    nid = (form.get("id") or "").strip()
+    async with Sessionmaker() as s:
+        n = await s.get(Node, nid)
+        if n is not None:
+            node_mod.remove_peer(n.wg_pubkey)  # peerِ WireGuard را بردار
+            await s.delete(n)
+            await s.commit()
+    try:
+        await request.app["redis"].delete(f"node:{nid}")
+    except Exception:  # noqa: BLE001
+        pass
+    raise web.HTTPFound("/nodes")
+
+
+# ── APIِ عمومیِ join (توکن گِیت است؛ نود قبل از WG صدایش می‌زند) ──
+async def node_join(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001
+        return web.json_response({"error": "bad json"}, status=400)
+    token = (data.get("token") or "").strip()
+    pubkey = (data.get("pubkey") or "").strip()
+    name = (data.get("name") or "").strip()[:64]
+    payload = await node_mod.consume_join_token(request.app["redis"], token)
+    if payload is None:
+        return web.json_response({"error": "invalid or used token"}, status=403)
+    if not pubkey or len(pubkey) > 64:
+        return web.json_response({"error": "missing pubkey"}, status=400)
+    role = payload["role"]
+    async with Sessionmaker() as s:
+        used = {ip for (ip,) in (await s.execute(select(Node.wg_ip))).all()}
+        ip = node_mod.next_wg_ip(used)
+        if ip is None:
+            return web.json_response({"error": "wg subnet full"}, status=507)
+        nid = secrets.token_urlsafe(9)[:12]
+        s.add(Node(id=nid, name=name or f"{role}-{nid[:4]}", role=role, wg_ip=ip, wg_pubkey=pubkey))
+        await s.commit()
+    node_mod.add_peer(pubkey, ip)  # peer را به WGِ مستر اضافه کن (روی سرورِ واقعی)
+    cfg = node_mod.node_config(role, ip)
+    cfg["node_id"] = nid
+    return web.json_response(cfg)
+
+
+async def node_install(request: web.Request) -> web.Response:
+    """اسکریپتِ نصبِ نود؛ عمومی (توکن گِیتِ واقعی است). baseِ مستر تزریق می‌شود."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "node", "install.sh")
+    try:
+        with open(os.path.abspath(path), encoding="utf-8") as fh:
+            script = fh.read()
+    except OSError:
+        return web.Response(text="# install script not found", status=404)
+    base = settings.admin_base or settings.public_base or ""
+    script = script.replace("__MASTER_BASE__", base)
+    return web.Response(text=script, content_type="text/plain")
+
+
 async def cookies_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
@@ -1534,6 +1681,11 @@ def build_app() -> web.Application:
     app.router.add_get("/buttons", buttons_page)
     app.router.add_post("/buttons/save", buttons_save)
     app.router.add_post("/buttons/reset", buttons_reset)
+    app.router.add_get("/nodes", nodes_page)
+    app.router.add_post("/nodes/add", nodes_add)
+    app.router.add_post("/nodes/remove", nodes_remove)
+    app.router.add_post("/node/join", node_join)      # عمومی (توکن گِیت)
+    app.router.add_get("/node/install.sh", node_install)  # عمومی
     app.router.add_get("/healthz", healthz)
     if os.path.isdir(_STATIC_DIR):
         app.router.add_static("/static", _STATIC_DIR)

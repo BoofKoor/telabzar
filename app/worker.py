@@ -34,7 +34,25 @@ async def startup(ctx: dict) -> None:
     settings_store.init_store(settings.redis_url)  # تنظیماتِ زمانِ‌اجرا (مثلِ whisper_model)
     from . import textstore
     await textstore.load()  # متن‌های override‌شدهٔ ادمین را پیش‌بارگذاری کن
-    log.info("Worker ready.")
+    if settings.node_role:  # این پروسه یک نود است → heartbeat به رجیستریِ مستر بزن
+        ctx["hb_task"] = asyncio.create_task(_node_heartbeat())
+    log.info("Worker ready%s.", f" (node: {settings.node_role})" if settings.node_role else "")
+
+
+async def _node_heartbeat() -> None:
+    """هر ~۲۰ ثانیه وضعیتِ نود را در Redisِ مستر ثبت می‌کند (پنل از رویش نودها را نشان می‌دهد)."""
+    from . import nodes
+    store = settings_store.get_store()
+    nid = settings.node_id or settings.node_role
+    while True:
+        try:
+            depth = await store.r.zcard(nodes.ROLES.get(settings.node_role, {}).get("queue", ""))
+        except Exception:  # noqa: BLE001
+            depth = 0
+        await nodes.write_heartbeat(store.r, nid, {
+            "name": settings.node_name or nid, "role": settings.node_role,
+            "ver": "1", "load": depth})
+        await asyncio.sleep(20)
 
 
 async def shutdown(ctx: dict) -> None:
