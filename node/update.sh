@@ -22,19 +22,19 @@ command -v jq >/dev/null || { apt-get update -qq && apt-get install -y -qq jq >/
 [[ -d "$REPO/.git" ]] || die "ریپوی نود پیدا نشد ($REPO). اول از پنل نصب کن."
 docker inspect "$NAME" >/dev/null 2>&1 || die "کانتینرِ «$NAME» پیدا نشد."
 
-say "خواندنِ env/image/command از کانتینرِ فعلی…"
+say "خواندنِ env/image از کانتینرِ فعلی…"
 IMAGE=$(docker inspect "$NAME" --format '{{.Config.Image}}')     # telabzar-node:<role>
 ROLE="${IMAGE##*:}"
+# env را از کانتینرِ فعلی نگه می‌داریم (خطوطِ خالی را می‌اندازیم)
 mapfile -t ENVS < <(docker inspect "$NAME" --format '{{range .Config.Env}}{{println .}}{{end}}')
-mapfile -t CMD  < <(docker inspect "$NAME" --format '{{range .Config.Cmd}}{{println .}}{{end}}')
-[[ ${#CMD[@]} -gt 0 ]] || die "دستورِ اجرای کانتینر خوانده نشد."
 
-# نگاشتِ نقش → Dockerfile (مثلِ node/install.sh)
+# نقش → Dockerfile + دستورِ اجرا (قطعی از رویِ نقش — نه از docker inspect که ممکن است
+# آرگومانِ خالی بیاورد و arq را بشکند).
 case "$ROLE" in
-  download)   DF="docker/download-worker.Dockerfile" ;;
-  processing) DF="docker/worker.Dockerfile" ;;
-  gateway)    DF="docker/gateway.Dockerfile" ;;
-  *)          DF="docker/download-worker.Dockerfile" ;;
+  download)   DF="docker/download-worker.Dockerfile"; RUN=(arq app.worker.DownloadWorkerSettings) ;;
+  processing) DF="docker/worker.Dockerfile";          RUN=(arq app.worker.ProcessingWorkerSettings) ;;
+  gateway)    DF="docker/gateway.Dockerfile";         RUN=(python -m app.gateway_node) ;;
+  *)          die "نقشِ ناشناخته در تگِ ایمیج: $ROLE" ;;
 esac
 [[ -f "$REPO/$DF" ]] || die "Dockerfileِ نقش پیدا نشد: $DF"
 
@@ -45,10 +45,10 @@ git pull -q || git pull --depth 1 -q || true   # کلونِ shallow هم pull م
 say "ساختِ ایمیجِ نقش ($ROLE / $DF)…"
 docker build -q -f "$DF" -t "$IMAGE" . >/dev/null
 
-say "بازساختِ کانتینرِ نود (env/command حفظ می‌شود)…"
+say "بازساختِ کانتینرِ نود (env حفظ، دستور از رویِ نقش)…"
 ENV_ARGS=(); for e in "${ENVS[@]}"; do [[ -n "$e" ]] && ENV_ARGS+=(-e "$e"); done
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --restart unless-stopped --network host \
-  "${ENV_ARGS[@]}" "$IMAGE" "${CMD[@]}" >/dev/null
+  "${ENV_ARGS[@]}" "$IMAGE" "${RUN[@]}" >/dev/null
 
 say "تمام ✅  نودِ «$ROLE» با کدِ تازه بالا آمد. لاگ:  docker logs -f $NAME"
