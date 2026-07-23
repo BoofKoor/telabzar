@@ -98,6 +98,27 @@ class Settings(BaseSettings):
     spotify_match_min: int = 55        # حداقلِ امتیازِ تطبیق (۰..۱۰۰)؛ زیرش = تطبیقِ نامطمئن
     spotify_yt_fallback: bool = True   # اگر نامزدی از آستانه رد نشد: ytsearch1 (روشن) یا ردِ ترک (خاموش)
 
+    # ── نودهای توزیع‌شده (master/node روی WireGuard) — فاز N ──
+    # نقشِ این پروسه اگر «نود» باشد (روی سرورِ نود ست می‌شود؛ روی مستر خالی است).
+    node_role: str = ""            # "" = مستر · download/… = ورکرِ نود
+    node_id: str = ""              # شناسهٔ نود (اسکریپتِ نصب ست می‌کند)
+    node_name: str = ""            # نامِ نمایشیِ نود
+    # حالتِ remote: ورکرِ نود فایل را از HTTPِ Bot API می‌گیرد/می‌فرستد (نه دیسکِ مشترک).
+    # وقتی node_role ست باشد، ربات با is_local=False ساخته می‌شود.
+    node_secret: str = ""          # کلیدِ HMACِ توکنِ join؛ خالی = از bot_token مشتق می‌شود
+    # WireGuard (سمتِ مستر: hub؛ اتوماسیونِ peer از پنل)
+    wg_interface: str = "wg0"
+    wg_subnet: str = "10.51.0.0/24"
+    wg_master_ip: str = "10.51.0.1"
+    wg_master_pubkey: str = ""     # کلیدِ عمومیِ WGِ مستر (به نود داده می‌شود)
+    wg_endpoint: str = ""          # نقطهٔ عمومیِ WGِ مستر، مثل 1.2.3.4:51820
+    wg_config_path: str = "/etc/wireguard/wg0.conf"
+    # URLهایی که نود روی WG برای رسیدن به مستر استفاده می‌کند (نه public)
+    node_redis_url: str = "redis://10.51.0.1:6379/0"
+    node_postgres_dsn: str = "postgresql+asyncpg://telabzar:telabzar@10.51.0.1:5432/telabzar"
+    node_api_base: str = "http://10.51.0.1:8081"
+    node_pot_provider_url: str = "http://10.51.0.1:4416"
+
     # پنلِ ادمینِ وب (فاز D) — سرویسِ جدا، احراز با کدِ تلگرام
     admin_port: int = 8080         # پورتِ داخلِ کانتینر (میزبان → 2083)
     admin_base: str = ""           # URL عمومیِ پنل (برای دستورِ /panel)؛ مثل https://panel.example.com:2083

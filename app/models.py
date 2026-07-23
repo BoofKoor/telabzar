@@ -118,6 +118,22 @@ class MenuButton(Base):
     )
 
 
+class Node(Base):
+    """نودِ توزیع‌شده (ماشینِ راه‌دورِ متصل با WireGuard). هویتِ ماندگار؛ وضعیتِ زنده
+    در Redis (heartbeat) نگه‌داری می‌شود. role ∈ کلیدهای `nodes.ROLES`."""
+
+    __tablename__ = "nodes"
+
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)  # کوتاه، تصادفی
+    name: Mapped[str] = mapped_column(String(64))
+    role: Mapped[str] = mapped_column(String(16))
+    wg_ip: Mapped[str] = mapped_column(String(45))
+    wg_pubkey: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class DownloadCache(Base):
     """کشِ file_id برای دانلودِ آنی: کلید = هشِ (لینک + کیفیت) → فایلِ ارسال‌شده.
     دفعهٔ بعد که همان لینک+کیفیت خواسته شود، مستقیم با file_id فرستاده می‌شود
