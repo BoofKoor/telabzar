@@ -42,14 +42,14 @@ processing (`processing.py`, `downloader.py`) → delivery (`cards.py`, or `gate
 | `app/bot.py` | `Bot`/`Dispatcher` factories; router order **start → admin → ops → download → files** |
 | `app/config.py` | `Settings` (pydantic-settings) — all env vars; `admin_id_set` property |
 | `app/db.py` | Async engine/sessionmaker; `init_models()` = `create_all` + lightweight `_MIGRATIONS` (no Alembic) |
-| `app/models.py` | ORM: `User`, `File`, `Setting`, `DownloadCache`, `Job`, `TextOverride`, `ButtonStyle` |
+| `app/models.py` | ORM: `User`, `File`, `Setting`, `DownloadCache`, `Job`, `TextOverride`, `ButtonStyle`, `MenuButton` |
 | `app/middlewares.py` | `DataMiddleware`: per-update DB session, get/create user, inject `lang`+`is_admin`, block-gate |
 | `app/routers/start.py` | `/start`, language pick |
 | `app/routers/admin.py` | `/admin` (list/get/set/reset/health) + `/panel`, admin-only |
 | `app/routers/files.py` | `on_file` intake → `File` row → card; text fallback |
 | `app/routers/ops.py` | All op button/FSM handlers; `_enqueue`; limits; collection (zip/merge/img_pdf/vjoin) flow |
 | `app/routers/download.py` | URL intake, platform UX (probe/quick), dl limits, `Dl` menu |
-| `app/keyboards.py` | `OPS_BY_KIND` menus, card/collection/download keyboards |
+| `app/keyboards.py` | `OPS_BY_KIND` menus, card/collection/download keyboards; `file_card_kb` applies the admin menu layout (order + hidden + per-button width→rows via `_rows_from_widths`) |
 | `app/callbacks.py` | Typed `CallbackData` factories (<64 B): `Act,Conv,Meta,Cmp,Wm,Rsz,Rot,Spd,Tr,Dl,Lang` |
 | `app/states.py` | FSM states (rename, meta edit, watermark, trim, screenshot, collect, …) |
 | `app/cards.py` | Send/update the card (file + keyboard), spawn new cards, progress note |
@@ -58,7 +58,7 @@ processing (`processing.py`, `downloader.py`) → delivery (`cards.py`, or `gate
 | `app/processing.py` | ffmpeg/Pillow ops; `_run` subprocess contract (progress/cancel/`ProcessingCancelled`) |
 | `app/downloader.py` | Engine routing (`platform_of`/`engine_for`), yt-dlp/gallery-dl/cobalt/Spotify, YT-match scorer |
 | `app/settings_store.py` | Runtime config: Postgres (durable) + Redis (live, read-through); `RUNTIME_KEYS`/`ENUM_VALUES` |
-| `app/textstore.py` | Runtime-editable bot texts/labels **and** per-op button `style`+`icon_emoji_id` (`TextOverride`/`ButtonStyle`, Postgres) via one in-process dict reloaded on the Redis `txtver` counter; `validate()` (placeholders + Telegram HTML), `clean_button()` |
+| `app/textstore.py` | Runtime UI overrides: bot texts/labels, per-op button `style`+`icon_emoji_id`, **and per-kind card menu layout** (`TextOverride`/`ButtonStyle`/`MenuButton`, Postgres) via one in-process dict reloaded on the Redis `txtver` counter; `validate()`, `clean_button()`, `get_menu_layout()` |
 | `app/admin_web.py` | Web panel: settings/texts/buttons/health/users/stats/cookies; `GROUPS` = panel rows |
 | `app/gateway.py` | `/dl` + `/s` file serving (Range, faststart-friendly, token→path cache) |
 | `app/security.py` | ClamAV INSTREAM scan |
@@ -181,3 +181,4 @@ Verification is currently done with ad-hoc scratchpad scripts outside the repo (
 - 2026-07-22 — Runtime-editable texts (Phase A): new `TextOverride` model + `app/textstore.py` (in-process overrides reloaded via Redis `txtver`); `i18n.t()` prefers overrides with format-fallback; panel `/texts` editor (search/edit/reset, placeholder+HTML validation); refresh wired into `DataMiddleware` + both workers. Reason: stop hardcoding user-facing strings — admin can edit any text/label (HTML + premium emoji) with no restart.
 - 2026-07-22 — Button styling (Phase B): new `ButtonStyle` model + button funcs in `textstore` (shared `txtver` reload); `file_card_kb` applies per-op `style` (primary/success/danger) + `icon_custom_emoji_id`; panel `/buttons` page (per-op color + premium-emoji id, one-save batch, `clean_button` validation). Reason: admin sets card-button color + premium-emoji icon with no restart.
 - 2026-07-22 — `/texts` page redesign: now shows **all** ~204 strings grouped into collapsible prefix-based categories (`_texts_groups`/`_TEXT_CATS`) instead of an empty search-only box; search filters and auto-opens matches; first category open by default. Reason: the previous page looked empty (only overridden shown) — admin needs to browse/edit every string, categorized.
+- 2026-07-22 — Card menu layout editor (buttons Phase 2): new `MenuButton` model + `textstore.get/set/reset_menu_layout` (shared `txtver` reload); `file_card_kb` now resolves order + hidden + per-button width (full/half/third → row sizes) with zero-change default that reproduces the old layout. `/buttons` page rebuilt (V3): per-kind tabs, a live simulated-Telegram preview (JS `rebuildPreview`), and a drag-reorder list editing text (per-lang) + color + premium-emoji + width + show/hide in one save. Reason: admin can fully arrange each file-kind's card menu (reorder, hide, row widths) + text/color/emoji, no restart.

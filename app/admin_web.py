@@ -537,39 +537,126 @@ _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% b
   {% endfor %}
 </div>{% endblock %}"""
 
-_BUTTONS = """{% extends 'base' %}{% block title %}کلیدها{% endblock %}{% block heading %}استایلِ کلیدها{% endblock %}
+_BUTTONS = """{% extends 'base' %}{% block title %}کلیدها{% endblock %}{% block heading %}استایل و چیدمانِ کلیدها{% endblock %}
 {% block style %}
-.bt-item{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:9px 0}
-.bt-lab{flex:1;min-width:150px}.bt-lab small{color:#64748b;font-size:11px;margin-inline-start:6px}
-.bt-item .sel{min-width:130px}.bt-item .inp{width:150px}
-.sw{width:12px;height:12px;border-radius:4px;display:inline-block;vertical-align:middle;margin-inline-end:5px}
+.tgprev{background:linear-gradient(135deg,#dbeafe,#eef4fb);border:1px solid #cddcf0;border-radius:16px;padding:14px}
+.tgmsg{background:#fff;border-radius:12px;padding:8px 12px;font-size:12.5px;color:#334155;margin-bottom:8px;display:inline-block}
+.tgrow{display:flex;gap:6px;margin-bottom:6px}
+.tgb{flex:1;display:flex;align-items:center;justify-content:center;padding:9px 8px;border-radius:8px;font-size:12.5px;font-weight:600;background:#f1f5f9;color:#1e293b;text-align:center}
+.tgb.hid{opacity:.4;border:1px dashed #94a3b8;background:#fff}
+.bt-row{display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px dashed #eef2f7;background:#fff;border-radius:8px}
+.bt-row .grip{color:#94a3b8;font-size:18px;cursor:grab;letter-spacing:-3px;user-select:none}
+.bt-row .op{font-size:10.5px;color:#94a3b8;min-width:70px}
+.bt-row .inp{height:32px}.bt-row .sel{height:32px}
+.bt-row.dragging{opacity:.4;background:#f0fdfa}
+.bt-head{display:flex;gap:8px;color:#94a3b8;font-size:11px;padding:2px 4px 6px;border-bottom:1px solid var(--line)}
 {% endblock %}
 {% block body %}
 <div class=card>
-  <h3>رنگ و ایموجیِ کلیدها <span class=tag>بی‌ری‌استارت</span></h3>
-  <div class=hint style="margin-bottom:10px;color:#94a3b8;font-size:12.5px">
-    رنگ = یکی از <b><span class=sw style=background:#3b82f6></span>آبی</b> /
-    <b><span class=sw style=background:#22c55e></span>سبز</b> /
-    <b><span class=sw style=background:#ef4444></span>قرمز</b> (تنها ۳ حالتِ تلگرام).
-    ایموجی = آیدیِ عددیِ ایموجیِ پرمیوم (اختیاری؛ نیازمندِ Premium بودنِ اکانتِ ربات).
+  <h3>📱 پیش‌نمایشِ زنده <span class=tag>همان‌طور که کاربر می‌بیند</span></h3>
+  <div class=tabs>
+    {% for k, label in kinds %}<a class="tab {% if k==kind %}on{% endif %}" href="/buttons?kind={{k}}&lang={{lang}}">{{label}}</a>{% endfor %}
   </div>
-  {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
-  <form method=post action=/buttons/save>
-  {% for it in items %}
-    <div class=bt-item>
-      <div class=bt-lab>{{it.label}}<small>{{it.op}}</small></div>
-      <select class=sel name="style_{{it.op}}">
-        <option value="" {% if not it.style %}selected{% endif %}>— بی‌رنگ</option>
-        <option value=primary {% if it.style=='primary' %}selected{% endif %}>آبی (primary)</option>
-        <option value=success {% if it.style=='success' %}selected{% endif %}>سبز (success)</option>
-        <option value=danger {% if it.style=='danger' %}selected{% endif %}>قرمز (danger)</option>
-      </select>
-      <input class=inp name="emoji_{{it.op}}" value="{{it.emoji}}" inputmode=numeric placeholder="آیدیِ ایموجی">
+  <div class=pad>
+    <div class=tgprev>
+      <div class=tgmsg>{{prev_msg}}</div>
+      <div id=prevkeys>
+        {% for row in pv_rows %}<div class=tgrow>{% for b in row %}<span class="tgb {{b.cls}}" {% if b.color %}style="background:{{b.color}};color:#fff"{% endif %}>{{b.text}}</span>{% endfor %}</div>{% endfor %}
+        {% if hidden_items %}<div class=tgrow>{% for it in hidden_items %}<span class="tgb hid">👁‍🗨 {{it.text}}</span>{% endfor %}</div>{% endif %}
+        <div class=tgrow><span class="tgb">{{close_label}}</span></div>
+      </div>
     </div>
-  {% endfor %}
-    <button class=save style="margin-top:14px">ذخیرهٔ همه</button>
+  </div>
+</div>
+<div class=card>
+  <h3>✏️ چیدمان و استایلِ منوی «{{kindlabel}}» <span class=tag>بکش برای جابه‌جایی · بی‌ری‌استارت</span></h3>
+  <div class=hint>متن · رنگ (آبی/سبز/قرمز) · ایموجیِ پرمیوم · عرض (تمام/نصف/یک‌سوم؛ ردیف‌ها را می‌سازد) · نمایش. زبانِ متن:
+    <select class=sel style="height:30px" onchange="location.href='/buttons?kind={{kind}}&lang='+this.value">
+      <option value=fa {% if lang=='fa' %}selected{% endif %}>فارسی</option>
+      <option value=en {% if lang=='en' %}selected{% endif %}>English</option></select></div>
+  {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
+  <form method=post action=/buttons/save id=btnform>
+    <input type=hidden name=kind value="{{kind}}">
+    <input type=hidden name=lang value="{{lang}}">
+    <input type=hidden name=order id=orderfield value="{{ items|map(attribute='op')|join(',') }}">
+    <div class=pad style="padding-top:2px">
+      <div class=bt-head><span style="width:22px"></span><span style="width:70px">op</span><span style="flex:1">متن</span>
+        <span style="width:96px">رنگ</span><span style="width:96px">ایموجی</span><span style="width:104px">عرض</span><span style="width:44px">نمایش</span></div>
+      <div id=rowlist>
+      {% for it in items %}
+        <div class=bt-row data-op="{{it.op}}">
+          <span class=grip>⠿</span>
+          <span class=op>{{it.op}}</span>
+          <input class=inp name="text_{{it.op}}" value="{{it.text}}" style="flex:1;min-width:90px">
+          <select class=sel name="style_{{it.op}}" style="width:96px">
+            <option value="" {% if not it.style %}selected{% endif %}>—</option>
+            <option value=primary {% if it.style=='primary' %}selected{% endif %}>آبی</option>
+            <option value=success {% if it.style=='success' %}selected{% endif %}>سبز</option>
+            <option value=danger {% if it.style=='danger' %}selected{% endif %}>قرمز</option></select>
+          <input class=inp name="emoji_{{it.op}}" value="{{it.emoji}}" inputmode=numeric placeholder="—" style="width:96px;text-align:center">
+          <select class=sel name="width_{{it.op}}" style="width:104px">
+            <option value=full {% if it.width=='full' %}selected{% endif %}>تمام‌عرض</option>
+            <option value=half {% if it.width=='half' %}selected{% endif %}>نصف</option>
+            <option value=third {% if it.width=='third' %}selected{% endif %}>یک‌سوم</option></select>
+          <input type=checkbox class=tg name="show_{{it.op}}" {% if not it.hidden %}checked{% endif %}>
+        </div>
+      {% endfor %}
+      </div>
+    </div>
+    <button class=save>ذخیرهٔ منوی «{{kindlabel}}»</button>
+    <button class=btn-sm formaction=/buttons/reset style="margin:0 18px 18px">بازگشت به چیدمانِ پیش‌فرضِ این منو</button>
   </form>
-</div>{% endblock %}"""
+</div>
+<script>
+var CLOSE_LABEL = {{ close_label|tojson }};
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function colorOf(v){return {primary:'#3b82f6',success:'#22c55e',danger:'#ef4444'}[v]||'';}
+function syncOrder(){
+  var ops=[].map.call(document.querySelectorAll('#rowlist .bt-row'),function(r){return r.dataset.op;});
+  document.getElementById('orderfield').value=ops.join(',');
+}
+function rebuildPreview(){
+  var rows=[].slice.call(document.querySelectorAll('#rowlist .bt-row'));
+  var vis=[];
+  rows.forEach(function(r){
+    var op=r.dataset.op;
+    if(!r.querySelector('input.tg').checked) return;
+    var text=r.querySelector('[name="text_'+op+'"]').value||op;
+    var color=colorOf(r.querySelector('[name="style_'+op+'"]').value);
+    var width=r.querySelector('[name="width_'+op+'"]').value;
+    vis.push({text:text,color:color,width:width});
+  });
+  var cap={full:1,half:2,third:3},out=[],i=0;
+  while(i<vis.length){var c=cap[vis[i].width]||3,j=i;
+    while(j<vis.length&&j-i<c&&vis[j].width===vis[i].width)j++;
+    out.push(vis.slice(i,j));i=j;}
+  var html='';
+  out.forEach(function(row){html+='<div class=tgrow>';
+    row.forEach(function(b){html+='<span class="tgb" style="'+(b.color?('background:'+b.color+';color:#fff'):'')+'">'+esc(b.text)+'</span>';});
+    html+='</div>';});
+  html+='<div class=tgrow><span class="tgb">'+esc(CLOSE_LABEL)+'</span></div>';
+  document.getElementById('prevkeys').innerHTML=html;
+}
+(function(){
+  var list=document.getElementById('rowlist');
+  list.querySelectorAll('.bt-row').forEach(function(row){
+    var grip=row.querySelector('.grip');
+    grip.addEventListener('mousedown',function(){row.setAttribute('draggable','true');});
+    row.addEventListener('dragstart',function(){row.classList.add('dragging');});
+    row.addEventListener('dragend',function(){row.classList.remove('dragging');row.setAttribute('draggable','false');syncOrder();rebuildPreview();});
+  });
+  list.addEventListener('dragover',function(e){e.preventDefault();
+    var dragging=list.querySelector('.dragging');if(!dragging)return;
+    var els=[].slice.call(list.querySelectorAll('.bt-row:not(.dragging)'));
+    var after=els.reduce(function(cl,ch){var box=ch.getBoundingClientRect();var off=e.clientY-box.top-box.height/2;
+      return (off<0&&off>cl.off)?{off:off,el:ch}:cl;},{off:-1e9,el:null}).el;
+    if(after==null)list.appendChild(dragging);else list.insertBefore(dragging,after);
+  });
+  document.getElementById('btnform').addEventListener('input',rebuildPreview);
+  document.getElementById('btnform').addEventListener('change',rebuildPreview);
+  rebuildPreview();
+})();
+</script>{% endblock %}"""
 
 ENV = Environment(
     loader=DictLoader({
@@ -1098,43 +1185,132 @@ async def texts_reset(request: web.Request) -> web.Response:
     raise _texts_redirect(lang if lang in ("fa", "en") else "fa", q, ok="r")
 
 
-# ── استایلِ کلیدها (رنگ + آیکونِ ایموجیِ پرمیوم) ────────────────
-_BTN_OPS: list[tuple[str, str]] = []  # (op, کلیدِ لیبل) — یکتا در ترتیبِ منوها
-_seen_ops: set[str] = set()
-for _kind, _ops in OPS_BY_KIND.items():
-    for _op, _key in _ops:
-        if _op not in _seen_ops:
-            _seen_ops.add(_op)
-            _BTN_OPS.append((_op, _key))
+# ── چیدمان و استایلِ کلیدهای منوی کارت (per-kind) ──────────────
+from .keyboards import FEATURED_TOP  # noqa: E402
+from . import keyboards as _KB  # noqa: E402
+
+_KIND_TABS = [("image", "🖼 تصویر"), ("video", "🎬 ویدیو"), ("audio", "🎵 صوت"),
+              ("document", "📄 سند"), ("pdf", "📕 PDF"), ("archive", "🗜 آرشیو"), ("app", "📦 اپ")]
+_KIND_LABEL = dict(_KIND_TABS)
+_STYLE_CLS = {"primary": "blue", "success": "green", "danger": "red"}
+_STYLE_HEX = {"primary": "#3b82f6", "success": "#22c55e", "danger": "#ef4444"}
 
 
-def _button_items() -> list[dict]:
-    cur = textstore.button_snapshot()
-    out = []
-    for op, key in _BTN_OPS:
-        style, emoji = cur.get(op, (None, None))
-        out.append({"op": op, "label": _t("fa", key), "style": style or "", "emoji": emoji or ""})
-    return out
+def _btn_default_width(kind: str, op: str, first_op: str) -> str:
+    return "full" if (kind in FEATURED_TOP and op == first_op) else "third"
+
+
+def _menu_editor_items(kind: str, lang: str) -> list[dict]:
+    """همهٔ کلیدهای منوی kind (شاملِ مخفی‌ها) به ترتیبِ ویرایش، با متن/رنگ/ایموجی/عرض/نمایش."""
+    ops = OPS_BY_KIND.get(kind, [])
+    key_by_op = dict(ops)
+    first_op = ops[0][0] if ops else ""
+    layout = textstore.get_menu_layout(kind)
+    styles = textstore.button_snapshot()
+    order: list[str] = []
+    meta: dict[str, dict] = {}
+    if layout:
+        meta = {e["op"]: e for e in layout}
+        seen = set()
+        for e in layout:
+            if e["op"] in key_by_op:
+                order.append(e["op"])
+                seen.add(e["op"])
+        for op, _k in ops:
+            if op not in seen:
+                order.append(op)
+    else:
+        order = [op for op, _k in ops]
+    items = []
+    for op in order:
+        key = key_by_op[op]
+        st, em = styles.get(op, (None, None))
+        e = meta.get(op)
+        items.append({
+            "op": op, "key": key,
+            "text": textstore.get_override(lang, key) or _text_default(lang, key),
+            "style": st or "", "emoji": em or "",
+            "width": (e.get("width") if e else None) or _btn_default_width(kind, op, first_op),
+            "hidden": bool(e.get("hidden")) if e else False,
+        })
+    return items
+
+
+def _menu_preview(items: list[dict]) -> tuple[list[list[dict]], list[dict]]:
+    """ردیف‌های پیش‌نمایش (فقط کلیدهای visible) + فهرستِ مخفی‌ها."""
+    vis = [it for it in items if not it["hidden"]]
+    sizes = _KB._rows_from_widths([it["width"] for it in vis])
+    rows, i = [], 0
+    for s in sizes:
+        chunk = vis[i:i + s]
+        rows.append([{"text": c["text"], "cls": _STYLE_CLS.get(c["style"], ""),
+                      "color": _STYLE_HEX.get(c["style"], "")} for c in chunk])
+        i += s
+    return rows, [it for it in items if it["hidden"]]
 
 
 async def buttons_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
-    saved = "استایلِ کلیدها ذخیره شد (بی‌ری‌استارت اعمال شد)." if request.query.get("ok") == "1" else ""
+    kind = request.query.get("kind", "video")
+    if kind not in _KIND_LABEL:
+        kind = "video"
+    lang = request.query.get("lang", "fa")
+    if lang not in ("fa", "en"):
+        lang = "fa"
+    items = _menu_editor_items(kind, lang)
+    pv_rows, hidden_items = _menu_preview(items)
+    saved = {"1": "ذخیره شد (بی‌ری‌استارت اعمال شد).",
+             "r": "به چیدمانِ پیش‌فرض برگشت."}.get(request.query.get("ok", ""), "")
     return _render("buttons", admin_id=_session_admin(request), active="buttons",
-                   pill_ok=await _pill_ok(request.app), items=_button_items(), saved=saved)
+                   pill_ok=await _pill_ok(request.app), kind=kind, lang=lang, kinds=_KIND_TABS,
+                   kindlabel=_KIND_LABEL[kind], items=items, pv_rows=pv_rows,
+                   hidden_items=hidden_items, close_label=_t(lang, "btn_close"),
+                   prev_msg="🎬 نمونهٔ کارتِ فایل", saved=saved)
 
 
 async def buttons_save(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     form = await request.post()
-    mapping: dict[str, tuple[str | None, str | None]] = {}
-    for op, _key in _BTN_OPS:
-        mapping[op] = textstore.clean_button(
-            form.get(f"style_{op}", ""), form.get(f"emoji_{op}", ""))
-    await textstore.set_button_styles(mapping)
-    raise web.HTTPFound("/buttons?ok=1")
+    kind = (form.get("kind") or "video").strip()
+    lang = (form.get("lang") or "fa").strip()
+    if kind not in _KIND_LABEL or lang not in ("fa", "en"):
+        raise web.HTTPFound("/buttons")
+    key_by_op = dict(OPS_BY_KIND.get(kind, []))
+    order = [op for op in (form.get("order") or "").split(",") if op in key_by_op]
+    for op, _k in OPS_BY_KIND.get(kind, []):  # هر opِ جاافتاده را ته اضافه کن
+        if op not in order:
+            order.append(op)
+    layout, styles = [], {}
+    for op in order:
+        layout.append({"op": op, "hidden": form.get(f"show_{op}") != "on",
+                       "width": textstore.clean_width(form.get(f"width_{op}", "third"))})
+        styles[op] = textstore.clean_button(form.get(f"style_{op}", ""), form.get(f"emoji_{op}", ""))
+        # متنِ لیبل (per-lang) — فقط وقتی واقعاً عوض شده set/reset کن (تا bumpِ بی‌خود نزنیم)
+        key = key_by_op[op]
+        val = (form.get(f"text_{op}") or "").replace("\r\n", "\n").strip()
+        default = _text_default(lang, key)
+        cur = textstore.get_override(lang, key)
+        if val and val != default.strip() and textstore.validate(default, val) is None:
+            if cur != val:
+                await textstore.set_text(lang, key, val)
+        elif cur is not None:
+            await textstore.reset_text(lang, key)
+    await textstore.set_menu_layout(kind, layout)
+    await textstore.set_button_styles(styles)
+    raise web.HTTPFound(f"/buttons?kind={kind}&lang={lang}&ok=1")
+
+
+async def buttons_reset(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    kind = (form.get("kind") or "video").strip()
+    lang = (form.get("lang") or "fa").strip()
+    if kind in _KIND_LABEL:
+        await textstore.reset_menu_layout(kind)
+    raise web.HTTPFound(f"/buttons?kind={kind}&lang={lang}&ok=r")
 
 
 async def cookies_page(request: web.Request) -> web.Response:
@@ -1357,6 +1533,7 @@ def build_app() -> web.Application:
     app.router.add_post("/texts/reset", texts_reset)
     app.router.add_get("/buttons", buttons_page)
     app.router.add_post("/buttons/save", buttons_save)
+    app.router.add_post("/buttons/reset", buttons_reset)
     app.router.add_get("/healthz", healthz)
     if os.path.isdir(_STATIC_DIR):
         app.router.add_static("/static", _STATIC_DIR)

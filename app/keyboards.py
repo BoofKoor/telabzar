@@ -101,10 +101,54 @@ def collapsed_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+_WIDTH_CAP = {"full": 1, "half": 2, "third": 3}
+
+
+def _default_width(kind: str, op: str, first_op: str) -> str:
+    """پیش‌فرض: کلیدِ اولِ نوع‌های featured تمام‌عرض، بقیه یک‌سوم (بازتولیدِ چیدمانِ قبلی)."""
+    return "full" if (kind in FEATURED_TOP and op == first_op) else "third"
+
+
+def _rows_from_widths(widths: list[str]) -> list[int]:
+    """عرضِ هر کلید → اندازهٔ ردیف‌ها (تعداد در هر ردیف). کلیدهای هم‌عرضِ پشتِ‌هم تا سقفِ عرض کنارِ هم."""
+    sizes: list[int] = []
+    i, n = 0, len(widths)
+    while i < n:
+        cap = _WIDTH_CAP.get(widths[i], 3)
+        j = i
+        while j < n and j - i < cap and widths[j] == widths[i]:
+            j += 1
+        sizes.append(j - i)
+        i = j
+    return sizes
+
+
+def _resolved_menu(kind: str) -> list[tuple[str, str, str]]:
+    """(op, کلیدِ لیبل, عرض) به ترتیبِ نمایش، با اعمالِ چیدمانِ ادمین (ترتیب/مخفی/عرض)."""
+    ops = OPS_BY_KIND.get(kind, _DEFAULT_OPS)
+    key_by_op = {op: key for op, key in ops}
+    first_op = ops[0][0] if ops else ""
+    layout = textstore.get_menu_layout(kind)
+    if not layout:
+        return [(op, key, _default_width(kind, op, first_op)) for op, key in ops]
+    seq: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for e in layout:
+        op = e["op"]
+        seen.add(op)
+        if op in key_by_op and not e.get("hidden"):
+            seq.append((op, key_by_op[op], e.get("width") or "third"))
+    # opهایی که بعد از ذخیرهٔ چیدمان به کد اضافه شده‌اند → ته، با عرضِ پیش‌فرض
+    for op, key in ops:
+        if op not in seen:
+            seq.append((op, key, _default_width(kind, op, first_op)))
+    return seq
+
+
 def file_card_kb(ref: str, kind: str, lang: str, collapsible: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    ops = OPS_BY_KIND.get(kind, _DEFAULT_OPS)
-    for op, key in ops:
+    widths: list[str] = []
+    for op, key, w in _resolved_menu(kind):
         style, icon = textstore.get_button_style(op)  # رنگ/ایموجیِ ادمین‌ست‌شده (اگر بود)
         extra = {}
         if style:
@@ -112,17 +156,11 @@ def file_card_kb(ref: str, kind: str, lang: str, collapsible: bool = False) -> I
         if icon:
             extra["icon_custom_emoji_id"] = icon
         b.button(text=t(lang, key), callback_data=Act(op=op, ref=ref), **extra)
+        widths.append(w)
     # فایلِ لینک (collapsible): «بستن» منو را جمع می‌کند (نه حذفِ کارت)؛ وگرنه می‌بندد.
     b.button(text=t(lang, "btn_close"),
              callback_data=Act(op="collapse" if collapsible else "close", ref=ref))
-
-    featured = bool(ops) and kind in FEATURED_TOP  # کلیدِ اول تمام‌عرض
-    rest = len(ops) - 1 if featured else len(ops)
-    sizes: list[int] = [1] if featured else []
-    sizes += [3] * (rest // 3)
-    if rest % 3:
-        sizes.append(rest % 3)
-    sizes.append(1)  # «بستن» در ردیفِ خودش
+    sizes = _rows_from_widths(widths) + [1]  # «بستن» در ردیفِ خودش
     b.adjust(*sizes)
     return b.as_markup()
 

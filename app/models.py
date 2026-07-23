@@ -101,6 +101,23 @@ class ButtonStyle(Base):
     )
 
 
+class MenuButton(Base):
+    """چیدمانِ زمانِ‌اجرا برای منوی کارتِ هر نوع (kind): ترتیب + نمایش + عرضِ کلید.
+    نبودِ ردیف برای یک kind = از چیدمانِ پیش‌فرضِ کد (`OPS_BY_KIND`) استفاده کن.
+    width ∈ full/half/third (تلگرام کلیدها را به‌ترتیب تا پرشدنِ ردیف کنارِ هم می‌چیند)."""
+
+    __tablename__ = "menu_buttons"
+
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    op: Mapped[str] = mapped_column(String(24), primary_key=True)
+    position: Mapped[int] = mapped_column(default=0)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    width: Mapped[str] = mapped_column(String(8), default="third")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class DownloadCache(Base):
     """کشِ file_id برای دانلودِ آنی: کلید = هشِ (لینک + کیفیت) → فایلِ ارسال‌شده.
     دفعهٔ بعد که همان لینک+کیفیت خواسته شود، مستقیم با file_id فرستاده می‌شود
