@@ -118,6 +118,11 @@ class Settings(BaseSettings):
     node_postgres_dsn: str = "postgresql+asyncpg://telabzar:telabzar@10.51.0.1:5432/telabzar"
     node_api_base: str = "http://10.51.0.1:8081"
     node_pot_provider_url: str = "http://10.51.0.1:4416"
+    # نودِ gateway: پروکسیِ معکوس روی این upstreamِ WGِ مستر می‌فرستد (gatewayِ مستر)
+    node_gateway_url: str = "http://10.51.0.1:8080"
+    # پایهٔ عمومیِ لینک‌های /dl و /s. اگر ست باشد (دامنهٔ نودِ استریم)، لینک‌ها روی آن
+    # ساخته می‌شوند؛ وگرنه fallback به public_base. runtime-tunable از پنل.
+    stream_base: str = ""
 
     # پنلِ ادمینِ وب (فاز D) — سرویسِ جدا، احراز با کدِ تلگرام
     admin_port: int = 8080         # پورتِ داخلِ کانتینر (میزبان → 2083)

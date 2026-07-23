@@ -46,12 +46,14 @@ WG_MPUB=$(echo "$RESP" | jq -r '.wg.master_pubkey')
 WG_ENDP=$(echo "$RESP" | jq -r '.wg.endpoint')
 WG_ALLOW=$(echo "$RESP" | jq -r '.wg.allowed_ips')
 ROLE=$(echo "$RESP"    | jq -r '.role')
-QUEUE=$(echo "$RESP"   | jq -r '.worker.settings')
+QUEUE=$(echo "$RESP"   | jq -r '.worker.settings // empty')   # نقشِ ورکر: arq <settings>
+COMMAND=$(echo "$RESP" | jq -r '.worker.command // empty')   # نقشِ سرویس (gateway): این دستور
 IMAGE=$(echo "$RESP"   | jq -r '.worker.image')   # نامِ Dockerfile: docker/${IMAGE}.Dockerfile
 REDIS_URL=$(echo "$RESP" | jq -r '.services.redis_url')
 PG_DSN=$(echo "$RESP"    | jq -r '.services.postgres_dsn')
 API_BASE=$(echo "$RESP"  | jq -r '.services.api_base')
 POT_URL=$(echo "$RESP"   | jq -r '.services.pot_provider_url')
+GATEWAY_URL=$(echo "$RESP" | jq -r '.services.gateway_url // empty')
 BOT_TOKEN=$(echo "$RESP" | jq -r '.services.bot_token')
 
 say "برپاییِ تونلِ WireGuard ($WG_ADDR)…"
@@ -77,7 +79,13 @@ DOCKERFILE="docker/${IMAGE}.Dockerfile"
 [[ -f "$DOCKERFILE" ]] || die "Dockerfileِ نقش پیدا نشد: $DOCKERFILE"
 docker build -q -f "$DOCKERFILE" -t telabzar-node:$ROLE . >/dev/null
 
-say "اجرای ورکرِ نود…"
+say "اجرای نود ($ROLE)…"
+# نقشِ ورکر → `arq <settings>`؛ نقشِ سرویس (gateway) → همان command (مثلِ python -m app.gateway_node)
+if [[ -n "$COMMAND" ]]; then
+  RUN_ARGS=($COMMAND)
+else
+  RUN_ARGS=(arq "$QUEUE")
+fi
 docker rm -f telabzar-node 2>/dev/null || true
 docker run -d --name telabzar-node --restart unless-stopped --network host \
   -e BOT_TOKEN="$BOT_TOKEN" \
@@ -85,7 +93,8 @@ docker run -d --name telabzar-node --restart unless-stopped --network host \
   -e POSTGRES_DSN="$PG_DSN" \
   -e LOCAL_API_BASE="$API_BASE" \
   -e POT_PROVIDER_URL="$POT_URL" \
+  -e NODE_GATEWAY_URL="$GATEWAY_URL" \
   -e NODE_ROLE="$ROLE" -e NODE_ID="$NODE_ID" -e NODE_NAME="$HOSTNAME_SHORT" \
-  telabzar-node:$ROLE arq "$QUEUE"
+  telabzar-node:$ROLE "${RUN_ARGS[@]}"
 
 say "تمام شد ✅  نودِ «$ROLE» ($NODE_ID) وصل شد. در پنل → نودها آنلاین می‌شود."

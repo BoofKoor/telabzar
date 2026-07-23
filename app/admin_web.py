@@ -102,6 +102,9 @@ GROUPS = [
         ("dl_sponsorblock", "SponsorBlock", "حذفِ اسپانسر/اینترو"),
         ("dl_subs", "زیرنویسِ خودکار (en+fa)", ""),
     ]),
+    ("🔗 لینک و استریم", [
+        ("stream_base", "پایهٔ لینک (نودِ استریم)", "خالی = دامنهٔ مستر · مثل https://cdn.example.com"),
+    ]),
 ]
 
 ENUM_LABELS = {

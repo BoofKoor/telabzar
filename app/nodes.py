@@ -41,8 +41,11 @@ ROLES: dict[str, dict] = {
         "image": "worker",
         "desc": "run_op سنگین (compress/convert/transcribe/bg/ویدیو) روی ماشینِ قوی‌تر.",
     },
-    # آینده (N3):
-    # "gateway":  {... سرویسِ gateway/استریم ...},
+    "gateway": {  # فاز N3: سرویسِ عمومیِ لینک/استریم (نه ورکرِ ARQ — پروکسیِ معکوس)
+        "label": "لینک / استریم", "emoji": "🔗",
+        "command": "python -m app.gateway_node", "image": "gateway",
+        "desc": "سروِ عمومیِ /dl و /s روی IPِ تمیز؛ پروکسیِ معکوس به gatewayِ مستر روی WG.",
+    },
 }
 
 # opهای سنگینِ CPU که وقتی نودِ processing آنلاین است به آن سپرده می‌شوند. opهای سبک
@@ -227,6 +230,14 @@ def _strip_peer(text: str, pubkey: str) -> str:
 def node_config(role: str, node_ip: str) -> dict:
     """پاسخِ /node/join: کانفیگِ WG + URLهای داخلی + اطلاعاتِ نقش برای اسکریپتِ نود."""
     r = ROLES[role]
+    # نقشِ ورکر (ARQ) → queue+settings؛ نقشِ سرویس (gateway) → command. اسکریپتِ نصب
+    # بر اساسِ همین شاخه، یا `arq <settings>` یا `<command>` را اجرا می‌کند.
+    worker = {"image": r["image"]}
+    if "queue" in r:
+        worker["queue"] = r["queue"]
+        worker["settings"] = r["worker"]
+    if "command" in r:
+        worker["command"] = r["command"]
     return {
         "role": role,
         "wg": {
@@ -241,9 +252,10 @@ def node_config(role: str, node_ip: str) -> dict:
             "postgres_dsn": settings.node_postgres_dsn,
             "api_base": settings.node_api_base,
             "pot_provider_url": settings.node_pot_provider_url,
+            "gateway_url": settings.node_gateway_url,  # upstreamِ نودِ استریم (gatewayِ مستر)
             # نودِ ورکر خودش «ربات» است و برای Bot API به توکن نیاز دارد (کانالِ WG + توکنِ
             # یک‌بارمصرفِ join آن را می‌بندد). نودها admin-provisioned و مورداعتمادند.
             "bot_token": settings.bot_token,
         },
-        "worker": {"queue": r["queue"], "settings": r["worker"], "image": r["image"]},
+        "worker": worker,
     }

@@ -123,6 +123,13 @@ async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
     return None
 
 
+async def _link_base() -> str:
+    """پایهٔ عمومیِ لینک‌های /dl و /s: نودِ استریم (`stream_base`) اگر ست باشد، وگرنه
+    `public_base`. از settings_store خوانده می‌شود تا تغییرِ پنل بدونِ ری‌استارت اثر کند."""
+    return (await settings_store.get_str("stream_base", settings.stream_base)
+            or settings.public_base).rstrip("/")
+
+
 async def _op_queue(arq_pool: ArqRedis, op: str) -> str | None:
     """صفِ مقصدِ این op را انتخاب می‌کند (مسیریابیِ نودِ پردازش).
 
@@ -877,13 +884,13 @@ async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if not settings.public_base:
+    base = await _link_base()
+    if not base:
         await cq.answer(t(lang, "link_unconfigured"), show_alert=True)
         return
     if not file.dl_token:
         file.dl_token = secrets.token_urlsafe(18)[:24]
         await session.commit()
-    base = settings.public_base.rstrip("/")
     dl, stream = f"{base}/dl/{file.dl_token}", f"{base}/s/{file.dl_token}"
     try:
         await cq.message.edit_caption(
