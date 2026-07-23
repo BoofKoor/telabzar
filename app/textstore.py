@@ -19,16 +19,18 @@ from sqlalchemy import delete as sa_delete, select
 
 from . import settings_store
 from .db import Sessionmaker
-from .models import ButtonStyle, TextOverride
+from .models import ButtonStyle, MenuButton, TextOverride
 
 log = logging.getLogger("telabzar.textstore")
 
-_VER_KEY = "txtver"  # شمارندهٔ ابطالِ مشترکِ متن‌ها + استایلِ کلیدها
+_VER_KEY = "txtver"  # شمارندهٔ ابطالِ مشترکِ متن‌ها + استایل + چیدمانِ منو
 _overrides: dict[tuple[str, str], str] = {}
 _button_styles: dict[str, tuple[str | None, str | None]] = {}  # op → (style, icon_emoji_id)
+_menu_layout: dict[str, list[dict]] = {}  # kind → [{op, hidden, width}] به ترتیبِ position
 _loaded_ver: int | None = None  # None = هنوز لود نشده
 
 _BUTTON_STYLES = ("primary", "success", "danger")  # رنگ‌های مجازِ Bot API
+BUTTON_WIDTHS = ("full", "half", "third")           # عرضِ کلید در ردیف
 
 # تگ‌های مجازِ HTMLِ تلگرام (bot messages).
 _ALLOWED_TAGS = {
@@ -57,18 +59,33 @@ def button_snapshot() -> dict[str, tuple[str | None, str | None]]:
     return dict(_button_styles)
 
 
+def get_menu_layout(kind: str) -> list[dict] | None:
+    """چیدمانِ منوی یک kind؛ None یعنی از پیش‌فرضِ کد (OPS_BY_KIND) استفاده کن. (sync، داغ)"""
+    return _menu_layout.get(kind)
+
+
+def menu_snapshot() -> dict[str, list[dict]]:
+    return {k: list(v) for k, v in _menu_layout.items()}
+
+
 def _redis():
     store = settings_store.get_store()
     return store.r if store is not None else None
 
 
 async def _load_from_db() -> None:
-    global _overrides, _button_styles
+    global _overrides, _button_styles, _menu_layout
     async with Sessionmaker() as s:
         rows = (await s.execute(select(TextOverride))).scalars().all()
         brows = (await s.execute(select(ButtonStyle))).scalars().all()
+        mrows = (await s.execute(select(MenuButton))).scalars().all()
     _overrides = {(r.lang, r.key): r.value for r in rows}
     _button_styles = {b.op: (b.style, b.icon_emoji_id) for b in brows}
+    layout: dict[str, list[dict]] = {}
+    for m in sorted(mrows, key=lambda x: (x.kind, x.position)):
+        layout.setdefault(m.kind, []).append(
+            {"op": m.op, "hidden": bool(m.hidden), "width": m.width or "third"})
+    _menu_layout = layout
 
 
 async def _redis_ver() -> int:
@@ -155,6 +172,28 @@ async def set_button_styles(mapping: dict[str, tuple[str | None, str | None]]) -
                 s.add(ButtonStyle(op=op, style=style, icon_emoji_id=emoji))
             else:
                 row.style, row.icon_emoji_id = style, emoji
+        await s.commit()
+    await _bump_and_reload()
+
+
+def clean_width(w: str) -> str:
+    return w if w in BUTTON_WIDTHS else "third"
+
+
+async def set_menu_layout(kind: str, entries: list[dict]) -> None:
+    """کلِ چیدمانِ یک kind را جایگزین می‌کند. entries = [{op, hidden, width}] به ترتیب."""
+    async with Sessionmaker() as s:
+        await s.execute(sa_delete(MenuButton).where(MenuButton.kind == kind))
+        for pos, e in enumerate(entries):
+            s.add(MenuButton(kind=kind, op=e["op"], position=pos,
+                             hidden=bool(e.get("hidden")), width=clean_width(e.get("width", "third"))))
+        await s.commit()
+    await _bump_and_reload()
+
+
+async def reset_menu_layout(kind: str) -> None:
+    async with Sessionmaker() as s:
+        await s.execute(sa_delete(MenuButton).where(MenuButton.kind == kind))
         await s.commit()
     await _bump_and_reload()
 
