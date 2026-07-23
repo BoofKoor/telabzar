@@ -19,8 +19,10 @@ SECRET=$(env_get NODE_SECRET); [[ -n "$SECRET" ]] || SECRET=$(env_get BOT_TOKEN)
 PORT=$(env_get ADMIN_HTTPS_PORT); PORT="${PORT:-2083}"
 [[ -n "$SECRET" ]] || { echo "wg-sync: NODE_SECRET/BOT_TOKEN نیست"; exit 0; }
 
-# پنل روی هاست منتشر شده (TLS یا http)؛ اول https با -k، بعد http
-fetch(){ curl -fsS --max-time 8 "$1" 2>/dev/null; }
+# پنل روی هاست منتشر شده (TLS یا http)؛ اول https با -k، بعد http.
+# -k لازم است: گواهیِ پنل برای دامنهٔ عمومی است نه 127.0.0.1، پس بدونِ آن تأییدِ TLS
+# می‌شکند و wg-sync هیچ‌وقت peerها را نمی‌گیرد → نود آفلاین می‌ماند.
+fetch(){ curl -fsSk --max-time 8 "$1" 2>/dev/null; }
 PEERS=$(fetch "https://127.0.0.1:${PORT}/node/peers?key=${SECRET}" ) \
   || PEERS=$(fetch "http://127.0.0.1:${PORT}/node/peers?key=${SECRET}") \
   || { echo "wg-sync: پنل در دسترس نیست (127.0.0.1:${PORT})"; exit 0; }
