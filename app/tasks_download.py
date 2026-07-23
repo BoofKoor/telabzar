@@ -632,3 +632,6 @@ async def run_download(ctx: dict, payload: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass
         shutil.rmtree(workdir, ignore_errors=True)
+        if settings.node_role:  # مشاهده‌پذیری: کارِ انجام‌شدهٔ این نودِ دانلود را بشمار
+            from . import nodes
+            nodes.note_job_done()

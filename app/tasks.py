@@ -700,3 +700,6 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             job.finished_at = datetime.now(timezone.utc)
             await session.commit()
             shutil.rmtree(workdir, ignore_errors=True)
+            if settings.node_role:  # مشاهده‌پذیری: کارِ انجام‌شدهٔ این نود را بشمار
+                from . import nodes
+                nodes.note_job_done()
