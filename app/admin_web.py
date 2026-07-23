@@ -312,7 +312,8 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
 <span class=mono>cookies.txt</span> (Netscape) قبول است، هم خروجیِ <b>JSON</b>ِ افزونهٔ
 <span class=mono>Cookie-Editor</span> (دکمهٔ Export → متن را در یک فایلِ <span class=mono>.txt</span>
 بریز و همین‌جا آپلود کن). از اکانتِ یک‌بارمصرف استفاده کن، نه اصلی.
-{% if not dir_ok %}<br><b>توجه:</b> پوشهٔ کوکی‌ها (<span class=mono>{{cookies_dir or 'COOKIES_DIR'}}</span>) پیدا/نوشتنی نیست.{% endif %}</div>
+{% if not dir_ok %}<br><b>توجه:</b> پوشهٔ کوکی‌ها (<span class=mono>{{cookies_dir or 'COOKIES_DIR'}}</span>) پیدا/نوشتنی نیست.{% endif %}
+{% if dl_node_online %}<br>🖧 <b>نودِ دانلود آنلاین است</b> — دانلودها روی نود اجرا می‌شوند و کوکی‌ها خودکار به آن همگام‌اند ({{mirrored}} کوکی در Redis). اگر تازه آپلود کردی و نود هنوز خطا می‌دهد، چند ثانیه صبر کن یا یک‌بار دیگر آپلود کن.{% endif %}</div>
 <div class=card style=margin-bottom:18px><h3>➕ افزودنِ کوکی</h3>
   <form method=post action=/cookies/upload enctype=multipart/form-data>
   <div class=up>
@@ -1492,11 +1493,18 @@ async def cookies_page(request: web.Request) -> web.Response:
     items = await _list_cookies(request.app["redis"])
     msg = {"up": "کوکی اضافه شد.", "del": "کوکی حذف شد.",
            "cd": "وضعیتِ کوکی به‌روزرسانی شد."}.get(request.query.get("ok", ""), "")
+    dl_node = await node_mod.role_online(request.app["redis"], "download")
+    mirrored = 0
+    try:
+        mirrored = await request.app["redis"].scard(_CK_SET)
+    except Exception:  # noqa: BLE001
+        pass
     return _render("cookies", admin_id=_session_admin(request), active="cookies",
                    pill_ok=await _pill_ok(request.app), items=items,
                    platforms=COOKIE_PLATFORMS, dir_ok=_cookies_dir_ok(),
                    cookies_dir=settings.cookies_dir, saved=msg,
-                   error=request.query.get("err", ""))
+                   error=request.query.get("err", ""),
+                   dl_node_online=dl_node, mirrored=mirrored)
 
 
 def _looks_like_cookiejar(text: str) -> bool:
@@ -1555,6 +1563,53 @@ def _json_to_netscape(text: str) -> str | None:
     return "\n".join(lines) + "\n" if used else None
 
 
+# ── آینهٔ کوکی در Redis (تا نودِ دانلود که دیسکِ کوکیِ مستر را ندارد هم ببیندشان) ──
+# کلیدها باید با `tasks_download._CK_SET`/`_CK_CONTENT` هماهنگ بمانند.
+_CK_SET = "ckfiles"
+_CK_CONTENT = "ckfile:"
+
+
+async def _mirror_cookie(redis, name: str, content: str) -> None:
+    try:
+        await redis.sadd(_CK_SET, name)
+        await redis.set(_CK_CONTENT + name, content)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _unmirror_cookie(redis, name: str) -> None:
+    try:
+        await redis.srem(_CK_SET, name)
+        await redis.delete(_CK_CONTENT + name)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _mirror_all_cookies(redis) -> None:
+    """آینهٔ Redis را با فایل‌های روی دیسک هماهنگ می‌کند (self-heal روی استارتِ پنل —
+    اگر Redis flush شده باشد یا فایلی بیرون از پنل عوض شده باشد)."""
+    d = settings.cookies_dir
+    if redis is None or not d or not os.path.isdir(d):
+        return
+    try:
+        disk = {os.path.basename(f): f for f in glob.glob(os.path.join(d, "*.txt"))}
+        try:
+            mirrored = {(n if isinstance(n, str) else n.decode())
+                        for n in await redis.smembers(_CK_SET)}
+        except Exception:  # noqa: BLE001
+            mirrored = set()
+        for stale in mirrored - set(disk):
+            await _unmirror_cookie(redis, stale)
+        for name, path in disk.items():
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    await _mirror_cookie(redis, name, fh.read())
+            except OSError:
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def cookies_upload(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
@@ -1604,6 +1659,7 @@ async def cookies_upload(request: web.Request) -> web.Response:
         os.chmod(dest, 0o600)  # best-effort؛ روی برخی bind-mountها اجازه ندارد
     except OSError:
         pass
+    await _mirror_cookie(request.app["redis"], name, text)  # تا نودها هم ببینند
     log.info("cookie uploaded: %s (%d bytes)", name, len(content))
     raise web.HTTPFound("/cookies?ok=up")
 
@@ -1621,6 +1677,7 @@ async def cookies_delete(request: web.Request) -> web.Response:
                 await request.app["redis"].delete(f"ckcd:{name}")
             except Exception:  # noqa: BLE001
                 pass
+            await _unmirror_cookie(request.app["redis"], name)  # از آینهٔ نودها هم بردار
     raise web.HTTPFound("/cookies?ok=del")
 
 
@@ -1683,6 +1740,7 @@ async def _on_startup(app: web.Application) -> None:
         await textstore.load()
     except Exception as exc:  # noqa: BLE001
         log.warning("panel: textstore preload failed: %s", exc)
+    await _mirror_all_cookies(app["redis"])  # آینهٔ کوکی‌ها را با دیسک هماهنگ کن (نودها)
 
 
 async def _on_cleanup(app: web.Application) -> None:

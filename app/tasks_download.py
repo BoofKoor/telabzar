@@ -60,27 +60,47 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d")
 
 
-async def _pick_cookies(redis, platform: str) -> str | None:
-    """یک فایلِ کوکی از پوشه انتخاب می‌کند (چرخشِ اکانت؛ ردِ اکانت‌های cooldown‌شده)."""
+# کوکی‌ها به Redis آینه می‌شوند (کلیدها) تا نودِ دانلود — که دیسکِ کوکیِ مستر را ندارد —
+# هم بتواند آن‌ها را بخواند. پنل موقعِ آپلود/حذف این‌ها را می‌نویسد/پاک می‌کند.
+_CK_SET = "ckfiles"          # ست نام‌های فایلِ کوکی
+_CK_CONTENT = "ckfile:"      # ckfile:<name> → محتوای کوکی
+
+
+async def _cookie_names(redis, platform: str) -> tuple[list[str], bool]:
+    """نام‌های کوکیِ این پلتفرم + آیا منبع دیسکِ محلی است (True = مستر) یا آینهٔ Redis
+    (False = نود که دیسکِ کوکی ندارد). فقط کوکیِ همان پلتفرم (نه fallback به همه)."""
     d = settings.cookies_dir
-    if not d or not os.path.isdir(d):
-        return None
-    cands = sorted(glob.glob(os.path.join(d, "*.txt")))
-    # فقط کوکیِ همان پلتفرم — نه fallback به همهٔ کوکی‌ها (وگرنه مثلاً ساندکلاود
-    # کوکیِ اینستاگرام را برمی‌داشت و اشتباه/بی‌فایده به yt-dlp می‌داد).
-    pool = [f for f in cands if platform in os.path.basename(f).lower()]
+    if d and os.path.isdir(d):
+        names = [os.path.basename(f) for f in sorted(glob.glob(os.path.join(d, "*.txt")))]
+        local = True
+    else:
+        names, local = [], False
+        if redis is not None:
+            try:
+                raw = await redis.smembers(_CK_SET)
+                names = sorted((n if isinstance(n, str) else n.decode()) for n in raw)
+            except Exception:  # noqa: BLE001
+                names = []
+    return [n for n in names if platform in n.lower()], local
+
+
+async def _pick_cookies(redis, platform: str, workdir: str | None = None) -> str | None:
+    """یک کوکیِ این پلتفرم را به‌صورتِ **مسیرِ فایل** برمی‌گرداند. روی مستر از دیسکِ محلی؛
+    روی نود از آینهٔ Redis (محتوا را در `workdir` فایلِ موقت می‌کند). چرخشِ اکانت + cooldown
+    (Redisِ مشترک، کلیدِ `ckcd:<name>`/`ckrot:<platform>`) در هر دو حالت یکسان کار می‌کند."""
+    pool, local = await _cookie_names(redis, platform)
     if not pool:
         return None
     live = []
-    for f in pool:
+    for n in pool:
         on_cd = False
         if redis is not None:
             try:
-                on_cd = bool(await redis.exists(f"ckcd:{os.path.basename(f)}"))
+                on_cd = bool(await redis.exists(f"ckcd:{n}"))
             except Exception:  # noqa: BLE001
                 on_cd = False
         if not on_cd:
-            live.append(f)
+            live.append(n)
     live = live or pool
     idx = 0
     if redis is not None:
@@ -88,7 +108,27 @@ async def _pick_cookies(redis, platform: str) -> str | None:
             idx = (await redis.incr(f"ckrot:{platform}")) % len(live)
         except Exception:  # noqa: BLE001
             idx = 0
-    return live[idx]
+    name = live[idx]
+    if local:
+        return os.path.join(settings.cookies_dir, name)
+    # نود: محتوا را از آینهٔ Redis بگیر و در workdir بنویس (با workdir پاک می‌شود)
+    if redis is None or not workdir:
+        return None
+    try:
+        content = await redis.get(_CK_CONTENT + name)
+    except Exception:  # noqa: BLE001
+        content = None
+    if not content:
+        return None
+    try:
+        ckdir = os.path.join(workdir, "ck")
+        os.makedirs(ckdir, exist_ok=True)
+        path = os.path.join(ckdir, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(content if isinstance(content, str) else content.decode("utf-8", "replace"))
+        return path
+    except OSError:
+        return None
 
 
 async def _cooldown_cookie(redis, path: str | None, sec: int = 1800) -> None:
@@ -112,14 +152,14 @@ async def _metric(redis, platform: str, ok: bool) -> None:
         pass
 
 
-async def _opts(redis, platform: str) -> dict:
+async def _opts(redis, platform: str, workdir: str | None = None) -> dict:
     pot_on = await settings_store.get_bool("dl_pot_enabled", settings.dl_pot_enabled)
     # اسپاتیفای دانلودِ واقعی را از یوتیوب می‌گیرد → کوکیِ یوتیوب لازم است، نه اسپاتیفای
     cookie_platform = "youtube" if platform == "spotify" else platform
     return {
         "proxy": await settings_store.get_str("proxy_url", settings.proxy_url) or None,
         "pot_provider": (settings.pot_provider_url or None) if pot_on else None,
-        "cookies": await _pick_cookies(redis, cookie_platform),
+        "cookies": await _pick_cookies(redis, cookie_platform, workdir),
         "max_mb": await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb),
         "sponsorblock": await settings_store.get_str("dl_sponsorblock", settings.dl_sponsorblock) or None,
         "subs": await settings_store.get_bool("dl_subs", settings.dl_subs),
@@ -368,7 +408,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
     if phase == "probe":
         await _edit(bot, chat_id, status_mid, t(lang, "dl_probing"))
         try:
-            info = await D.probe(url, await _opts(redis, platform))
+            info = await D.probe(url, await _opts(redis, platform, workdir))
         except Exception as exc:  # noqa: BLE001
             await _metric(redis, platform, ok=False)
             msg = str(exc)
@@ -430,7 +470,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
             return
 
         os.makedirs(workdir, exist_ok=True)
-        opts = await _opts(redis, platform)
+        opts = await _opts(redis, platform, workdir)
         cookie = opts.get("cookies")  # مسیرِ اصلی؛ برای cooldown/متریک نگه‌داری می‌شود
         # نکته: کپیِ نوشتنیِ کوکی (چون /cookies فقط‌خواندنی است و yt-dlp کوکی‌جار را
         # برمی‌گرداند) حالا درونِ خودِ موتور انجام می‌شود — probe و download_ytdlp و
