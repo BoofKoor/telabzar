@@ -71,6 +71,19 @@ class WorkerSettings:
     keep_result = 3600
 
 
+class ProcessingWorkerSettings(WorkerSettings):
+    """ورکرِ پردازش روی صفِ اختصاصی `arq:queue:proc` (فاز N2 / نودِ پردازش).
+
+    همان `run_op` است، فقط روی صفِ جدا. نودِ processing این را اجرا می‌کند و opهای
+    سنگینِ CPU (که `ops._enqueue` وقتی نودی زنده باشد به این صف می‌فرستد) را برمی‌دارد.
+    ورودی را از HTTPِ Bot API می‌گیرد و خروجی را multipart آپلود می‌کند (چون روی نود
+    ربات با `is_local=False` ساخته می‌شود؛ رجوع به `tasks._localize`). روی مستر لازم
+    نیست اجرا شود — اگر نودی نباشد، جاب‌ها اصلاً به این صف نمی‌روند."""
+
+    queue_name = "arq:queue:proc"
+    max_jobs = 2  # نودِ پردازش معمولاً یک‌کاره است؛ سقفِ محافظه‌کار
+
+
 class DownloadWorkerSettings:
     """ورکرِ اختصاصیِ دانلود (صفِ جدا). دانلودهای طولانی، opهای سریعِ ربات را
     مسدود نمی‌کنند و تایم‌اوتِ جدای خودشان را دارند. این ورکر همان seedِ «نود»ِ

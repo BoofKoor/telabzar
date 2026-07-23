@@ -47,6 +47,7 @@ WG_ENDP=$(echo "$RESP" | jq -r '.wg.endpoint')
 WG_ALLOW=$(echo "$RESP" | jq -r '.wg.allowed_ips')
 ROLE=$(echo "$RESP"    | jq -r '.role')
 QUEUE=$(echo "$RESP"   | jq -r '.worker.settings')
+IMAGE=$(echo "$RESP"   | jq -r '.worker.image')   # نامِ Dockerfile: docker/${IMAGE}.Dockerfile
 REDIS_URL=$(echo "$RESP" | jq -r '.services.redis_url')
 PG_DSN=$(echo "$RESP"    | jq -r '.services.postgres_dsn')
 API_BASE=$(echo "$RESP"  | jq -r '.services.api_base')
@@ -68,11 +69,13 @@ EOF
 systemctl enable --now "wg-quick@${WG_IFACE}" 2>/dev/null || wg-quick up "$WG_IFACE" || true
 wg-quick down "$WG_IFACE" 2>/dev/null || true; wg-quick up "$WG_IFACE"
 
-say "دریافتِ کد و ساختِ ایمیجِ نقش ($ROLE)…"
+say "دریافتِ کد و ساختِ ایمیجِ نقش ($ROLE / $IMAGE)…"
 [[ -d "$WORKDIR/repo/.git" ]] && (cd "$WORKDIR/repo" && git pull -q) \
   || git clone --depth 1 "$REPO" "$WORKDIR/repo"
 cd "$WORKDIR/repo"
-docker build -q -f docker/download-worker.Dockerfile -t telabzar-node:$ROLE . >/dev/null
+DOCKERFILE="docker/${IMAGE}.Dockerfile"
+[[ -f "$DOCKERFILE" ]] || die "Dockerfileِ نقش پیدا نشد: $DOCKERFILE"
+docker build -q -f "$DOCKERFILE" -t telabzar-node:$ROLE . >/dev/null
 
 say "اجرای ورکرِ نود…"
 docker rm -f telabzar-node 2>/dev/null || true

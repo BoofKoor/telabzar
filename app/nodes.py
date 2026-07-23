@@ -27,7 +27,7 @@ from .config import settings
 
 log = logging.getLogger("telabzar.nodes")
 
-# نقش‌ها: هر نقش = کدام صف/ورکر/ایمیج را می‌گیرد. (فاز N1: فقط دانلود؛ بقیه بعداً.)
+# نقش‌ها: هر نقش = کدام صف/ورکر/ایمیج را می‌گیرد.
 ROLES: dict[str, dict] = {
     "download": {
         "label": "دانلود / IP-تمیز", "emoji": "⬇️",
@@ -35,11 +35,23 @@ ROLES: dict[str, dict] = {
         "image": "download-worker",
         "desc": "yt-dlp/gallery-dl/spotify روی IPِ تمیز (یوتیوب/اینستا).",
     },
-    # آینده (N2/N3):
-    # "processing": {... arq:queue / run_op ...},
-    # "compress":   {... arq:queue:compress ...},
-    # "gateway":    {... سرویسِ gateway ...},
+    "processing": {  # فاز N2: opهای سنگینِ CPU (کاهش‌حجم/تبدیل/رونویسی/…) از راه دور
+        "label": "پردازش / کاهش‌حجم", "emoji": "⚙️",
+        "queue": "arq:queue:proc", "worker": "app.worker.ProcessingWorkerSettings",
+        "image": "worker",
+        "desc": "run_op سنگین (compress/convert/transcribe/bg/ویدیو) روی ماشینِ قوی‌تر.",
+    },
+    # آینده (N3):
+    # "gateway":  {... سرویسِ gateway/استریم ...},
 }
+
+# opهای سنگینِ CPU که وقتی نودِ processing آنلاین است به آن سپرده می‌شوند. opهای سبک
+# (rename/metadata/چرخش/…) و scan (که به سرویسِ ClamAVِ مستر وصل است) روی مستر می‌مانند.
+OFFLOAD_OPS: frozenset[str] = frozenset({
+    "compress", "convert", "transcribe", "bg_remove", "to_gif", "extract_audio",
+    "watermark", "trim", "normalize", "speed", "video_concat", "screenshot",
+    "thumb", "mute", "images_to_pdf", "to_pdf",
+})
 
 _NODE_PREFIX = "node:"          # کلیدِ heartbeat: node:{id} → JSON با TTL
 _JOIN_PREFIX = "njoin:"         # توکنِ یک‌بارمصرف: njoin:{jti} → role (TTL)
@@ -147,6 +159,12 @@ async def list_live(redis) -> dict[str, dict]:
     except Exception as exc:  # noqa: BLE001
         log.debug("list_live failed: %s", exc)
     return out
+
+
+async def role_online(redis, role: str) -> bool:
+    """آیا حداقل یک نودِ این نقش الان heartbeat‌ِ زنده دارد؟ (مبنایِ مسیریابیِ enqueue)."""
+    live = await list_live(redis)
+    return any(v.get("role") == role for v in live.values())
 
 
 # ── مدیریتِ peerهای WireGuard (فایلِ کانفیگ + syncconf) ──────────

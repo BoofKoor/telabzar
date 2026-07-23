@@ -76,6 +76,38 @@ def _fail_note(lang: str, exc: Exception) -> str:
     return note
 
 
+async def _localize(bot: Bot, file_id: str, workdir: str, subdir: str = "in") -> str | None:
+    """مسیرِ محلیِ فایل را برمی‌گرداند تا پردازش رویش کار کند.
+
+    مستر (هم‌مکان با Bot API، `is_local=True`): `get_file().file_path` خودش مسیرِ
+    روی دیسکِ مشترک است → همان برگردانده می‌شود (بدونِ کپی/دانلود).
+    نودِ راه‌دور (`is_local=False`): فایل روی دیسکِ محلی نیست؛ روی HTTP از Bot API
+    (روی WireGuard) در `workdir` دانلود و مسیرِ محلی برگردانده می‌شود. None اگر نشد.
+    این تنها نقطه‌ای است که ورودیِ راه‌دور را ممکن می‌کند؛ خروجی از قبل با آپلودِ
+    multipart (FSInputFile) کار می‌کند."""
+    try:
+        tg = await bot.get_file(file_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("get_file failed for %s: %s", file_id, exc)
+        return None
+    p = tg.file_path
+    if not p:
+        return None
+    if os.path.exists(p):  # مستر: مسیرِ دیسکِ مشترک، مستقیم
+        return p
+    # نود: دانلودِ راه‌دور در زیرشاخهٔ workdir (نامِ یکتا با پیشوندِ file_id تا اعضای
+    # هم‌نام قاطی نشوند)
+    dst_dir = os.path.join(workdir, subdir)
+    os.makedirs(dst_dir, exist_ok=True)
+    dest = os.path.join(dst_dir, f"{file_id[:16]}_{os.path.basename(p)}")
+    try:
+        await bot.download_file(p, destination=dest, timeout=600)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("remote localize download failed for %s: %s", file_id, exc)
+        return None
+    return dest if os.path.exists(dest) else None
+
+
 async def _convert_pdf(fmt: str, stem: str, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
     """تبدیلِ PDF به docx (LibreOffice) / txt (pdftotext) / تصویرِ صفحات (pdftoppm)."""
     # کپی با نامِ .pdf تا ابزارها فرمت را درست بشناسند
@@ -171,10 +203,9 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             fid = m.get("file_id")
             if not fid:
                 continue
-            tg = await bot.get_file(fid)
-            p = tg.file_path
-            if not p or not os.path.exists(p):
-                raise RuntimeError(f"member not found on disk: {m.get('name') or fid}")
+            p = await _localize(bot, fid, workdir)
+            if not p:
+                raise RuntimeError(f"member not found: {m.get('name') or fid}")
             paths.append(p)
         if len(paths) < 2:
             raise RuntimeError("need at least two PDFs to merge")
@@ -189,10 +220,9 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             fid = m.get("file_id")
             if not fid:
                 continue
-            tg = await bot.get_file(fid)
-            p = tg.file_path
-            if not p or not os.path.exists(p):
-                raise RuntimeError(f"member not found on disk: {m.get('name') or fid}")
+            p = await _localize(bot, fid, workdir)
+            if not p:
+                raise RuntimeError(f"member not found: {m.get('name') or fid}")
             paths.append(p)
         if len(paths) < 2:
             raise RuntimeError("need at least two videos to join")
@@ -214,10 +244,9 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             fid = m.get("file_id")
             if not fid:
                 continue
-            tg = await bot.get_file(fid)
-            p = tg.file_path
-            if not p or not os.path.exists(p):
-                raise RuntimeError(f"member not found on disk: {m.get('name') or fid}")
+            p = await _localize(bot, fid, workdir)
+            if not p:
+                raise RuntimeError(f"member not found: {m.get('name') or fid}")
             downloaded.append((p, m.get("name") or os.path.basename(p)))
         if not downloaded:
             raise RuntimeError("no files to zip")
@@ -237,9 +266,8 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         cover_path = None
         cover_id = args.get("cover_id")
         if cover_id:
-            tgc = await bot.get_file(cover_id)
-            cp = tgc.file_path
-            if cp and os.path.exists(cp):
+            cp = await _localize(bot, cover_id, workdir)
+            if cp:
                 cover_path = cp
         if not tags and not cover_path:
             raise RuntimeError("no metadata to write")
@@ -296,10 +324,9 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             await P.render_text_watermark(args["text"], wm, file.height or 720)
             await P.watermark_image(inpath, out, wm, pos, is_logo=False)
         elif args.get("logo"):
-            tg = await bot.get_file(args["logo"])
-            lp = tg.file_path
-            if not lp or not os.path.exists(lp):
-                raise RuntimeError("logo not found on disk")
+            lp = await _localize(bot, args["logo"], workdir)
+            if not lp:
+                raise RuntimeError("logo not found")
             await P.watermark_image(inpath, out, lp, pos, is_logo=True)
         else:
             raise RuntimeError("no watermark content")
@@ -313,10 +340,9 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             await P.render_text_watermark(args["text"], wm, file.height or 480)
             await P.watermark_video(inpath, out, wm, pos, progress=progress, duration=dur, cancel=cancel)
         elif args.get("logo"):
-            tg = await bot.get_file(args["logo"])
-            lp = tg.file_path
-            if not lp or not os.path.exists(lp):
-                raise RuntimeError("logo not found on disk")
+            lp = await _localize(bot, args["logo"], workdir)
+            if not lp:
+                raise RuntimeError("logo not found")
             scale_w = max(64, (file.width or 640) // 7)  # کوچک‌تر/استاندارد
             await P.watermark_video(inpath, out, lp, pos, scale_w=scale_w, opacity=0.65,
                                     progress=progress, duration=dur, cancel=cancel)
@@ -420,10 +446,9 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             fid = m.get("file_id")
             if not fid:
                 continue
-            tg = await bot.get_file(fid)
-            p = tg.file_path
-            if not p or not os.path.exists(p):
-                raise RuntimeError(f"member not found on disk: {m.get('name') or fid}")
+            p = await _localize(bot, fid, workdir)
+            if not p:
+                raise RuntimeError(f"member not found: {m.get('name') or fid}")
             paths.append(p)
         if not paths:
             raise RuntimeError("no images for PDF")
@@ -457,12 +482,11 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
 
         try:
             os.makedirs(workdir, exist_ok=True)
-            tg_file = await bot.get_file(file.file_id)
-            inpath = tg_file.file_path
-            if not inpath or not os.path.exists(inpath):
-                # مسیر را در خطا بیاور تا ریشه فوراً معلوم شود:
-                # نسبی → سرور local نیست؛ مطلق → مشکلِ mount یا پرمیشن/capability
-                raise RuntimeError(f"input file not found on disk: {inpath or '(empty)'}"[:200])
+            # مستر: مسیرِ دیسکِ مشترک · نود: دانلودِ راه‌دور روی HTTP (رجوع به _localize)
+            inpath = await _localize(bot, file.file_id, workdir)
+            if not inpath:
+                # نسبی/دانلودِ ناموفق → یا سرور local نیست، یا mount/پرمیشن/دسترسیِ نود
+                raise RuntimeError("input file not available (disk miss / remote download failed)")
 
             # وضعیتِ زنده: یک «تیک‌زن» پس‌زمینه هر ~۴ ثانیه کارت را به‌روز می‌کند —
             # همیشه اسپینرِ چرخان + زمانِ سپری‌شده (و درصد اگر معلوم باشد). اینطوری هیچ
