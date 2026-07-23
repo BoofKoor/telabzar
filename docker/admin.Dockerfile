@@ -11,5 +11,7 @@ COPY requirements.txt requirements-admin.txt ./
 RUN pip install --no-cache-dir -r requirements-admin.txt
 
 COPY app ./app
+# اسکریپتِ نصبِ نود را پنل سرو می‌کند (GET /node/install.sh) — پس باید در ایمیج باشد
+COPY node ./node
 
 CMD ["python", "-m", "app.admin_web"]
