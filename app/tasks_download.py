@@ -292,8 +292,33 @@ async def _media_meta(path: str, kind: str, info: dict,
     return path, info, thumb_path
 
 
+def _post_text(info: dict, gallery_caption: str | None) -> str | None:
+    """متنِ اصلیِ پستِ مبدأ برای حالتِ **جمع‌شدهٔ** کارت — خام و بدونِ HTML.
+
+    اینستاگرام/توییتر: کپشنِ پست از سایدکارِ gallery-dl (تا امروز فقط آلبوم از آن
+    استفاده می‌کرد و برای تک‌فایل دور ریخته می‌شد).
+    یوتیوب: عنوان + کانال + توضیحات.
+    `clean_caption` هشتگ‌ها را حذف، خطوطِ اضافه را جمع و روی سقفِ ۱۰۲۴ کاراکترِ
+    تلگرام برش می‌زند. escape سرِ رندر انجام می‌شود (`cards.post_view`).
+    """
+    if gallery_caption:
+        return D.clean_caption(gallery_caption)
+    lines: list[str] = []
+    title = (info.get("title") or "").strip()
+    if title:
+        lines.append(title)
+    who = (info.get("uploader") or info.get("channel") or "").strip()
+    if who and who != title:
+        lines.append(who)
+    desc = (info.get("description") or "").strip()
+    if desc and desc != title:
+        lines += ["", desc]
+    return D.clean_caption("\n".join(lines)) if lines else None
+
+
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
-                 kind: str, info: dict, lang: str, thumb_path: str | None = None) -> None:
+                 kind: str, info: dict, lang: str, thumb_path: str | None = None,
+                 post_caption: str | None = None) -> None:
     """فایلِ دانلودی را وارد pipeline می‌کند (الگوی spawn) با source='dl'."""
     path, info, thumb_path = await _media_meta(path, kind, info, thumb_path)
     name = os.path.basename(path)   # remux ممکن است پسوند را به mp4 عوض کرده باشد
@@ -309,7 +334,7 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
             size=os.path.getsize(path) if os.path.exists(path) else None,
             width=info.get("width"), height=info.get("height"),
             duration=int(info["duration"]) if info.get("duration") else None,
-            changelog=[], source="dl",
+            changelog=[], source="dl", post_caption=post_caption,
         )
         s.add(f)
         await s.commit()
@@ -327,7 +352,7 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
 
 async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int, p: str,
                           name: str, kind: str, info: dict, lang: str, thumb_path: str | None,
-                          url: str, selector: str) -> None:
+                          url: str, selector: str, post_caption: str | None = None) -> None:
     """تک‌فایل را **درجا** روی پیامِ لنگرگاه تحویل می‌دهد (عکسِ منو → ویدیو) و
     file_id را برای دفعهٔ بعد کش می‌کند. اگر لنگرگاه متنی بود، update_card خودش
     کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند."""
@@ -345,7 +370,7 @@ async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int
             size=os.path.getsize(p) if os.path.exists(p) else None,
             width=info.get("width"), height=info.get("height"),
             duration=int(info["duration"]) if info.get("duration") else None,
-            changelog=[], source="dl",
+            changelog=[], source="dl", post_caption=post_caption,
         )
         s.add(f)
         await s.commit()
@@ -704,13 +729,15 @@ async def run_download(ctx: dict, payload: dict) -> None:
             # تک‌فایل → تحویلِ درجا روی همان پیامِ لنگرگاه + کش
             p, info, thumb = paths[0]
             await _deliver_single(bot, chat_id, status_mid, owner_id, p, os.path.basename(p),
-                                  _kind_from_info(info, p), info, lang, thumb, url, selector)
+                                  _kind_from_info(info, p), info, lang, thumb, url, selector,
+                                  post_caption=_post_text(info, gallery_caption))
         else:
             # تک‌عکسیِ گالری یا حالتِ نادرِ دیگر → کارتِ جدا برای هرکدام + حذفِ لنگرگاه
             for p, info, thumb in paths:
                 # ابعاد/مدت/کاور را خودِ _spawn از فایل کامل می‌کند (_media_meta)
                 await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
-                             _kind_from_info(info, p), info, lang, thumb_path=thumb)
+                             _kind_from_info(info, p), info, lang, thumb_path=thumb,
+                             post_caption=_post_text(info, gallery_caption))
             try:
                 await bot.delete_message(chat_id, status_mid)  # کارت‌ها جایگزینش شدند
             except Exception:  # noqa: BLE001

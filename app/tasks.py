@@ -649,7 +649,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     else:
                         await bot.send_document(chat_id, src)
                     file.changelog = list(file.changelog or []) + [res["label"]]
-                    await move_card_below(bot, chat_id, card_mid, file, lang)
+                    await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
                     job.status = "done"
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ بدونِ بن‌بست
                     log.exception("job %s artifact delivery failed", job_id)
@@ -664,7 +664,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     except Exception:  # noqa: BLE001
                         log.warning("sending extracted file failed: %s", p)
                 file.changelog = list(file.changelog or []) + [res["label"]]
-                await move_card_below(bot, chat_id, card_mid, file, lang)
+                await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
                 job.status = "done"
             elif res.get("message") is not None:
                 # نتیجهٔ متنی (لیستِ آرشیو) → پیام بالا، کارتِ تازه پایین
@@ -673,7 +673,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 except Exception:  # noqa: BLE001
                     log.warning("sending listing failed")
                 file.changelog = list(file.changelog or []) + [res["label"]]
-                await move_card_below(bot, chat_id, card_mid, file, lang)
+                await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
                 job.status = "done"
             elif res.get("note_only"):
                 # عملیاتِ بررسی (اسکن) → فقط لاگ + کپشن؛ رسانه دست‌نخورده، درجا
@@ -712,7 +712,8 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     if await P.video_poster(outpath, poster):
                         thumb = FSInputFile(poster)
                 try:
-                    sent = await update_card(bot, chat_id, card_mid, file, lang, path=outpath, thumb=thumb)
+                    sent = await update_card(bot, chat_id, card_mid, file, lang, path=outpath,
+                                         thumb=thumb, collapsed=False)
                     fid, fuid = message_media_id(sent)
                     if fid:
                         file.file_id = fid

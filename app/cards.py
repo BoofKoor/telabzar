@@ -24,11 +24,15 @@ from .i18n import t
 from .keyboards import collapsed_kb, file_card_kb
 
 
-def _initial_kb(file: File, lang: str):
-    """کیبوردِ اولیهٔ کارت: فایلِ ارسالیِ لینک (source='dl') جمع‌شده می‌آید (فقط دکمهٔ
-    «نمایش آپشن‌ها»)؛ بقیه منوی کامل. دکمهٔ «بستن» همه‌جا منو را جمع می‌کند (نه حذفِ
-    کارت) — collapsible=True."""
-    if file.source == "dl":
+def _default_collapsed(file: File) -> bool:
+    """فایلِ ارسالیِ لینک جمع‌شده می‌آید (کپشنِ پست + «نمایش آپشن‌ها»)؛ بقیه باز."""
+    return file.source == "dl"
+
+
+def _initial_kb(file: File, lang: str, collapsed: bool):
+    """کیبوردِ کارت بر اساسِ حالت: جمع‌شده = فقط «نمایش آپشن‌ها» · باز = منوی کامل.
+    دکمهٔ «بستن» همه‌جا منو را جمع می‌کند (نه حذفِ کارت) — collapsible=True."""
+    if collapsed:
         return collapsed_kb(file.ref, lang)
     return file_card_kb(file.ref, file.kind, lang, collapsible=True)
 from .models import File
@@ -128,11 +132,12 @@ def progress_note(label: str, percent: float | None = None, eta: float | None = 
 
 
 def card_caption(file: File, lang: str, note: str | None = None) -> str:
-    """کپشنِ کارت = یک بلاک‌کوتِ **بستهٔ** (expandable) شاملِ نام + اطلاعات + لاگِ تغییرات.
+    """کپشنِ **حالتِ باز** (فنی) — بدونِ بلاک‌کوتِ دورِ کل:
 
-    تلگرام بلاک‌کوتِ تودرتو را نمی‌پذیرد، پس لاگِ تغییرات به‌جای بلاک‌کوتِ جداگانه، خطِ
-    ساده داخلِ همان بلاک است. `note` (نوارِ پیشرفت/ویرایشگرِ متادیتا) عمداً **بیرونِ**
-    بلاک می‌ماند تا وقتی کوت بسته است هم دیده شود.
+        🎬 <b>name.mp4</b>
+        📦 4.3 MB  ·  🎞 1080p FHD  ·  ⏱ 0:47  ·  MP4
+
+    لاگِ تغییرات (اگر باشد) در بلاک‌کوتِ کوچکِ خودش زیرِ همین دو خط می‌آید.
     """
     icon = _ICON.get(file.kind, "📄")
     lines = [
@@ -141,9 +146,30 @@ def card_caption(file: File, lang: str, note: str | None = None) -> str:
     ]
     changelog = file.changelog or []
     if changelog:
-        lines += [escape(x) for x in changelog[-8:]]
-    caption = f"<blockquote expandable>{chr(10).join(lines)}</blockquote>"
-    return f"{caption}\n{note}" if note else caption
+        body = "\n".join(escape(x) for x in changelog[-8:])
+        lines.append(f"<blockquote expandable>{body}</blockquote>")
+    if note:
+        lines.append(note)
+    return "\n".join(lines)
+
+
+def post_view(file: File, lang: str, note: str | None = None) -> str:
+    """کپشنِ **حالتِ جمع‌شده** — متنِ اصلیِ پستِ مبدأ در یک بلاک‌کوتِ بسته.
+
+    `post_caption` خامِ بدونِ HTML ذخیره می‌شود، پس این‌جا escape می‌شود (کپشنِ پست
+    می‌تواند `<` یا `&` داشته باشد و کلِ پیام را برای تلگرام خراب کند).
+    پستی که کپشن ندارد (کوبالت، ویدیوی بی‌توضیح) → همان کپشنِ فنی، تا کارت خالی نماند.
+    """
+    text = (file.post_caption or "").strip()
+    if not text:
+        return card_caption(file, lang, note=note)
+    body = f"<blockquote expandable>{escape(text)}</blockquote>"
+    return f"{body}\n{note}" if note else body
+
+
+def view_caption(file: File, lang: str, *, collapsed: bool, note: str | None = None) -> str:
+    """کپشن از حالتِ کیبورد پیروی می‌کند: جمع‌شده = کپشنِ پست · باز = کپشنِ فنی."""
+    return post_view(file, lang, note) if collapsed else card_caption(file, lang, note)
 
 
 def message_media_id(msg: Message) -> tuple[str | None, str | None]:
@@ -191,11 +217,14 @@ async def _send_typed(bot: Bot, chat_id: int, file: File, media, caption, kb, th
 
 
 async def send_card(bot: Bot, chat_id: int, file: File, lang: str, *,
-                    path: str | None = None, thumb=None) -> Message:
+                    path: str | None = None, thumb=None,
+                    collapsed: bool | None = None) -> Message:
     """ارسالِ کارتِ فایل (فایل + کپشن + کیبورد). با fallback به سند.
-    thumb: تامبنیلِ اختیاری (InputFile/file_id) — برای ویدیوهای دانلودی."""
-    caption = card_caption(file, lang)
-    kb = _initial_kb(file, lang)
+    thumb: تامبنیلِ اختیاری (InputFile/file_id) — برای ویدیوهای دانلودی.
+    collapsed: None = پیش‌فرضِ نوعِ فایل (لینک → جمع‌شده)."""
+    coll = _default_collapsed(file) if collapsed is None else collapsed
+    caption = view_caption(file, lang, collapsed=coll)
+    kb = _initial_kb(file, lang, coll)
     try:
         return await _send_typed(bot, chat_id, file, _media_arg(file, path), caption, kb, thumb=thumb)
     except TelegramBadRequest as exc:
@@ -211,12 +240,14 @@ async def send_card(bot: Bot, chat_id: int, file: File, lang: str, *,
 
 
 async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, *,
-                      path: str | None = None, thumb=None) -> Message:
+                      path: str | None = None, thumb=None,
+                      collapsed: bool | None = None) -> Message:
     """به‌روزرسانیِ درجای کارت با فایلِ جدید (editMessageMedia). در صورت ناتوانی
     (مثلاً پیامِ لنگرگاه متنی بود)، کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند.
     این تابع برای «ارسالِ درجای» دانلود هم استفاده می‌شود (عکسِ منو → ویدیو)."""
-    caption = card_caption(file, lang)
-    kb = _initial_kb(file, lang)
+    coll = _default_collapsed(file) if collapsed is None else collapsed
+    caption = view_caption(file, lang, collapsed=coll)
+    kb = _initial_kb(file, lang, coll)
     im_cls = _INPUT_MEDIA.get(file.kind, InputMediaDocument)
     extra: dict = {}
     if file.kind == "video":
@@ -230,7 +261,7 @@ async def update_card(bot: Bot, chat_id: int, message_id: int, file: File, lang:
         )
     except TelegramBadRequest:
         # تغییرِ نوعِ رسانه یا محدودیت → کارتِ تازه + حذفِ قدیمی
-        msg = await send_card(bot, chat_id, file, lang, path=path, thumb=thumb)
+        msg = await send_card(bot, chat_id, file, lang, path=path, thumb=thumb, collapsed=coll)
         try:
             await bot.delete_message(chat_id, message_id)
         except TelegramBadRequest:
@@ -271,13 +302,14 @@ def meta_editor_view(file: File, lang: str, pending: dict):
     return card_caption(file, lang, note=_meta_editor_note(lang, file, pending)), meta_edit_kb(file.ref, lang)
 
 
-async def move_card_below(bot: Bot, chat_id: int, old_message_id: int, file: File, lang: str) -> Message:
+async def move_card_below(bot: Bot, chat_id: int, old_message_id: int, file: File, lang: str, *,
+                          collapsed: bool | None = None) -> Message:
     """کارتِ تازه پایینِ چت می‌فرستد و کارتِ قدیمی را پاک می‌کند.
 
     برای عملیاتی که خروجیِ جدا می‌فرستند (استخراج/لیست/GIF/تامبنیل) تا منو
     زیرِ خروجی بیاید و چت تمیز بماند.
     """
-    new_msg = await send_card(bot, chat_id, file, lang)
+    new_msg = await send_card(bot, chat_id, file, lang, collapsed=collapsed)
     try:
         await bot.delete_message(chat_id, old_message_id)
     except TelegramBadRequest:
@@ -285,9 +317,11 @@ async def move_card_below(bot: Bot, chat_id: int, old_message_id: int, file: Fil
     return new_msg
 
 
-async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, note: str | None = None, *, keyboard) -> None:
+async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lang: str, note: str | None = None, *, keyboard, collapsed: bool = False) -> None:
     """فقط کپشن/کیبوردِ کارت را عوض کن. keyboard: True=منوی اصلی · False/None=بدون کیبورد
-    · یا یک InlineKeyboardMarkup دلخواه (مثلِ دکمهٔ لغوِ حین پردازش)."""
+    · یا یک InlineKeyboardMarkup دلخواه (مثلِ دکمهٔ لغوِ حین پردازش).
+    collapsed=True یعنی حالتِ جمع‌شده (کپشنِ پست) — فقط دکمهٔ «بازگشت» آن را می‌دهد؛
+    پیشرفت/خطا/محدودیت همیشه کپشنِ فنی می‌مانند چون وسطِ کار روی خودِ فایل‌اند."""
     if keyboard is True:
         # منوی کامل؛ برای فایلِ لینک، «بستن» به‌جای حذف، منو را جمع می‌کند
         kb = file_card_kb(file.ref, file.kind, lang, collapsible=True)
@@ -298,7 +332,7 @@ async def set_card_note(bot: Bot, chat_id: int, message_id: int, file: File, lan
     try:
         await bot.edit_message_caption(
             chat_id=chat_id, message_id=message_id,
-            caption=card_caption(file, lang, note=note), reply_markup=kb,
+            caption=view_caption(file, lang, collapsed=collapsed, note=note), reply_markup=kb,
         )
     except TelegramBadRequest:
         pass
