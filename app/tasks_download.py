@@ -261,9 +261,42 @@ async def _deliver_rich_post(bot: Bot, chat_id: int, owner_id: int, files: list[
     await bot.send_rich_message(chat_id, rich_message=InputRichMessage(blocks=blocks))
 
 
+async def _media_meta(path: str, kind: str, info: dict,
+                      thumb_path: str | None) -> tuple[str, dict, str | None]:
+    """درِ ورودیِ **همهٔ** فایل‌های دانلودی به pipeline → (مسیرِ نهایی, info کامل, تامبنیل).
+
+    سه تضمین، مستقل از موتور (yt-dlp / gallery-dl / cobalt / spotify):
+      ۱) ویدیو همیشه در کانتینرِ **mp4** تحویل می‌شود (تلگرام فقط mp4 را تضمین می‌کند).
+      ۲) ابعاد/مدت از خودِ فایل خوانده می‌شود — gallery-dl (اینستاگرام/توییتر) هیچ info
+         برنمی‌گرداند و yt-dlp هم گاهی ناقص است؛ بدونِ این، زمانِ ۰:۰۰ نمایش داده می‌شود.
+      ۳) اگر تامبنیل نداریم، پوسترِ ≤۳۲۰px از خودِ ویدیو ساخته می‌شود (کاور).
+    """
+    if kind == "video":
+        path = await D._ensure_mp4(path)
+    if kind in ("video", "audio") and not (
+            info.get("duration") and (kind == "audio" or (info.get("width") and info.get("height")))):
+        probed = await P.probe_media(path)
+        if probed:
+            info = {**info, **{k: v for k, v in probed.items() if not info.get(k)}}
+    if kind == "image" and not info.get("width"):
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                info = {**info, "width": im.width, "height": im.height}
+        except Exception:  # noqa: BLE001
+            pass
+    if kind == "video" and not thumb_path:
+        poster = os.path.join(os.path.dirname(path) or ".", f"poster-{secrets.token_hex(4)}.jpg")
+        if await P.video_poster(path, poster):
+            thumb_path = poster
+    return path, info, thumb_path
+
+
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
                  kind: str, info: dict, lang: str, thumb_path: str | None = None) -> None:
     """فایلِ دانلودی را وارد pipeline می‌کند (الگوی spawn) با source='dl'."""
+    path, info, thumb_path = await _media_meta(path, kind, info, thumb_path)
+    name = os.path.basename(path)   # remux ممکن است پسوند را به mp4 عوض کرده باشد
     thumb = None
     if kind == "video" and thumb_path:
         prepped = _prep_thumb(thumb_path)
@@ -298,6 +331,8 @@ async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int
     """تک‌فایل را **درجا** روی پیامِ لنگرگاه تحویل می‌دهد (عکسِ منو → ویدیو) و
     file_id را برای دفعهٔ بعد کش می‌کند. اگر لنگرگاه متنی بود، update_card خودش
     کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند."""
+    p, info, thumb_path = await _media_meta(p, kind, info, thumb_path)
+    name = os.path.basename(p)      # remux ممکن است پسوند را به mp4 عوض کرده باشد
     thumb = None
     if kind == "video" and thumb_path:
         prepped = _prep_thumb(thumb_path)
@@ -673,16 +708,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
         else:
             # تک‌عکسیِ گالری یا حالتِ نادرِ دیگر → کارتِ جدا برای هرکدام + حذفِ لنگرگاه
             for p, info, thumb in paths:
-                kind = _kind_from_info(info, p)
-                name = os.path.basename(p)
-                if kind == "image" and not info.get("width"):
-                    try:
-                        from PIL import Image
-                        with Image.open(p) as im:
-                            info = {**info, "width": im.width, "height": im.height}
-                    except Exception:  # noqa: BLE001
-                        pass
-                await _spawn(bot, chat_id, owner_id, p, name, kind, info, lang, thumb_path=thumb)
+                # ابعاد/مدت/کاور را خودِ _spawn از فایل کامل می‌کند (_media_meta)
+                await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
+                             _kind_from_info(info, p), info, lang, thumb_path=thumb)
             try:
                 await bot.delete_message(chat_id, status_mid)  # کارت‌ها جایگزینش شدند
             except Exception:  # noqa: BLE001

@@ -76,6 +76,32 @@ def _fail_note(lang: str, exc: Exception) -> str:
     return note
 
 
+async def _refresh_media_meta(file: File, path: str) -> None:
+    """ابعاد/مدتِ رکوردِ File را از **خروجیِ تازه** بازخوانی کن.
+
+    تلگرام مقادیرِ `duration/width/height` را همان‌طور که ما می‌فرستیم نمایش می‌دهد و
+    خودش فایل را نمی‌سنجد؛ پس اگر بعد از برش/سرعت/فشرده‌سازی/تبدیل/چسباندن این‌ها را
+    به‌روز نکنیم، ویدیو با زمان و کیفیتِ **فایلِ قبلی** نشان داده می‌شود.
+    """
+    if not path or not os.path.exists(path):
+        return
+    if file.kind in ("video", "audio"):
+        meta = await P.probe_media(path)
+        file.duration = meta.get("duration")
+        if file.kind == "video":
+            file.width, file.height = meta.get("width"), meta.get("height")
+        else:
+            file.width = file.height = None
+    elif file.kind == "image":
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                file.width, file.height = im.width, im.height
+        except Exception:  # noqa: BLE001
+            pass
+        file.duration = None
+
+
 async def _localize(bot: Bot, file_id: str, workdir: str, subdir: str = "in") -> str | None:
     """مسیرِ محلیِ فایل را برمی‌گرداند تا پردازش رویش کار کند.
 
@@ -580,10 +606,16 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     name=sp["name"], size=os.path.getsize(p) if os.path.exists(p) else None,
                     changelog=[],
                 )
+                await _refresh_media_meta(newf, p)  # مدت/ابعاد از خودِ فایل (وگرنه ۰:۰۰)
                 session.add(newf)
                 await session.commit()
                 try:
-                    sent = await send_card(bot, chat_id, newf, lang, path=p)
+                    thumb = None
+                    if newf.kind == "video":
+                        poster = os.path.join(workdir, "spawn-poster.jpg")
+                        if await P.video_poster(p, poster):
+                            thumb = FSInputFile(poster)
+                    sent = await send_card(bot, chat_id, newf, lang, path=p, thumb=thumb)
                     fid, fuid = message_media_id(sent)
                     if fid:
                         newf.file_id = fid
@@ -650,13 +682,18 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 job.status = "done"
             else:
                 # عملیاتِ رسانه‌ساز → فیلدهای فایل را عوض کن و کارت را درجا به‌روزرسانی کن
-                orig = (file.name, file.size, file.kind, list(file.changelog or []))
+                orig = (file.name, file.size, file.kind, list(file.changelog or []),
+                        file.width, file.height, file.duration)
                 outpath = res["path"]
                 file.name = res["filename"]
                 if res.get("kind"):
                     file.kind = res["kind"]
                 if os.path.exists(outpath):
                     file.size = os.path.getsize(outpath)
+                # ابعاد/مدتِ **خروجی** را از خودِ فایل بخوان. تلگرام هرچه بدهیم باور می‌کند،
+                # پس بدونِ این، برش/سرعت/فشرده‌سازی زمان و کیفیتِ فایلِ قبلی را نشان می‌دهد
+                # (ویدیوی ۳۰ ثانیه‌ایِ برش‌خورده با زمانِ ۱۰:۰۰ اصل).
+                await _refresh_media_meta(file, outpath)
                 file.changelog = list(file.changelog or []) + [res["label"]]
                 # مرحلهٔ آپلود را برای فایلِ سنگین (ویدیو/صوت) نشان بده — آپلود به سرورِ
                 # لوکالِ Bot API طول می‌کشد و بدونِ این «قفل‌شده» به‌نظر می‌رسد.
@@ -686,7 +723,8 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     job.status = "done"
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ فایل را برگردان
                     log.exception("job %s delivery failed", job_id)
-                    file.name, file.size, file.kind, file.changelog = orig
+                    (file.name, file.size, file.kind, file.changelog,
+                     file.width, file.height, file.duration) = orig
                     job.status = "failed"
                     job.error = str(exc)[:500]
                     await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)

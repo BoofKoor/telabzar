@@ -335,6 +335,13 @@ def _selector_to_format(sel: str) -> str:
     return "bv*+ba/b"
 
 
+# ترتیبِ انتخابِ فرمت برای **سازگاریِ تلگرام**: در همان رزولوشنی که کاربر خواسته،
+# h264+aac در mp4 را ترجیح بده. یوتیوب تا ۱۰۸۰p همیشه h264 دارد؛ بدونِ این ترتیب
+# VP9/AV1/Opus (یعنی webm) انتخابِ اولِ yt-dlp است و فایلِ غیرِmp4 درمی‌آید.
+# `res` اول می‌آید تا کیفیتِ انتخابیِ کاربر قربانیِ کدک نشود.
+_FORMAT_SORT = "res,vcodec:h264,acodec:aac,ext:mp4:m4a"
+
+
 async def _run_dl(cmd: list[str], progress=None, cancel=None, timeout: float = 3000) -> None:
     """اجرای yt-dlp/gallery-dl با خواندنِ درصد از stdout و چکِ لغو."""
     proc = await asyncio.create_subprocess_exec(
@@ -400,28 +407,46 @@ def _newest(workdir: str, exts: tuple[str, ...] | None = None) -> str | None:
 async def _ffprobe_video(path: str) -> dict:
     """(width, height, duration) از ffprobe — برای پرکردنِ متادیتای ناقصِ yt-dlp
     (merge‌شدهٔ DASHِ یوتیوب گاهی width/height ندارد)."""
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
-           "-show_entries", "stream=width,height:format=duration", "-of", "json", path]
+    from . import processing as _P  # منبعِ یکتای probe (اجتناب از دو پیاده‌سازی)
+    return await _P.probe_media(path)
+
+
+async def _ensure_mp4(path: str) -> str:
+    """اگر خروجی mp4 نیست، **فقط کانتینر** را به mp4 بازبسته‌بندی کن (بدونِ انکودِ مجدد).
+
+    چرا لازم است: `--merge-output-format mp4` تنها وقتی اثر دارد که yt-dlp دو استریم را
+    merge کند. دو مسیر دورش می‌زنند و فایلِ غیرِmp4 می‌سازند:
+      ۱) سلکتور به فایلِ **از پیش mux‌شده** برسد (شاخهٔ `/b`) — یوتیوب اغلب webm/VP9 می‌دهد
+         و چون merge‌ای نیست، هیچ remuxی هم رخ نمی‌دهد.
+      ۲) کدک‌ها با mp4 سازگار نباشند — yt-dlp خودش به **mkv** برمی‌گردد و فقط warn می‌دهد.
+    تلگرام `sendVideo` را برای mp4 تضمین می‌کند؛ webm/mkv یا سند می‌شود یا بدونِ پیش‌نمایش.
+    remux ارزان است (کپیِ استریم) و اگر شکست خورد، فایلِ اصلی دست‌نخورده برمی‌گردد.
+    """
+    if not path or os.path.splitext(path)[1].lower() == ".mp4" or not os.path.exists(path):
+        return path
+    out = os.path.splitext(path)[0] + ".remux.mp4"
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await proc.communicate()
-        data = json.loads(out or b"{}")
+            "ffmpeg", "-y", "-i", path, "-c", "copy", "-movflags", "+faststart", out,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await asyncio.wait_for(proc.wait(), timeout=900)
     except Exception:  # noqa: BLE001
-        return {}
-    st = (data.get("streams") or [{}])[0]
-    fmt = data.get("format") or {}
-    res: dict = {}
-    if st.get("width"):
-        res["width"] = int(st["width"])
-    if st.get("height"):
-        res["height"] = int(st["height"])
+        proc = None
+    if proc is not None and proc.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
+        final = os.path.splitext(path)[0] + ".mp4"
+        try:
+            os.replace(out, final)
+            os.remove(path)
+            return final
+        except OSError:
+            return out
     try:
-        if fmt.get("duration"):
-            res["duration"] = int(float(fmt["duration"]))
-    except (TypeError, ValueError):
+        if os.path.exists(out):
+            os.remove(out)
+    except OSError:
         pass
-    return res
+    log.warning("mp4 remux failed, sending original container: %s", os.path.basename(path))
+    return path
 
 
 async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
@@ -440,7 +465,8 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
         cmd += ["-x", "--audio-format", "mp3"]
     else:
         # faststart = اتمِ moov جلوی فایل → استریمِ مرورگری بلافاصله شروع می‌شود (نه پس از دانلودِ کامل)
-        cmd += ["--merge-output-format", "mp4",
+        cmd += ["-S", _FORMAT_SORT,          # h264/aac/mp4 را در همان رزولوشن ترجیح بده
+                "--merge-output-format", "mp4",
                 "--postprocessor-args", "Merger:-movflags +faststart"]
     cmd += ["--embed-metadata"]  # عنوان/هنرمند و… داخلِ فایل
     if opts.get("sponsorblock"):  # حذفِ اسپانسر/اینترو (یوتیوب)
@@ -475,12 +501,15 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
                 info = json.load(fh)
         except Exception:  # noqa: BLE001
             pass
-    # متادیتای ناقصِ ویدیو را با ffprobe کامل کن (کارت + منوی کاهشِ حجم دقیق شود)
-    if not audio_only and not (info.get("width") and info.get("height") and info.get("duration")):
-        probed = await _ffprobe_video(path)
-        for k in ("width", "height", "duration"):
-            if not info.get(k) and probed.get(k):
-                info[k] = probed[k]
+    if not audio_only:
+        # کانتینر را قطعی mp4 کن (تکـفایلِ webm یا mkvِ fallback هم پوشش داده شود)
+        path = await _ensure_mp4(path)
+        # متادیتای ناقصِ ویدیو را با ffprobe کامل کن (کارت + منوی کاهشِ حجم دقیق شود)
+        if not (info.get("width") and info.get("height") and info.get("duration")):
+            probed = await _ffprobe_video(path)
+            for k in ("width", "height", "duration"):
+                if not info.get(k) and probed.get(k):
+                    info[k] = probed[k]
     return path, info, thumb
 
 
@@ -514,7 +543,9 @@ async def download_cobalt(url: str, workdir: str, cobalt_url: str, opts: dict,
                     fh.write(chunk)
     if not os.path.exists(out) or os.path.getsize(out) == 0:
         raise RuntimeError("cobalt produced no file")
-    return out, {}, None
+    if os.path.splitext(out)[1].lower() in (".webm", ".mkv", ".mov", ".m4v"):
+        out = await _ensure_mp4(out)   # کوبالت هم گاهی webm می‌دهد
+    return out, await _ffprobe_video(out), None
 
 
 # ── Spotify: متادیتا از Web API + تطبیقِ صوت روی یوتیوب ─────────────
