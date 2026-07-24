@@ -567,6 +567,40 @@ async def video_poster(inp: str, out: str) -> bool:
         return False
 
 
+async def probe_media(path: str) -> dict:
+    """(width, height, duration) واقعیِ فایل از ffprobe — منبعِ یکتای متادیتای رسانه.
+
+    تلگرام هرچه ما بدهیم را باور می‌کند؛ پس بعد از **هر** عملیاتی که مدت یا ابعاد را
+    عوض می‌کند (برش/سرعت/فشرده‌سازی/تبدیل/چسباندن) و برای **هر** فایلِ دانلودی که
+    متادیتا همراهش نیامده، باید از خودِ فایل خوانده شود؛ وگرنه زمان/کیفیتِ اشتباه
+    نمایش داده می‌شود. برای صوت فقط duration برمی‌گردد (استریمِ ویدیو ندارد).
+    """
+    cmd = [FFPROBE, "-v", "error", "-select_streams", "v:0",
+           "-show_entries", "stream=width,height:format=duration", "-of", "json", path]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate()
+        data = json.loads(out or b"{}")
+    except Exception:  # noqa: BLE001
+        return {}
+    st = (data.get("streams") or [{}])[0] or {}
+    fmt = data.get("format") or {}
+    res: dict = {}
+    if st.get("width"):
+        res["width"] = int(st["width"])
+    if st.get("height"):
+        res["height"] = int(st["height"])
+    try:
+        if fmt.get("duration"):
+            dur = int(float(fmt["duration"]))
+            if dur > 0:
+                res["duration"] = dur
+    except (TypeError, ValueError):
+        pass
+    return res
+
+
 async def probe_duration(path: str) -> int | None:
     """مدتِ رسانه با ffprobe (ثانیه) — برای نوارِ پیشرفت وقتی متادیتا ندارد."""
     try:

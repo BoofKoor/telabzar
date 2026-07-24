@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 from html import escape
 
 from aiogram import Bot
@@ -31,6 +32,8 @@ def _initial_kb(file: File, lang: str):
         return collapsed_kb(file.ref, lang)
     return file_card_kb(file.ref, file.kind, lang, collapsible=True)
 from .models import File
+
+log = logging.getLogger("telabzar.cards")
 
 _ICON = {"document": "🗎", "image": "🖼", "video": "🎬", "audio": "🎵",
          "archive": "🗜", "app": "📦", "pdf": "📕"}
@@ -125,6 +128,12 @@ def progress_note(label: str, percent: float | None = None, eta: float | None = 
 
 
 def card_caption(file: File, lang: str, note: str | None = None) -> str:
+    """کپشنِ کارت = یک بلاک‌کوتِ **بستهٔ** (expandable) شاملِ نام + اطلاعات + لاگِ تغییرات.
+
+    تلگرام بلاک‌کوتِ تودرتو را نمی‌پذیرد، پس لاگِ تغییرات به‌جای بلاک‌کوتِ جداگانه، خطِ
+    ساده داخلِ همان بلاک است. `note` (نوارِ پیشرفت/ویرایشگرِ متادیتا) عمداً **بیرونِ**
+    بلاک می‌ماند تا وقتی کوت بسته است هم دیده شود.
+    """
     icon = _ICON.get(file.kind, "📄")
     lines = [
         f"{icon} <b>{escape(file.name or '—')}</b>",
@@ -132,11 +141,9 @@ def card_caption(file: File, lang: str, note: str | None = None) -> str:
     ]
     changelog = file.changelog or []
     if changelog:
-        body = "\n".join(escape(x) for x in changelog[-8:])
-        lines.append(f"<blockquote expandable>{body}</blockquote>")
-    if note:
-        lines.append(note)
-    return "\n".join(lines)
+        lines += [escape(x) for x in changelog[-8:]]
+    caption = f"<blockquote expandable>{chr(10).join(lines)}</blockquote>"
+    return f"{caption}\n{note}" if note else caption
 
 
 def message_media_id(msg: Message) -> tuple[str | None, str | None]:
@@ -191,7 +198,15 @@ async def send_card(bot: Bot, chat_id: int, file: File, lang: str, *,
     kb = _initial_kb(file, lang)
     try:
         return await _send_typed(bot, chat_id, file, _media_arg(file, path), caption, kb, thumb=thumb)
-    except TelegramBadRequest:
+    except TelegramBadRequest as exc:
+        # سقوط به «سند» یعنی از دست رفتنِ کاور/زمان/پخشِ درجا؛ پس اول بدونِ تامبنیل
+        # دوباره تلاش کن — شایع‌ترین دلیلِ ردِ sendVideo خودِ تامبنیل است — و خطا را لاگ کن.
+        log.warning("send_card typed send failed (%s): %s", file.kind, exc)
+        if thumb is not None:
+            try:
+                return await _send_typed(bot, chat_id, file, _media_arg(file, path), caption, kb)
+            except TelegramBadRequest as exc2:
+                log.warning("send_card retry without thumb failed: %s", exc2)
         return await bot.send_document(chat_id, _media_arg(file, path), caption=caption, reply_markup=kb)
 
 
