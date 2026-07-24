@@ -1153,8 +1153,9 @@ async def op_close(cq: CallbackQuery, lang: str) -> None:
 async def op_collapse(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
     file = await get_file_by_ref(session, callback_data.ref)
     if file is not None and isinstance(cq.message, Message):
+        # جمع‌شده = کپشنِ اصلیِ پست در بلاک‌کوتِ بسته + فقط دکمهٔ «نمایش آپشن‌ها»
         await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang,
-                            keyboard=collapsed_kb(file.ref, lang))
+                            keyboard=collapsed_kb(file.ref, lang), collapsed=True)
     await cq.answer()
 
 
