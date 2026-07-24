@@ -167,22 +167,32 @@ a{text-decoration:none;color:inherit}
 .nav a:not(.on):not(.soon):hover{background:rgba(255,255,255,.05)}
 .nav a.soon{opacity:.45;cursor:default}.foot{margin-top:auto;padding:16px 20px;font-size:12px;color:#64748b}
 .main{flex:1;min-width:0}.top{height:62px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 26px;position:sticky;top:0;z-index:5}
-.top h1{font-size:17px}.who{display:flex;align-items:center;gap:14px;font-size:13px;color:var(--muted)}
+.top h1{font-size:17px}.who{display:flex;align-items:center;gap:14px;font-size:13px;color:var(--muted);flex-wrap:wrap;justify-content:flex-end}
 .pill{display:inline-flex;align-items:center;gap:7px;background:#ecfdf5;color:#047857;padding:6px 12px;border-radius:999px;font-weight:600;font-size:12.5px}
 .pill.bad{background:#fffbeb;color:#b45309}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--green)}.pill.bad .dot{background:var(--amber)}
 .lo{color:#64748b}
 .body{padding:22px 26px}
-.grid2{display:grid;grid-template-columns:1fr 372px;gap:20px;align-items:start}
+.grid2{display:grid;grid-template-columns:1fr 372px;gap:16px;align-items:start}
 @media(max-width:1000px){.grid2{grid-template-columns:1fr}}
-.col{display:flex;flex-direction:column;gap:18px}
+.col{display:flex;flex-direction:column;gap:16px}
 .card{background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.body>.card+.card,form>.card+.card{margin-top:16px}
 .card h3{font-size:14px;font-weight:700;padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:9px}
-.card h3 .tag{margin-inline-start:auto;font-size:11px;font-weight:600;color:var(--teal);background:#f0fdfa;padding:3px 9px;border-radius:8px}
+.tag{font-size:11px;font-weight:600;color:var(--teal);background:#f0fdfa;padding:3px 9px;border-radius:8px;white-space:nowrap}
+.card h3 .tag{margin-inline-start:auto}
+.card h3 .tag+.tag{margin-inline-start:6px}
+.hint{color:#64748b;font-size:12px;line-height:2;padding:12px 18px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;padding:12px 18px 0}
+.tab{padding:7px 12px;border-radius:9px;font-size:12.5px;color:#475569;background:#f1f5f9;border:1px solid transparent}
+.tab:hover{background:#e2e8f0}
+.tab.on{background:#f0fdfa;color:var(--teal);border-color:#99f6e4;font-weight:700}
 .rows{padding:6px 18px 14px}
+.pad{padding:14px 18px}
 .row{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px dashed #eef2f7;gap:12px}
 .row:last-child{border-bottom:0}.row label{font-size:13.5px;color:#334155}.row label small{display:block;color:#94a3b8;font-size:11.5px;margin-top:2px}
-.inp{width:150px;height:36px;border:1px solid #cbd5e1;border-radius:9px;padding:0 11px;font-size:13.5px;font-family:inherit;text-align:center;background:#fff;color:var(--ink)}
+.inp{width:160px;height:36px;border:1px solid #cbd5e1;border-radius:9px;padding:0 11px;font-size:13.5px;font-family:inherit;text-align:center;background:#fff;color:var(--ink)}
 .sel{width:160px;height:36px;border:1px solid #cbd5e1;border-radius:9px;padding:0 8px;font-size:13.5px;font-family:inherit;background:#fff;color:var(--ink)}
 .tg{appearance:none;width:46px;height:26px;border-radius:999px;background:#cbd5e1;position:relative;cursor:pointer;flex:none}
 .tg:checked{background:var(--teal2)}.tg::after{content:'';position:absolute;width:20px;height:20px;border-radius:50%;background:#fff;top:3px;right:3px;transition:.15s}
@@ -199,24 +209,28 @@ a{text-decoration:none;color:inherit}
 .saved{background:#ecfdf5;color:#047857;font-size:13px;padding:10px 14px;border-radius:10px;margin-bottom:16px;font-weight:600}
 .note{background:#eff6ff;color:#1d4ed8;font-size:12.5px;padding:10px 14px;border-radius:10px;margin-bottom:16px;line-height:1.9}
 .errbox{background:#fef2f2;color:#b91c1c;font-size:12.5px;padding:10px 14px;border-radius:10px;margin-bottom:16px}
+/* پیام‌هایی که مستقیم فرزندِ کارت‌اند باید هم‌ترازِ بقیهٔ محتوا باشند، نه چسبیده به لبه */
+.card>.saved,.card>.errbox,.card>.note,.card>.tx-err,.card>.empty{margin-inline:18px}
+.tbl-wrap{overflow-x:auto}
 .tbl{width:100%;border-collapse:collapse}
+.tbl td.num{white-space:nowrap}
 .tbl th{text-align:right;font-size:11.5px;color:#94a3b8;font-weight:600;padding:9px 12px;border-bottom:1px solid var(--line)}
 .tbl td{padding:12px;font-size:13px;border-bottom:1px dashed #eef2f7;vertical-align:middle}
 .tbl tr:last-child td{border-bottom:0}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:#334155}
+/* متن‌های لاتین/عددی داخلِ صفحهٔ RTL نباید جابه‌جا شوند (تاریخ، حجم، IP، دستور) */
+.mono,.num,code,.hist .b span{unicode-bidi:isolate}
+.num{direction:ltr;unicode-bidi:isolate;text-align:right}
+.ltr{direction:ltr;text-align:left;unicode-bidi:isolate}
 .chip{display:inline-block;font-size:11px;font-weight:600;padding:3px 9px;border-radius:8px;background:#f1f5f9;color:#475569}
 .btn-sm{height:32px;padding:0 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;font-size:12.5px;font-family:inherit;color:#334155;cursor:pointer}
 .btn-sm:hover{background:#f8fafc}
 .btn-danger{border-color:#fecaca;color:#b91c1c}.btn-danger:hover{background:#fef2f2}
 .inline{display:inline}
-.up{display:grid;grid-template-columns:1fr 190px 150px;gap:12px;align-items:end;padding:14px 18px}
-@media(max-width:760px){.up{grid-template-columns:1fr}}
-.up label{display:block;font-size:12px;color:#475569;margin-bottom:7px;font-weight:600}
-.up input[type=file]{width:100%;font-size:12.5px;font-family:inherit}
-.up .sel{width:100%}
-.up button{height:38px;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff;border:0;border-radius:10px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer}
+.btn-go{height:34px;padding:0 15px;border:0;border-radius:9px;font-size:13px;font-weight:700;font-family:inherit;
+  cursor:pointer;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff}
 .empty{font-size:13px;color:#94a3b8;padding:18px;text-align:center}
-.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:16px}
 @media(max-width:760px){.kpis{grid-template-columns:repeat(2,1fr)}}
 .kpi2{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px}
 .kpi2 b{font-size:26px;color:var(--ink);display:block;line-height:1.2}
@@ -235,6 +249,21 @@ a{text-decoration:none;color:inherit}
 .search input{height:38px;border:1px solid #cbd5e1;border-radius:9px;padding:0 12px;font-size:13px;font-family:inherit;width:220px;color:var(--ink)}
 .search button{height:38px;padding:0 16px;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff;border:0;border-radius:9px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
 .tag2{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:7px;background:#eef2ff;color:#4338ca}
+/* موبایل/تبلت: سایدبار به یک نوارِ افقیِ بالای صفحه تبدیل می‌شود */
+@media(max-width:860px){
+  .app{flex-direction:column}
+  .side{width:100%;height:auto;position:static;flex-direction:row;flex-wrap:wrap;align-items:center;row-gap:4px}
+  .brand{padding:14px 18px;font-size:17px}.brand small{display:none}
+  .nav{flex-direction:row;flex-wrap:wrap;padding:0 14px 12px;gap:6px}
+  .nav a{padding:8px 11px;font-size:13px;border-radius:9px}
+  .foot{display:none}
+  .top{height:auto;min-height:56px;padding:10px 16px;gap:10px;flex-wrap:wrap}
+  .body{padding:16px}
+}
+@media(max-width:560px){
+  .body{padding:12px}.rows,.pad{padding-inline:12px}.card h3{padding:13px 12px}
+  .tbl th,.tbl td{padding:9px 7px;font-size:12px}
+}
 """
 
 
@@ -311,24 +340,27 @@ _SETTINGS = """{% extends 'base' %}{% block title %}تنظیمات{% endblock %}
 _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}{% block heading %}اکانت‌های کوکی{% endblock %}
 {% block style %}
 .ta{width:100%;box-sizing:border-box;background:#0b1220;color:#7dd3fc;border:1px solid #1e293b;border-radius:11px;
-  padding:11px 13px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.75;resize:vertical}
+  padding:11px 13px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.75;resize:vertical;
+  direction:ltr;text-align:left;unicode-bidi:isolate}
+.ck-form{display:flex;gap:10px;margin:0 0 10px;flex-wrap:wrap;align-items:center}
+.ck-form .inp{flex:1;min-width:190px;text-align:start}
+.ck-hint{color:#94a3b8;font-size:12px}
+.ck-go{display:flex;gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap}
 .ck-row{display:flex;align-items:center;gap:11px;padding:11px 0;border-top:1px solid var(--line);flex-wrap:wrap}
 .ck-row:first-child{border-top:0}
 .sdot{width:9px;height:9px;border-radius:50%;flex:none}
 .s-healthy{background:#16a34a}.s-suspect{background:#d97706}.s-invalid{background:#dc2626}
 .s-cooldown{background:#0ea5e9}.s-disabled{background:#cbd5e1}
 .ck-name{font-size:13.5px;font-weight:700;min-width:96px}
-.ck-meta{color:#94a3b8;font-size:12px;flex:1;min-width:170px}
-.ck-acts{display:flex;gap:6px;flex-wrap:wrap}
-.repl{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:12px;margin:2px 0 8px}
-.btn-go{height:34px;padding:0 15px;border:0;border-radius:9px;font-size:13px;font-weight:700;font-family:inherit;
-  cursor:pointer;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff}
+.ck-meta{color:#94a3b8;font-size:12px;min-width:170px}
+.ck-acts{display:flex;gap:6px;flex-wrap:wrap;margin-inline-start:auto}
+.repl{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:12px;margin:2px 0 10px}
 {% endblock %}
 {% block body %}
 {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
 {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
 
-<div class=card style=margin-bottom:16px>
+<div class=card>
   <h3>➕ افزودنِ اکانت <span class=tag>کپی/پیست — بدونِ فایل</span></h3>
   <div class=pad>
     <div class=note>محتوای <b>cookies.txt</b> (Netscape) یا خروجیِ <b>JSON</b>ِ افزونهٔ
@@ -338,18 +370,18 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
       {% if dl_node_online %}<br>🖧 نودِ دانلود آنلاین است — کوکی‌ها خودکار به آن همگام می‌شوند ({{mirrored}} در Redis).{% endif %}
     </div>
     <form method=post action=/cookies/add>
-      <div style="display:flex;gap:9px;margin:11px 0 9px;flex-wrap:wrap">
+      <div class=ck-form>
         <select class=sel name=platform>
           {% for key, fa in platforms %}<option value="{{key}}">{{fa}}</option>{% endfor %}
         </select>
-        <input class=inp name=label placeholder="برچسبِ اکانت (مثلاً ig-acc4)" style=width:220px>
-        <span class=hint style="align-self:center;color:#94a3b8;font-size:12px">برچسب فقط برای شناساییِ خودت است</span>
+        <input class=inp name=label placeholder="برچسبِ اکانت (مثلاً ig-acc4)">
+        <span class=ck-hint>برچسب فقط برای شناساییِ خودت است</span>
       </div>
-      <textarea class=ta name=content rows=4 required
+      <textarea class=ta name=content rows=4 required dir=ltr
         placeholder="# Netscape HTTP Cookie File&#10;.instagram.com&#9;TRUE&#9;/&#9;TRUE&#9;1789…&#9;sessionid&#9;42891…"></textarea>
-      <div style="display:flex;gap:9px;margin-top:10px;align-items:center">
+      <div class=ck-go>
         <button class=btn-go>بررسی و افزودن</button>
-        <span style="color:#94a3b8;font-size:12px">هنگامِ افزودن، ساختار و کوکیِ کلیدی بررسی می‌شود.</span>
+        <span class=ck-hint>هنگامِ افزودن، ساختار و کوکیِ کلیدی بررسی می‌شود.</span>
       </div>
     </form>
   </div>
@@ -365,7 +397,7 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
       <span class="sdot s-{{c.status}}"></span>
       <b class=ck-name>{{c.label}}</b>
       <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
-      <span class=ck-meta>آخرین موفقیت: {{c.last_ok_fa}} · خطا: {{c.fail_streak}} · افزوده: {{c.added_fa}}</span>
+      <span class=ck-meta>آخرین موفقیت: {{c.last_ok_fa}} · خطا: <bdi>{{c.fail_streak}}</bdi> · افزوده: {{c.added_fa}}</span>
       <span class=ck-acts>
         <button class=btn-sm onclick="var d=document.getElementById('r-{{loop.index0}}-{{g.platform}}');
           d.style.display=d.style.display=='none'?'block':'none';return false">🔄 کوکیِ تازه</button>
@@ -380,8 +412,8 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
       <div style="color:#64748b;font-size:12px;margin-bottom:7px">کوکیِ تازهٔ همین اکانت را بچسبان — برچسب و تاریخچه حفظ می‌شود:</div>
       <form method=post action=/cookies/replace>
         <input type=hidden name=name value="{{c.name}}">
-        <textarea class=ta name=content rows=3 required placeholder=".instagram.com&#9;TRUE&#9;/&#9;TRUE&#9;…&#9;sessionid&#9;…"></textarea>
-        <div style="display:flex;gap:8px;margin-top:9px"><button class=btn-go>بررسی و جایگزینی</button></div>
+        <textarea class=ta name=content rows=3 required dir=ltr placeholder=".instagram.com&#9;TRUE&#9;/&#9;TRUE&#9;…&#9;sessionid&#9;…"></textarea>
+        <div class=ck-go><button class=btn-go>بررسی و جایگزینی</button></div>
       </form>
     </div>
     {% endfor %}
@@ -398,7 +430,7 @@ _HEALTH = """{% extends 'base' %}{% block title %}سلامت{% endblock %}{% blo
   <div class=card><h3>🍪 وضعیتِ کوکی‌ها</h3><div class=rows>
     {% if pool %}{% for p in pool %}
       <div class=svc>{{ pfa.get(p.platform, p.platform) }}
-        <span class=num style="margin-inline-start:auto;color:#64748b">{{p.live}} سالم{% if p.cd %} · {{p.cd}} کنارگذاشته{% endif %}{% if p.bad %} · {{p.bad}} باطل{% endif %}</span></div>
+        <span style="margin-inline-start:auto;color:#64748b;font-size:12.5px"><bdi>{{p.live}}</bdi> سالم{% if p.cd %} · <bdi>{{p.cd}}</bdi> کنارگذاشته{% endif %}{% if p.bad %} · <bdi>{{p.bad}}</bdi> باطل{% endif %}</span></div>
     {% endfor %}{% else %}<div class=empty>کوکی‌ای ثبت نشده.</div>{% endif %}
   </div></div>
   <div class=card><h3>ℹ️ راهنما</h3><div class=rows style=font-size:12.5px;color:#64748b;line-height:2>
@@ -418,14 +450,14 @@ _USERS = """{% extends 'base' %}{% block title %}کاربران{% endblock %}{% 
 </form>
 <div class=card><h3>👤 کاربران <span class=tag>{{total}} کل{% if blocked %} · {{blocked}} بلاک{% endif %}</span></h3>
 {% if users %}
-<table class=tbl><thead><tr><th>شناسهٔ تلگرام</th><th>نقش</th><th>فایل‌ها</th><th>ثبت‌نام</th><th>آخرین بازدید</th><th>وضعیت</th><th style=text-align:left>عملیات</th></tr></thead><tbody>
+<div class=tbl-wrap><table class=tbl><thead><tr><th>شناسهٔ تلگرام</th><th>نقش</th><th>فایل‌ها</th><th>ثبت‌نام</th><th>آخرین بازدید</th><th>وضعیت</th><th style=text-align:left>عملیات</th></tr></thead><tbody>
 {% for u in users %}
 <tr>
   <td class=mono>{{u.tg}}{% if u.is_admin %} <span class=tag2>ادمین</span>{% endif %}</td>
   <td><span class=chip>{{u.role}}</span></td>
   <td class=num>{{u.files}}</td>
-  <td class=num style=color:#64748b>{{u.created}}</td>
-  <td class=num style=color:#64748b>{{u.seen}}</td>
+  <td class="num mono" style=color:#64748b>{{u.created}}</td>
+  <td class="num mono" style=color:#64748b>{{u.seen}}</td>
   <td>{% if u.blocked %}<span class="badge warn" style=margin:0>بلاک</span>{% else %}<span class="badge ok" style=margin:0>فعال</span>{% endif %}</td>
   <td style=text-align:left>
     {% if u.is_admin %}<span class=num style=color:#cbd5e1>—</span>
@@ -436,7 +468,7 @@ _USERS = """{% extends 'base' %}{% block title %}کاربران{% endblock %}{% 
   </td>
 </tr>
 {% endfor %}
-</tbody></table>
+</tbody></table></div>
 <div class=pager>
   <a class="{{'off' if page<=0}}" href="/users?page={{page-1}}{% if q %}&q={{q}}{% endif %}">→ قبلی</a>
   <span>صفحهٔ {{page+1}} از {{pages}}</span>
@@ -452,7 +484,7 @@ _STATS = """{% extends 'base' %}{% block title %}آمار{% endblock %}{% block 
   <div class=kpi2><b>{{s.users}}</b><span>کاربر {% if s.new7 %}<span class=up>+{{s.new7}} این هفته</span>{% endif %}</span></div>
   <div class=kpi2><b>{{s.active7}}</b><span>فعال (۷ روز)</span></div>
   <div class=kpi2><b>{{s.files}}</b><span>فایل</span></div>
-  <div class=kpi2><b>{{s.storage_h}}</b><span>فضای پردازش‌شده</span></div>
+  <div class=kpi2><b><bdi>{{s.storage_h}}</bdi></b><span>فضای پردازش‌شده</span></div>
   <div class=kpi2><b>{{s.dl_files}}</b><span>دانلود از لینک</span></div>
   <div class=kpi2><b>{{s.ops}}</b><span>عملیات {% if s.success_rate is not none %}<span class=up>{{s.success_rate}}٪ موفق</span>{% endif %}</span></div>
 </div>
@@ -495,7 +527,8 @@ background:radial-gradient(120% 120% at 80% 0%,#134e4a,#0f172a 60%);padding:20px
 .sent{background:#ecfdf5;color:#047857;font-size:12.5px;font-weight:600;padding:9px 12px;border-radius:10px;margin-bottom:16px}
 .lbl{font-size:12.5px;color:#475569;margin:0 0 8px;font-weight:600}
 .lcard input{width:100%;height:46px;border:1.5px solid #cbd5e1;border-radius:12px;padding:0 14px;font-size:16px;
-font-family:inherit;margin-bottom:14px;text-align:center;letter-spacing:2px;color:var(--ink)}
+font-family:inherit;margin-bottom:14px;text-align:center;letter-spacing:2px;color:var(--ink);direction:ltr}
+.lcard input:focus{outline:0;border-color:var(--teal2);box-shadow:0 0 0 3px rgba(20,184,166,.18)}
 .btn{width:100%;height:46px;background:linear-gradient(90deg,#0d9488,#14b8a6);color:#fff;border:0;
 border-radius:12px;font-size:15px;font-weight:700;font-family:inherit;box-shadow:0 8px 20px rgba(13,148,136,.3);cursor:pointer}
 .muted{text-align:center;font-size:11.5px;color:#94a3b8;margin-top:14px}
@@ -519,7 +552,7 @@ border-radius:12px;font-size:15px;font-weight:700;font-family:inherit;box-shadow
   {% if error %}<div class=err>{{error}}</div>{% endif %}
   <form method=post action=/auth/request>
     <div class=lbl>شناسهٔ عددیِ ادمین</div>
-    <input name=admin_id inputmode=numeric placeholder="مثلاً 123456789" autofocus style="letter-spacing:1px">
+    <input name=admin_id inputmode=numeric placeholder="123456789" autofocus style="letter-spacing:1px">
     <button class=btn>ارسالِ کد</button>
   </form>
 {% endif %}
@@ -527,8 +560,12 @@ border-radius:12px;font-size:15px;font-weight:700;font-family:inherit;box-shadow
 
 _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% block heading %}متن‌ها و لیبل‌ها{% endblock %}
 {% block style %}
-.tx-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.tx-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:14px 18px;margin:0;
+  border-bottom:1px solid var(--line)}
+.tx-tools .tag{margin-inline-start:auto}
+.tx-list{padding:14px 18px}
 .tx-cat{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;background:rgba(255,255,255,.02);overflow:hidden}
+.tx-cat:last-child{margin-bottom:0}
 .tx-cat>summary{cursor:pointer;padding:12px 14px;font-weight:600;list-style:none;display:flex;align-items:center;gap:8px}
 .tx-cat>summary::-webkit-details-marker{display:none}
 .tx-cat>summary::before{content:'▸';color:#64748b;transition:transform .15s}
@@ -539,9 +576,13 @@ _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% b
 .tx-item{border-top:1px solid var(--line);padding:11px 0}
 .tx-key{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tx-def{color:#94a3b8;font-size:12.5px;margin:6px 0;white-space:pre-wrap;word-break:break-word}
-.tx-item textarea{width:100%;box-sizing:border-box;background:#0b1220;color:#e2e8f0;border:1px solid var(--line);
-  border-radius:9px;padding:8px;font-family:inherit;font-size:13.5px;line-height:1.7;resize:vertical}
-.tx-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.tx-item textarea{flex:1;min-width:0;box-sizing:border-box;background:#f8fafc;color:var(--ink);border:1px solid #cbd5e1;
+  border-radius:9px;padding:8px 10px;font-family:inherit;font-size:13.5px;line-height:1.7;resize:vertical}
+.tx-item textarea:focus{outline:0;border-color:var(--teal2);background:#fff;box-shadow:0 0 0 3px rgba(20,184,166,.14)}
+.tx-edit{display:flex;gap:8px;align-items:flex-start}
+.tx-actions{display:flex;flex-direction:column;gap:6px;flex:none}
+.tx-actions .btn-sm,.tx-actions .save-sm{width:100%;white-space:nowrap}
+@media(max-width:640px){.tx-edit{flex-direction:column}.tx-actions{flex-direction:row;width:100%}}
 .tx-err{background:rgba(220,38,38,.14);border:1px solid rgba(220,38,38,.5);color:#fecaca;padding:9px 12px;border-radius:10px;margin-bottom:10px}
 {% endblock %}
 {% block body %}
@@ -556,9 +597,10 @@ _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% b
     {% if q %}<a class=btn-sm href="/texts?lang={{lang}}">پاک‌کردن</a>{% endif %}
     <span class=tag>{{total}} متن · {{edited}} ویرایش‌شده · بی‌ری‌استارت</span>
   </form>
-  {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
-  {% if error %}<div class=tx-err>⚠️ {{error}}</div>{% endif %}
+  {% if saved %}<div class=saved style=margin-top:14px>✅ {{saved}}</div>{% endif %}
+  {% if error %}<div class=tx-err style=margin-top:14px>⚠️ {{error}}</div>{% endif %}
   {% if not groups %}<div class=empty>چیزی مطابقِ «{{q}}» پیدا نشد.</div>{% endif %}
+  <div class=tx-list>
   {% for g in groups %}
   <details class=tx-cat {% if g.open %}open{% endif %}>
     <summary>{{g.title}} <span class=cnt>({{g.n}})</span>
@@ -573,11 +615,13 @@ _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% b
           <input type=hidden name=key value="{{it.key}}">
           <input type=hidden name=lang value="{{lang}}">
           <input type=hidden name=q value="{{q}}">
-          <textarea name=value rows=2>{{it.current}}</textarea>
-          <div class=tx-actions>
-            <button class=save-sm>ذخیره</button>
-            {% if it.overridden %}
-            <button class=btn-sm formaction=/texts/reset>بازگشت به پیش‌فرض</button>{% endif %}
+          <div class=tx-edit>
+            <textarea name=value rows=2>{{it.current}}</textarea>
+            <div class=tx-actions>
+              <button class=save-sm>ذخیره</button>
+              {% if it.overridden %}
+              <button class=btn-sm formaction=/texts/reset>بازگشت به پیش‌فرض</button>{% endif %}
+            </div>
           </div>
         </form>
       </div>
@@ -585,9 +629,10 @@ _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% b
     </div>
   </details>
   {% endfor %}
+  </div>
 </div>{% endblock %}"""
 
-_BUTTONS = """{% extends 'base' %}{% block title %}کلیدها{% endblock %}{% block heading %}استایل و چیدمانِ کلیدها{% endblock %}
+_BUTTONS ="""{% extends 'base' %}{% block title %}کلیدها{% endblock %}{% block heading %}استایل و چیدمانِ کلیدها{% endblock %}
 {% block style %}
 .tgprev{background:linear-gradient(135deg,#dbeafe,#eef4fb);border:1px solid #cddcf0;border-radius:16px;padding:14px}
 .tgmsg{background:#fff;border-radius:12px;padding:8px 12px;font-size:12.5px;color:#334155;margin-bottom:8px;display:inline-block}
@@ -710,14 +755,17 @@ function rebuildPreview(){
 
 _NODES = """{% extends 'base' %}{% block title %}نودها{% endblock %}{% block heading %}نودهای توزیع‌شده{% endblock %}
 {% block style %}
-.nd{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:9px}
+.nd{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:12px}
+.nd+.nd{margin-top:9px}
 .nd .st{width:9px;height:9px;border-radius:50%;flex:none}
 .nd .on{background:#16a34a}.nd .off{background:#cbd5e1}
-.nd .meta{flex:1;min-width:0}.nd .meta b{font-size:14px}.nd .meta small{color:#94a3b8;font-size:11.5px;display:block}
+.nd .meta{flex:1;min-width:0}.nd .meta b{font-size:14px}
+.nd .meta small{color:#94a3b8;font-size:11.5px;display:block;margin-top:2px}
 .nd .rl{font-size:12px;background:#f0fdfa;color:var(--teal);padding:3px 9px;border-radius:8px;white-space:nowrap}
 .cmd{background:#0b1220;color:#7dd3fc;font-family:ui-monospace,monospace;font-size:12.5px;padding:12px;border-radius:10px;
-  word-break:break-all;line-height:1.9;user-select:all}
-.note{background:#eff6ff;color:#1d4ed8;font-size:12.5px;padding:10px 14px;border-radius:10px;line-height:1.9}
+  word-break:break-all;line-height:1.9;user-select:all;direction:ltr;text-align:left;unicode-bidi:isolate}
+.nd-form{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+.nd-form .inp{width:200px;text-align:start}
 {% endblock %}
 {% block body %}
 <div class=card>
@@ -730,7 +778,9 @@ _NODES = """{% extends 'base' %}{% block title %}نودها{% endblock %}{% bloc
     <div class=nd>
       <span class="st {{'on' if n.online else 'off'}}"></span>
       <div class=meta><b>{{n.emoji}} {{n.name}}</b>
-        <small>{{n.role_label}} · {{n.wg_ip}} · {% if n.online %}بار: {{n.load}} · انجام: {{n.done}} · نسخه {{n.ver}}{% else %}آفلاین{% endif %}</small></div>
+        <small>{{n.role_label}} · <bdi>{{n.wg_ip}}</bdi>
+        {%- if n.online %} · بار: <bdi>{{n.load}}</bdi> · انجام: <bdi>{{n.done}}</bdi> · نسخه <bdi>{{n.ver}}</bdi>
+        {%- else %} · آفلاین{% endif %}</small></div>
       <span class=rl>{{n.role}}</span>
       <form method=post action=/nodes/remove onsubmit="return confirm('این نود حذف شود؟')">
         <input type=hidden name=id value="{{n.id}}">
@@ -744,15 +794,15 @@ _NODES = """{% extends 'base' %}{% block title %}نودها{% endblock %}{% bloc
   <div class=pad>
     {% if token %}
       <div class=note>روی سرورِ نود (Ubuntu/Debian، با root) این را اجرا کن — توکن یک‌بارمصرف و ۳۰ دقیقه معتبر است:</div>
-      <div class=cmd style="margin-top:10px">{{install_cmd}}</div>
+      <div class=cmd>{{install_cmd}}</div>
     {% else %}
       <div class=note>نقشِ نود را انتخاب کن؛ یک دستورِ نصب برایت می‌سازد.</div>
-      <form method=post action=/nodes/add style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <form class=nd-form method=post action=/nodes/add>
         <select class=sel name=role style="min-width:220px">
           {% for k, r in roles.items() %}<option value="{{k}}">{{r.emoji}} {{r.label}}</option>{% endfor %}
         </select>
-        <input class=inp name=name placeholder="نامِ نود (مثلاً de-1)" style="width:200px;text-align:right">
-        <button class=btn-sm>ساختِ دستورِ نصب</button>
+        <input class=inp name=name placeholder="نامِ نود (مثلاً de-1)">
+        <button class=btn-go>ساختِ دستورِ نصب</button>
       </form>
     {% endif %}
   </div>
@@ -1670,7 +1720,8 @@ _REQUIRED_COOKIE = {"instagram": ("sessionid",), "youtube": ("LOGIN_INFO",),
 
 def _normalize_cookie_text(text: str) -> tuple[str | None, str]:
     """(متنِ Netscape یا None, پیامِ خطا). JSONِ افزونه‌ها هم پذیرفته می‌شود."""
-    text = (text or "").strip()
+    # BOM/کاراکترهای صفرعرض هنگامِ کپی‌پیست از فایل یا مرورگر می‌آیند و JSON را می‌شکنند
+    text = (text or "").replace("﻿", "").replace("​", "").replace("‎", "").strip()
     if not text:
         return None, "چیزی چسبانده نشد."
     if len(text) > 512 * 1024:
