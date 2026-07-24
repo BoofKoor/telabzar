@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     dl_rich_posts: bool = True     # پستِ چند‌عکسی را Rich Message بفرست (fallback: آلبوم)
     proxy_url: str = ""            # egressِ تمیزِ خودت، مثل socks5h://host:1080 (خالی = مستقیم)
     cookies_dir: str = ""          # پوشهٔ کوکی‌ها (چرخشِ اکانت برای اینستا/X)
+    cookie_alert_min: int = 1      # اگر اکانت‌های سالمِ یک پلتفرم کمتر از این شد → هشدار به ادمین (۰=خاموش)
     pot_provider_url: str = ""     # http://bgutil-pot-provider:4416 (توکنِ یوتیوب)
     dl_pot_enabled: bool = True    # استفاده از pot-provider؛ اگر پلاگین کرش کند از پنل خاموشش کن
     dl_default_ux: str = "quick"   # probe | quick — پیش‌فرضِ رفتارِ لینک

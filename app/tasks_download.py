@@ -28,6 +28,7 @@ from aiogram.types import (
 )
 from aiogram.utils.media_group import MediaGroupBuilder
 
+from . import cookies as ck
 from . import dl_cache
 from . import downloader as D
 from . import processing as P
@@ -60,83 +61,61 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d")
 
 
-# کوکی‌ها به Redis آینه می‌شوند (کلیدها) تا نودِ دانلود — که دیسکِ کوکیِ مستر را ندارد —
-# هم بتواند آن‌ها را بخواند. پنل موقعِ آپلود/حذف این‌ها را می‌نویسد/پاک می‌کند.
-_CK_SET = "ckfiles"          # ست نام‌های فایلِ کوکی
-_CK_CONTENT = "ckfile:"      # ckfile:<name> → محتوای کوکی
+def _is_cookie_error(msg: str, platform: str | None = None) -> bool:
+    """آیا این خطا «کوکی‌محور» است (لاگین/بن/بات‌چک) و ارزشِ تلاش با اکانتِ دیگر را دارد؟
+    خطاهای غیرِکوکی (ویدیوی خصوصی، ۴۰۴، حجم/مدت) نباید استخر را بسوزانند."""
+    low = (msg or "").lower()
+    if D.is_youtube_botcheck(msg, platform):
+        return True
+    return any(h in low for h in _BAN_HINTS) or any(h in low for h in _LOGIN_HINTS)
 
 
-async def _cookie_names(redis, platform: str) -> tuple[list[str], bool]:
-    """نام‌های کوکیِ این پلتفرم + آیا منبع دیسکِ محلی است (True = مستر) یا آینهٔ Redis
-    (False = نود که دیسکِ کوکی ندارد). فقط کوکیِ همان پلتفرم (نه fallback به همه)."""
-    d = settings.cookies_dir
-    if d and os.path.isdir(d):
-        names = [os.path.basename(f) for f in sorted(glob.glob(os.path.join(d, "*.txt")))]
-        local = True
-    else:
-        names, local = [], False
-        if redis is not None:
-            try:
-                raw = await redis.smembers(_CK_SET)
-                names = sorted((n if isinstance(n, str) else n.decode()) for n in raw)
-            except Exception:  # noqa: BLE001
-                names = []
-    return [n for n in names if platform in n.lower()], local
+def _cookie_platform(platform: str) -> str:
+    """اسپاتیفای دانلودِ واقعی را از یوتیوب می‌گیرد → کوکیِ یوتیوب لازم است، نه اسپاتیفای."""
+    return "youtube" if platform == "spotify" else platform
 
 
-async def _pick_cookies(redis, platform: str, workdir: str | None = None) -> str | None:
-    """یک کوکیِ این پلتفرم را به‌صورتِ **مسیرِ فایل** برمی‌گرداند. روی مستر از دیسکِ محلی؛
-    روی نود از آینهٔ Redis (محتوا را در `workdir` فایلِ موقت می‌کند). چرخشِ اکانت + cooldown
-    (Redisِ مشترک، کلیدِ `ckcd:<name>`/`ckrot:<platform>`) در هر دو حالت یکسان کار می‌کند."""
-    pool, local = await _cookie_names(redis, platform)
-    if not pool:
-        return None
-    live = []
-    for n in pool:
-        on_cd = False
-        if redis is not None:
-            try:
-                on_cd = bool(await redis.exists(f"ckcd:{n}"))
-            except Exception:  # noqa: BLE001
-                on_cd = False
-        if not on_cd:
-            live.append(n)
-    live = live or pool
-    idx = 0
-    if redis is not None:
-        try:
-            idx = (await redis.incr(f"ckrot:{platform}")) % len(live)
-        except Exception:  # noqa: BLE001
-            idx = 0
-    name = live[idx]
-    if local:
-        return os.path.join(settings.cookies_dir, name)
-    # نود: محتوا را از آینهٔ Redis بگیر و در workdir بنویس (با workdir پاک می‌شود)
-    if redis is None or not workdir:
-        return None
+async def _next_cookie(redis, platform: str, workdir: str | None,
+                       tried: set[str]) -> tuple[str | None, str | None]:
+    """(نامِ اکانت, مسیرِ فایل) برای تلاشِ بعدی — یا (None, None) اگر کوکیِ دیگری نماند.
+    استخر (اولویت/کول‌داون/چرخش) در `app/cookies.py` است؛ این‌جا فقط materialize می‌شود."""
+    name = await ck.pick(redis, _cookie_platform(platform), exclude=tried)
+    if not name:
+        return None, None
+    path = await ck.materialize(redis, name, workdir)
+    if not path:            # محتوا در دسترس نبود → همین را رد کن و بعدی را بگیر
+        tried.add(name)
+        return await _next_cookie(redis, platform, workdir, tried)
+    return name, path
+
+
+async def _alert_if_low(redis, bot, platform: str) -> None:
+    """اگر اکانت‌های قابلِ‌استفادهٔ این پلتفرم زیرِ آستانه رفت، به ادمین‌ها خبر بده
+    (ضدِ‌اسپم: هر پلتفرم حداکثر هر ۶ ساعت یک‌بار)."""
+    if redis is None:
+        return
     try:
-        content = await redis.get(_CK_CONTENT + name)
-    except Exception:  # noqa: BLE001
-        content = None
-    if not content:
-        return None
-    try:
-        ckdir = os.path.join(workdir, "ck")
-        os.makedirs(ckdir, exist_ok=True)
-        path = os.path.join(ckdir, name)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(content if isinstance(content, str) else content.decode("utf-8", "replace"))
-        return path
-    except OSError:
-        return None
-
-
-async def _cooldown_cookie(redis, path: str | None, sec: int = 1800) -> None:
-    if redis is not None and path:
-        try:
-            await redis.set(f"ckcd:{os.path.basename(path)}", "1", ex=sec)
-        except Exception:  # noqa: BLE001
-            pass
+        thr = await settings_store.get_int("cookie_alert_min", settings.cookie_alert_min)
+        if thr <= 0:
+            return
+        left = await ck.healthy_count(redis, platform)
+        if left >= thr:
+            return
+        if not await redis.set(f"ckalert:{platform}", "1", ex=6 * 3600, nx=True):
+            return  # تازه خبر داده‌ایم
+        label = D.platform_label(platform, "fa")
+        text = (f"🍪 <b>هشدارِ کوکی</b>\n\nاکانت‌های سالمِ «{label}»: <b>{left}</b> "
+                f"(آستانه: {thr}).\nاز پنل → کوکی‌ها یک کوکیِ تازه بچسبان."
+                if left else
+                f"🔴 <b>هیچ کوکیِ سالمی برای «{label}» نمانده</b>\n\n"
+                f"دانلودِ این پلتفرم تا افزودنِ کوکیِ تازه کار نمی‌کند.")
+        for aid in settings.admin_id_set:
+            try:
+                await bot.send_message(aid, text)
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception as exc:  # noqa: BLE001
+        log.debug("cookie alert skipped: %s", exc)
 
 
 async def _metric(redis, platform: str, ok: bool) -> None:
@@ -152,14 +131,15 @@ async def _metric(redis, platform: str, ok: bool) -> None:
         pass
 
 
-async def _opts(redis, platform: str, workdir: str | None = None) -> dict:
+async def _opts(redis, platform: str, workdir: str | None = None,
+                cookie_path: str | None = None) -> dict:
+    """گزینه‌های موتور. کوکی **صریح** پاس داده می‌شود (انتخابش با حلقهٔ تلاش در
+    `run_download` است تا بتواند روی خطا کوکیِ بعدی را امتحان کند)."""
     pot_on = await settings_store.get_bool("dl_pot_enabled", settings.dl_pot_enabled)
-    # اسپاتیفای دانلودِ واقعی را از یوتیوب می‌گیرد → کوکیِ یوتیوب لازم است، نه اسپاتیفای
-    cookie_platform = "youtube" if platform == "spotify" else platform
     return {
         "proxy": await settings_store.get_str("proxy_url", settings.proxy_url) or None,
         "pot_provider": (settings.pot_provider_url or None) if pot_on else None,
-        "cookies": await _pick_cookies(redis, cookie_platform, workdir),
+        "cookies": cookie_path,
         "max_mb": await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb),
         "sponsorblock": await settings_store.get_str("dl_sponsorblock", settings.dl_sponsorblock) or None,
         "subs": await settings_store.get_bool("dl_subs", settings.dl_subs),
@@ -407,17 +387,34 @@ async def run_download(ctx: dict, payload: dict) -> None:
     # ── فازِ probe: منوی کیفیت ──
     if phase == "probe":
         await _edit(bot, chat_id, status_mid, t(lang, "dl_probing"))
-        try:
-            info = await D.probe(url, await _opts(redis, platform, workdir))
-        except Exception as exc:  # noqa: BLE001
+        # مثلِ fetch: اگر کوکی خطا داد، کوکیِ بعدی امتحان می‌شود.
+        info, msg, tried = None, "", set()
+        while True:
+            cname, cpath = await _next_cookie(redis, platform, workdir, tried)
+            try:
+                info = await D.probe(url, await _opts(redis, platform, workdir, cpath))
+                await ck.mark_ok(redis, cname)
+                break
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
+                if cname and _is_cookie_error(msg, platform):
+                    await ck.mark_fail(redis, cname)
+                    tried.add(cname)
+                    await _alert_if_low(redis, bot, _cookie_platform(platform))
+                    if await ck.pick(redis, _cookie_platform(platform), exclude=tried):
+                        log.info("probe: cookie %s failed, trying next", cname)
+                        continue
+                break
+        if info is None:
+            shutil.rmtree(workdir, ignore_errors=True)  # کوکیِ materialize‌شدهٔ نود
             await _metric(redis, platform, ok=False)
-            msg = str(exc)
             if D.is_youtube_botcheck(msg, platform):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
             else:
                 await _edit(bot, chat_id, status_mid,
                             t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
+        shutil.rmtree(workdir, ignore_errors=True)  # probe چیزی نگه نمی‌دارد
         cap_min = await settings_store.get_int("dl_max_duration_min", settings.dl_max_duration_min)
         if cap_min > 0 and (info.get("duration") or 0) > cap_min * 60:
             await _edit(bot, chat_id, status_mid, t(lang, "dl_too_long", min=cap_min))
@@ -470,11 +467,10 @@ async def run_download(ctx: dict, payload: dict) -> None:
             return
 
         os.makedirs(workdir, exist_ok=True)
-        opts = await _opts(redis, platform, workdir)
-        cookie = opts.get("cookies")  # مسیرِ اصلی؛ برای cooldown/متریک نگه‌داری می‌شود
-        # نکته: کپیِ نوشتنیِ کوکی (چون /cookies فقط‌خواندنی است و yt-dlp کوکی‌جار را
-        # برمی‌گرداند) حالا درونِ خودِ موتور انجام می‌شود — probe و download_ytdlp و
-        # download_gallerydl هرکدام یک کپیِ نوشتنیِ موقت می‌سازند و پاک می‌کنند.
+        # نکته: کوکی داخلِ «حلقهٔ تلاش» پایین انتخاب می‌شود (تا روی خطا اکانتِ بعدی
+        # امتحان شود). کپیِ نوشتنیِ کوکی (چون /cookies فقط‌خواندنی است و yt-dlp کوکی‌جار را
+        # برمی‌گرداند) درونِ خودِ موتور انجام می‌شود — probe/download_ytdlp/download_gallerydl
+        # هرکدام یک کپیِ نوشتنیِ موقت می‌سازند و پاک می‌کنند.
 
         # ── روایتِ زنده‌ی مراحل: اسپینرِ چرخان + درصد/زمانِ سپری‌شده ──
         # تیک‌زنِ پس‌زمینه هیچ‌وقت «قفل‌شده» به‌نظر نمی‌رسد — چه yt-dlp که درصد می‌دهد،
@@ -519,64 +515,93 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 pass
 
         gallery_caption = None
-        try:
-            if engine == "gallerydl":
-                files, gallery_caption = await D.download_gallerydl(
-                    url, workdir, opts, progress=_progress, cancel=_cancelled)
-                paths = [(p, {}, None) for p in files]
-            elif engine == "spotify":
-                # متادیتا از اسپاتیفای + تطبیق روی یوتیوب؛ کلیدِ متادیتا تعیین می‌کند تگ/کاورِ
-                # نهایی از اسپاتیفای باشد (روشن) یا از یوتیوب بماند (پیش‌فرض/خاموش).
-                paths = await D.download_spotify(url, workdir, opts,
-                                                 progress=_progress, cancel=_cancelled)
-                if await settings_store.get_bool("spotify_meta", settings.spotify_meta):
-                    paths = await _apply_spotify_meta(paths)
-            else:
-                try:
-                    path, info, thumb = await D.download_ytdlp(url, workdir, selector, opts,
-                                                               progress=_progress, cancel=_cancelled)
-                except P.ProcessingCancelled:
-                    raise
-                except Exception as ytdlp_exc:  # noqa: BLE001
-                    # پلاگینِ pot-provider گاهی خودِ yt-dlp را می‌اندازد (تریس‌بکِ پایتون، نه خطای
-                    # تمیز — مثلاً ناسازگاریِ نسخهٔ پلاگین با سرورِ pot). یک‌بار بدونِ pot دوباره
-                    # تلاش کن: هم خطای واقعی (bot-check) تمیز بیرون می‌آید، هم اگر فقط pot خراب
-                    # بوده، دانلود (به‌ویژه وقتی کوکیِ یوتیوب هست) موفق می‌شود.
-                    retried = False
-                    if opts.get("pot_provider"):
-                        log.info("yt-dlp failed with pot-provider (%s); retrying without pot",
-                                 str(ytdlp_exc)[:140])
-                        try:
-                            path, info, thumb = await D.download_ytdlp(
-                                url, workdir, selector, {**opts, "pot_provider": None},
-                                progress=_progress, cancel=_cancelled)
-                            retried = True
-                        except P.ProcessingCancelled:
-                            raise
-                        except Exception as exc2:  # noqa: BLE001
-                            ytdlp_exc = exc2  # خطای تمیزِ بدونِ pot را به مسیرِ پایین بده
-                    if not retried:
-                        # fallback به Cobalt فقط روی شکستِ extractor (نه login/ban که کوکی می‌خواهد)
-                        cobalt = settings.cobalt_url
-                        if cobalt and not any(h in str(ytdlp_exc).lower() for h in _LOGIN_HINTS):
-                            log.info("yt-dlp failed, trying cobalt: %s", str(ytdlp_exc)[:100])
-                            path, info, thumb = await D.download_cobalt(url, workdir, cobalt, opts,
-                                                                        progress=_progress, cancel=_cancelled)
-                        else:
-                            # صریح، نه `raise` خالی — چون ytdlp_exc را به خطای تمیزِ بدونِ pot
-                            # عوض کرده‌ایم و raiseِ خالی خطای اصلیِ تریس‌بک را دوباره پرت می‌کند.
-                            raise ytdlp_exc
-                paths = [(path, info, thumb)]
-        except P.ProcessingCancelled:
+        # ── حلقهٔ تلاش با چرخشِ اکانت ──
+        # اگر کوکیِ فعلی خطای لاگین/بن داد، اکانت را علامت‌دار و **با کوکیِ بعدی** دوباره
+        # تلاش می‌کنیم. فقط وقتی هیچ کوکیِ قابلِ‌استفاده‌ای نماند به کاربر خطا می‌دهیم.
+        paths, dl_err, tried = None, None, set()
+        while True:
+            cookie_name, cookie_path = await _next_cookie(redis, platform, workdir, tried)
+            opts = await _opts(redis, platform, workdir, cookie_path)
+            try:
+                if engine == "gallerydl":
+                    files, gallery_caption = await D.download_gallerydl(
+                        url, workdir, opts, progress=_progress, cancel=_cancelled)
+                    paths = [(p, {}, None) for p in files]
+                elif engine == "spotify":
+                    # متادیتا از اسپاتیفای + تطبیق روی یوتیوب؛ کلیدِ متادیتا تعیین می‌کند تگ/کاورِ
+                    # نهایی از اسپاتیفای باشد (روشن) یا از یوتیوب بماند (پیش‌فرض/خاموش).
+                    paths = await D.download_spotify(url, workdir, opts,
+                                                     progress=_progress, cancel=_cancelled)
+                    if await settings_store.get_bool("spotify_meta", settings.spotify_meta):
+                        paths = await _apply_spotify_meta(paths)
+                else:
+                    try:
+                        path, info, thumb = await D.download_ytdlp(url, workdir, selector, opts,
+                                                                   progress=_progress, cancel=_cancelled)
+                    except P.ProcessingCancelled:
+                        raise
+                    except Exception as ytdlp_exc:  # noqa: BLE001
+                        # پلاگینِ pot-provider گاهی خودِ yt-dlp را می‌اندازد (تریس‌بکِ پایتون، نه خطای
+                        # تمیز — مثلاً ناسازگاریِ نسخهٔ پلاگین با سرورِ pot). یک‌بار بدونِ pot دوباره
+                        # تلاش کن: هم خطای واقعی (bot-check) تمیز بیرون می‌آید، هم اگر فقط pot خراب
+                        # بوده، دانلود (به‌ویژه وقتی کوکیِ یوتیوب هست) موفق می‌شود.
+                        retried = False
+                        if opts.get("pot_provider"):
+                            log.info("yt-dlp failed with pot-provider (%s); retrying without pot",
+                                     str(ytdlp_exc)[:140])
+                            try:
+                                path, info, thumb = await D.download_ytdlp(
+                                    url, workdir, selector, {**opts, "pot_provider": None},
+                                    progress=_progress, cancel=_cancelled)
+                                retried = True
+                            except P.ProcessingCancelled:
+                                raise
+                            except Exception as exc2:  # noqa: BLE001
+                                ytdlp_exc = exc2  # خطای تمیزِ بدونِ pot را به مسیرِ پایین بده
+                        if not retried:
+                            # fallback به Cobalt فقط روی شکستِ extractor (نه login/ban که کوکی می‌خواهد)
+                            cobalt = settings.cobalt_url
+                            if cobalt and not any(h in str(ytdlp_exc).lower() for h in _LOGIN_HINTS):
+                                log.info("yt-dlp failed, trying cobalt: %s", str(ytdlp_exc)[:100])
+                                path, info, thumb = await D.download_cobalt(url, workdir, cobalt, opts,
+                                                                            progress=_progress, cancel=_cancelled)
+                            else:
+                                # صریح، نه `raise` خالی — چون ytdlp_exc را به خطای تمیزِ بدونِ pot
+                                # عوض کرده‌ایم و raiseِ خالی خطای اصلیِ تریس‌بک را دوباره پرت می‌کند.
+                                raise ytdlp_exc
+                    paths = [(path, info, thumb)]
+                await ck.mark_ok(redis, cookie_name)   # این اکانت سالم است
+                break
+            except P.ProcessingCancelled:
+                await _stop_ticker()
+                await _edit(bot, chat_id, status_mid, t(lang, "cancelled"))
+                return
+            except Exception as exc:  # noqa: BLE001
+                dl_err = exc
+                if cookie_name and _is_cookie_error(str(exc), platform):
+                    await ck.mark_fail(redis, cookie_name)   # خطا + کول‌داونِ پلکانی
+                    tried.add(cookie_name)
+                    await _alert_if_low(redis, bot, _cookie_platform(platform))
+                    if await ck.pick(redis, _cookie_platform(platform), exclude=tried):
+                        log.info("cookie %s failed (%s); retrying with next account",
+                                 cookie_name, str(exc)[:90])
+                        # نیمه‌کاره‌های تلاشِ قبلی را پاک کن تا با خروجیِ تلاشِ بعدی قاطی نشود
+                        for _n in os.listdir(workdir):
+                            if _n != "ck":
+                                _p = os.path.join(workdir, _n)
+                                shutil.rmtree(_p, ignore_errors=True) if os.path.isdir(_p) \
+                                    else os.remove(_p)
+                        await _edit(bot, chat_id, status_mid,
+                                    progress_note(t(lang, "dl_retry_account"), None, None,
+                                                  time.monotonic() - nstart, 0),
+                                    kb=download_cancel_kb(ref, lang))
+                        continue      # ← کوکیِ بعدی
+                break                 # کوکیِ دیگری نمانده (یا خطا کوکی‌محور نبود)
+
+        if paths is None:
             await _stop_ticker()
-            await _edit(bot, chat_id, status_mid, t(lang, "cancelled"))
-            return
-        except Exception as exc:  # noqa: BLE001
-            await _stop_ticker()
-            msg = str(exc)
+            msg = str(dl_err) if dl_err else "download failed"
             low = msg.lower()
-            if any(h in low for h in _BAN_HINTS):
-                await _cooldown_cookie(redis, cookie)
             await _metric(redis, platform, ok=False)
             if platform == "spotify" and D.is_youtube_botcheck(msg, "youtube"):
                 # تطبیقِ اسپاتیفای از یوتیوب دانلود می‌کند؛ اگر یوتیوب bot-check داد، راهنمای کوکی

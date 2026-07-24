@@ -30,6 +30,7 @@ from jinja2 import Environment, DictLoader, select_autoescape
 from markupsafe import Markup
 from sqlalchemy import func, select, text as sql_text
 
+from . import cookies as ck_pool
 from . import nodes as node_mod
 from . import settings_store
 from . import textstore
@@ -102,6 +103,9 @@ GROUPS = [
         ("whisper_model", "مدلِ Whisper", ""),
         ("dl_sponsorblock", "SponsorBlock", "حذفِ اسپانسر/اینترو"),
         ("dl_subs", "زیرنویسِ خودکار (en+fa)", ""),
+    ]),
+    ("🍪 کوکی‌ها", [
+        ("cookie_alert_min", "هشدار وقتی اکانتِ سالم کمتر از", "۰ = خاموش · به تلگرامِ ادمین"),
     ]),
     ("🔗 لینک و استریم", [
         ("stream_base", "پایهٔ لینک (نودِ استریم)", "خالی = دامنهٔ مستر · مثل https://cdn.example.com"),
@@ -191,6 +195,7 @@ a{text-decoration:none;color:inherit}
 .stat{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:13px}.stat b{width:82px;color:#475569}.stat .meter{flex:1}.stat .num{color:#94a3b8;font-size:11.5px;min-width:60px;text-align:left}
 .mini{display:flex;gap:10px;padding:6px 18px 14px}.kpi{flex:1;background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
 .kpi b{font-size:22px;color:var(--teal)}.kpi span{display:block;font-size:11.5px;color:var(--muted);margin-top:3px}
+.save-sm{height:32px;padding:0 18px;border:0;border-radius:9px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff}
 .saved{background:#ecfdf5;color:#047857;font-size:13px;padding:10px 14px;border-radius:10px;margin-bottom:16px;font-weight:600}
 .note{background:#eff6ff;color:#1d4ed8;font-size:12.5px;padding:10px 14px;border-radius:10px;margin-bottom:16px;line-height:1.9}
 .errbox{background:#fef2f2;color:#b91c1c;font-size:12.5px;padding:10px 14px;border-radius:10px;margin-bottom:16px}
@@ -303,50 +308,87 @@ _SETTINGS = """{% extends 'base' %}{% block title %}تنظیمات{% endblock %}
 <div class=col>""" + _HEALTH_CARDS + """</div>
 </div>{% endblock %}"""
 
-_COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}{% block heading %}کوکی‌ها{% endblock %}
+_COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}{% block heading %}اکانت‌های کوکی{% endblock %}
+{% block style %}
+.ta{width:100%;box-sizing:border-box;background:#0b1220;color:#7dd3fc;border:1px solid #1e293b;border-radius:11px;
+  padding:11px 13px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.75;resize:vertical}
+.ck-row{display:flex;align-items:center;gap:11px;padding:11px 0;border-top:1px solid var(--line);flex-wrap:wrap}
+.ck-row:first-child{border-top:0}
+.sdot{width:9px;height:9px;border-radius:50%;flex:none}
+.s-healthy{background:#16a34a}.s-suspect{background:#d97706}.s-invalid{background:#dc2626}
+.s-cooldown{background:#0ea5e9}.s-disabled{background:#cbd5e1}
+.ck-name{font-size:13.5px;font-weight:700;min-width:96px}
+.ck-meta{color:#94a3b8;font-size:12px;flex:1;min-width:170px}
+.ck-acts{display:flex;gap:6px;flex-wrap:wrap}
+.repl{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:12px;margin:2px 0 8px}
+.btn-go{height:34px;padding:0 15px;border:0;border-radius:9px;font-size:13px;font-weight:700;font-family:inherit;
+  cursor:pointer;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff}
+{% endblock %}
 {% block body %}
 {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
 {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
-<div class=note>کوکی‌ها برای دانلودِ اینستاگرام/X/تیک‌تاک لازم‌اند (نیاز به ورود). چند اکانت اضافه کن تا
-ربات بینشان بچرخد؛ اکانتی که بلاک بخورد خودکار برای ۳۰ دقیقه کنار گذاشته می‌شود. هم فایلِ
-<span class=mono>cookies.txt</span> (Netscape) قبول است، هم خروجیِ <b>JSON</b>ِ افزونهٔ
-<span class=mono>Cookie-Editor</span> (دکمهٔ Export → متن را در یک فایلِ <span class=mono>.txt</span>
-بریز و همین‌جا آپلود کن). از اکانتِ یک‌بارمصرف استفاده کن، نه اصلی.
-{% if not dir_ok %}<br><b>توجه:</b> پوشهٔ کوکی‌ها (<span class=mono>{{cookies_dir or 'COOKIES_DIR'}}</span>) پیدا/نوشتنی نیست.{% endif %}
-{% if dl_node_online %}<br>🖧 <b>نودِ دانلود آنلاین است</b> — دانلودها روی نود اجرا می‌شوند و کوکی‌ها خودکار به آن همگام‌اند ({{mirrored}} کوکی در Redis). اگر تازه آپلود کردی و نود هنوز خطا می‌دهد، چند ثانیه صبر کن یا یک‌بار دیگر آپلود کن.{% endif %}</div>
-<div class=card style=margin-bottom:18px><h3>➕ افزودنِ کوکی</h3>
-  <form method=post action=/cookies/upload enctype=multipart/form-data>
-  <div class=up>
-    <div><label>فایلِ cookies.txt</label><input type=file name=file accept=".txt" required></div>
-    <div><label>پلتفرم</label><select class=sel name=platform>
-      {% for key, fa in platforms %}<option value="{{key}}">{{fa}}</option>{% endfor %}
-    </select></div>
-    <div><label>برچسب (اختیاری)</label><input class=inp style=width:100% name=label placeholder="مثلاً acc1"></div>
+
+<div class=card style=margin-bottom:16px>
+  <h3>➕ افزودنِ اکانت <span class=tag>کپی/پیست — بدونِ فایل</span></h3>
+  <div class=pad>
+    <div class=note>محتوای <b>cookies.txt</b> (Netscape) یا خروجیِ <b>JSON</b>ِ افزونهٔ
+      <span class=mono>Cookie-Editor</span> را کپی کن و این‌جا بچسبان. برای اینستاگرام فقط
+      <span class=mono>sessionid</span> کافی است. از اکانتِ یک‌بارمصرف استفاده کن، نه اصلی.
+      {% if not dir_ok %}<br><b>توجه:</b> پوشهٔ کوکی‌ها (<span class=mono>{{cookies_dir or 'COOKIES_DIR'}}</span>) پیدا/نوشتنی نیست.{% endif %}
+      {% if dl_node_online %}<br>🖧 نودِ دانلود آنلاین است — کوکی‌ها خودکار به آن همگام می‌شوند ({{mirrored}} در Redis).{% endif %}
+    </div>
+    <form method=post action=/cookies/add>
+      <div style="display:flex;gap:9px;margin:11px 0 9px;flex-wrap:wrap">
+        <select class=sel name=platform>
+          {% for key, fa in platforms %}<option value="{{key}}">{{fa}}</option>{% endfor %}
+        </select>
+        <input class=inp name=label placeholder="برچسبِ اکانت (مثلاً ig-acc4)" style=width:220px>
+        <span class=hint style="align-self:center;color:#94a3b8;font-size:12px">برچسب فقط برای شناساییِ خودت است</span>
+      </div>
+      <textarea class=ta name=content rows=4 required
+        placeholder="# Netscape HTTP Cookie File&#10;.instagram.com&#9;TRUE&#9;/&#9;TRUE&#9;1789…&#9;sessionid&#9;42891…"></textarea>
+      <div style="display:flex;gap:9px;margin-top:10px;align-items:center">
+        <button class=btn-go>بررسی و افزودن</button>
+        <span style="color:#94a3b8;font-size:12px">هنگامِ افزودن، ساختار و کوکیِ کلیدی بررسی می‌شود.</span>
+      </div>
+    </form>
   </div>
-  <div style=padding:0_18px_16px><button class="btn-sm" style="background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff;border:0;height:38px;padding:0_18px;font-weight:700">بارگذاری</button></div>
-  </form>
 </div>
-<div class=card><h3>🍪 اکانت‌های ذخیره‌شده <span class=tag>{{items|length}} فایل</span></h3>
-{% if items %}
-<table class=tbl><thead><tr><th>فایل</th><th>پلتفرم</th><th>حجم</th><th>وضعیت</th><th style=text-align:left>عملیات</th></tr></thead><tbody>
-{% for c in items %}
-<tr>
-  <td class=mono>{{c.name}}</td>
-  <td><span class=chip>{{ pfa.get(c.platform, c.platform) }}</span></td>
-  <td class=num style=color:#64748b>{{c.size_kb}} KB</td>
-  <td>{% if c.cooldown %}<span class="badge warn" style=margin:0>کنارگذاشته · {{c.cooldown_min}}′</span>{% else %}<span class="badge ok" style=margin:0>فعال</span>{% endif %}</td>
-  <td style=text-align:left>
-    <form class=inline method=post action=/cookies/cooldown><input type=hidden name=name value="{{c.name}}">
-      <input type=hidden name=action value="{{'clear' if c.cooldown else 'set'}}">
-      <button class=btn-sm>{{'فعال‌سازی' if c.cooldown else 'کنارگذاشتن'}}</button></form>
-    <form class=inline method=post action=/cookies/delete onsubmit="return confirm('حذفِ {{c.name}}؟')">
-      <input type=hidden name=name value="{{c.name}}"><button class="btn-sm btn-danger">حذف</button></form>
-  </td>
-</tr>
+
+{% for g in groups %}
+<div class=card>
+  <h3>{{ pfa.get(g.platform, g.platform) }}
+    <span class=tag>{{g.healthy}} سالم از {{g.total}}</span></h3>
+  <div class=pad style=padding-top:2px>
+    {% for c in g['items'] %}
+    <div class=ck-row>
+      <span class="sdot s-{{c.status}}"></span>
+      <b class=ck-name>{{c.label}}</b>
+      <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
+      <span class=ck-meta>آخرین موفقیت: {{c.last_ok_fa}} · خطا: {{c.fail_streak}} · افزوده: {{c.added_fa}}</span>
+      <span class=ck-acts>
+        <button class=btn-sm onclick="var d=document.getElementById('r-{{loop.index0}}-{{g.platform}}');
+          d.style.display=d.style.display=='none'?'block':'none';return false">🔄 کوکیِ تازه</button>
+        <form class=inline method=post action=/cookies/cooldown><input type=hidden name=name value="{{c.name}}">
+          <input type=hidden name=action value="{{'clear' if c.status=='cooldown' else 'set'}}">
+          <button class=btn-sm>{{'فعال‌سازی' if c.status=='cooldown' else 'کنارگذاشتن'}}</button></form>
+        <form class=inline method=post action=/cookies/delete onsubmit="return confirm('حذفِ {{c.label}}؟')">
+          <input type=hidden name=name value="{{c.name}}"><button class="btn-sm btn-danger">حذف</button></form>
+      </span>
+    </div>
+    <div class=repl id="r-{{loop.index0}}-{{g.platform}}" style=display:none>
+      <div style="color:#64748b;font-size:12px;margin-bottom:7px">کوکیِ تازهٔ همین اکانت را بچسبان — برچسب و تاریخچه حفظ می‌شود:</div>
+      <form method=post action=/cookies/replace>
+        <input type=hidden name=name value="{{c.name}}">
+        <textarea class=ta name=content rows=3 required placeholder=".instagram.com&#9;TRUE&#9;/&#9;TRUE&#9;…&#9;sessionid&#9;…"></textarea>
+        <div style="display:flex;gap:8px;margin-top:9px"><button class=btn-go>بررسی و جایگزینی</button></div>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
 {% endfor %}
-</tbody></table>
-{% else %}<div class=empty>هنوز کوکی‌ای اضافه نشده.</div>{% endif %}
-</div>
+{% if not groups %}<div class=card><div class=empty>هنوز اکانتی اضافه نشده.</div></div>{% endif %}
 {% endblock %}"""
 
 _HEALTH = """{% extends 'base' %}{% block title %}سلامت{% endblock %}{% block heading %}سلامتِ سیستم{% endblock %}
@@ -356,7 +398,7 @@ _HEALTH = """{% extends 'base' %}{% block title %}سلامت{% endblock %}{% blo
   <div class=card><h3>🍪 وضعیتِ کوکی‌ها</h3><div class=rows>
     {% if pool %}{% for p in pool %}
       <div class=svc>{{ pfa.get(p.platform, p.platform) }}
-        <span class=num style="margin-inline-start:auto;color:#64748b">{{p.live}} فعال{% if p.cd %} · {{p.cd}} کنارگذاشته{% endif %}</span></div>
+        <span class=num style="margin-inline-start:auto;color:#64748b">{{p.live}} سالم{% if p.cd %} · {{p.cd}} کنارگذاشته{% endif %}{% if p.bad %} · {{p.bad}} باطل{% endif %}</span></div>
     {% endfor %}{% else %}<div class=empty>کوکی‌ای ثبت نشده.</div>{% endif %}
   </div></div>
   <div class=card><h3>ℹ️ راهنما</h3><div class=rows style=font-size:12.5px;color:#64748b;line-height:2>
@@ -533,7 +575,7 @@ _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% b
           <input type=hidden name=q value="{{q}}">
           <textarea name=value rows=2>{{it.current}}</textarea>
           <div class=tx-actions>
-            <button class=save style="padding:8px 16px">ذخیره</button>
+            <button class=save-sm>ذخیره</button>
             {% if it.overridden %}
             <button class=btn-sm formaction=/texts/reset>بازگشت به پیش‌فرض</button>{% endif %}
           </div>
@@ -949,40 +991,6 @@ def _safe_cookie_name(name: str) -> str | None:
     return base
 
 
-async def _list_cookies(redis) -> list[dict]:
-    d = settings.cookies_dir
-    out: list[dict] = []
-    if not d or not os.path.isdir(d):
-        return out
-    for f in sorted(glob.glob(os.path.join(d, "*.txt"))):
-        base = os.path.basename(f)
-        cd = 0
-        if redis is not None:
-            try:
-                ttl = await redis.ttl(f"ckcd:{base}")
-                cd = ttl if ttl and ttl > 0 else 0
-            except Exception:  # noqa: BLE001
-                cd = 0
-        try:
-            size_kb = round(os.path.getsize(f) / 1024, 1)
-        except OSError:
-            size_kb = 0
-        out.append({"name": base, "platform": _guess_platform(base), "size_kb": size_kb,
-                    "cooldown": cd, "cooldown_min": round(cd / 60)})
-    return out
-
-
-def _cookie_pool_summary(items: list[dict]) -> list[dict]:
-    agg: dict[str, dict] = {}
-    for c in items:
-        a = agg.setdefault(c["platform"], {"platform": c["platform"], "live": 0, "cd": 0})
-        if c["cooldown"]:
-            a["cd"] += 1
-        else:
-            a["live"] += 1
-    return [agg[k] for k, _ in COOKIE_PLATFORMS if k in agg]
-
-
 # ── هندلرها ─────────────────────────────────────────────────────
 def _login_page(step: int = 1, admin_id: str = "", sent: bool = False, error: str = "") -> web.Response:
     return _render("login", step=step, admin_id=admin_id, sent=sent, error=error)
@@ -1073,7 +1081,10 @@ async def health_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     health = await _health(request.app)
-    pool = _cookie_pool_summary(await _list_cookies(request.app["redis"]))
+    summary = await ck_pool.pool_summary(request.app["redis"])
+    pool = [{"platform": p, "live": d["healthy"] + d["suspect"],
+             "cd": d["cooldown"], "bad": d["invalid"]}
+            for p, d in sorted(summary.items())]
     return _render("health", admin_id=_session_admin(request), active="health",
                    pill_ok=health["all_ok"], health=health, pool=pool)
 
@@ -1177,7 +1188,7 @@ def _texts_groups(lang: str, q: str) -> list[dict]:
         if items:
             edited = sum(1 for i in items if i["overridden"])
             groups.append({"title": title, "items": items, "n": len(items),
-                           "edited": edited, "open": bool(ql) or edited > 0})
+                           "edited": edited, "open": bool(ql)})
     if groups and not any(g["open"] for g in groups):  # صفحه هیچ‌وقت خالی به‌نظر نرسد
         groups[0]["open"] = True
     return groups
@@ -1487,20 +1498,60 @@ async def node_peers(request: web.Request) -> web.Response:
     return web.Response(text=node_mod.render_peers(peers), content_type="text/plain")
 
 
+_STATUS_FA = {ck_pool.HEALTHY: "سالم", ck_pool.SUSPECT: "مشکوک", ck_pool.INVALID: "باطل — نیازِ تعویض",
+              ck_pool.COOLDOWN: "کنارگذاشته", ck_pool.DISABLED: "غیرفعال"}
+_STATUS_BADGE = {ck_pool.HEALTHY: "ok", ck_pool.SUSPECT: "warn", ck_pool.INVALID: "err",
+                 ck_pool.COOLDOWN: "warn", ck_pool.DISABLED: "mute"}
+
+
+def _ago_fa(ts: int) -> str:
+    """«۴ دقیقه پیش» — برای زمانِ آخرین موفقیت/افزودن."""
+    if not ts:
+        return "—"
+    d = max(0, int(time.time()) - int(ts))
+    if d < 60:
+        return "همین الان"
+    if d < 3600:
+        return f"{d // 60} دقیقه پیش"
+    if d < 86400:
+        return f"{d // 3600} ساعت پیش"
+    return f"{d // 86400} روز پیش"
+
+
 async def cookies_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
-    items = await _list_cookies(request.app["redis"])
-    msg = {"up": "کوکی اضافه شد.", "del": "کوکی حذف شد.",
-           "cd": "وضعیتِ کوکی به‌روزرسانی شد."}.get(request.query.get("ok", ""), "")
-    dl_node = await node_mod.role_online(request.app["redis"], "download")
+    redis = request.app["redis"]
+    accounts = await ck_pool.accounts(redis)
+    # گروه‌بندی per-platform (به ترتیبِ ثابتِ COOKIE_PLATFORMS)
+    by_platform: dict[str, list[dict]] = {}
+    for a in accounts:
+        item = {**a, "status_fa": _STATUS_FA.get(a["status"], a["status"]),
+                "badge": _STATUS_BADGE.get(a["status"], "mute"),
+                "last_ok_fa": _ago_fa(a.get("last_ok") or 0),
+                "added_fa": _ago_fa(a.get("added") or 0)}
+        by_platform.setdefault(a.get("platform") or "other", []).append(item)
+    groups = []
+    for key, _fa in COOKIE_PLATFORMS:
+        items = by_platform.pop(key, [])
+        if items:
+            groups.append({"platform": key, "items": items, "total": len(items),
+                           "healthy": sum(1 for i in items
+                                          if i["status"] in (ck_pool.HEALTHY, ck_pool.SUSPECT))})
+    for key, items in by_platform.items():  # پلتفرم‌های خارج از فهرست
+        groups.append({"platform": key, "items": items, "total": len(items),
+                       "healthy": sum(1 for i in items
+                                      if i["status"] in (ck_pool.HEALTHY, ck_pool.SUSPECT))})
+    msg = {"up": "اکانت اضافه شد.", "del": "اکانت حذف شد.", "rep": "کوکی جایگزین شد.",
+           "cd": "وضعیتِ اکانت به‌روزرسانی شد."}.get(request.query.get("ok", ""), "")
+    dl_node = await node_mod.role_online(redis, "download")
     mirrored = 0
     try:
-        mirrored = await request.app["redis"].scard(_CK_SET)
+        mirrored = await redis.scard(_CK_SET)
     except Exception:  # noqa: BLE001
         pass
     return _render("cookies", admin_id=_session_admin(request), active="cookies",
-                   pill_ok=await _pill_ok(request.app), items=items,
+                   pill_ok=await _pill_ok(request.app), groups=groups,
                    platforms=COOKIE_PLATFORMS, dir_ok=_cookies_dir_ok(),
                    cookies_dir=settings.cookies_dir, saved=msg,
                    error=request.query.get("err", ""),
@@ -1610,58 +1661,112 @@ async def _mirror_all_cookies(redis) -> None:
         pass
 
 
-async def cookies_upload(request: web.Request) -> web.Response:
+# کوکیِ «کلیدی» هر پلتفرم — اگر در متنِ چسبانده‌شده نباشد، همان لحظه خطا می‌دهیم
+# (به‌جای اینکه فردا وسطِ کارِ کاربر معلوم شود). یوتیوب: LOGIN_INFO همان سیگنالی است
+# که خودِ yt-dlp برای «کوکیِ لاگین‌شده» چک می‌کند — و چکش رایگان است (بدونِ شبکه).
+_REQUIRED_COOKIE = {"instagram": ("sessionid",), "youtube": ("LOGIN_INFO",),
+                    "twitter": ("auth_token",), "tiktok": ("sessionid",)}
+
+
+def _normalize_cookie_text(text: str) -> tuple[str | None, str]:
+    """(متنِ Netscape یا None, پیامِ خطا). JSONِ افزونه‌ها هم پذیرفته می‌شود."""
+    text = (text or "").strip()
+    if not text:
+        return None, "چیزی چسبانده نشد."
+    if len(text) > 512 * 1024:
+        return None, "متن خیلی بزرگ است."
+    if _looks_like_cookiejar(text):
+        return text, ""
+    converted = _json_to_netscape(text)
+    if converted:
+        return converted, ""
+    return None, "نه cookies.txt (Netscape) است نه JSONِ معتبرِ کوکی."
+
+
+def _check_required(text: str, platform: str) -> str:
+    """پیامِ خطا اگر کوکیِ کلیدیِ آن پلتفرم در متن نباشد (وگرنه رشتهٔ خالی)."""
+    need = _REQUIRED_COOKIE.get(platform)
+    if not need:
+        return ""
+    if any(n in text for n in need):
+        return ""
+    return (f"کوکیِ «{need[0]}» در متن پیدا نشد — مطمئن شو از اکانتِ لاگین‌شده "
+            f"و برای دامنهٔ درست کپی کرده‌ای.")
+
+
+async def _save_cookie(redis, name: str, text: str) -> str:
+    """نوشتن روی دیسکِ مستر + آینهٔ Redis. پیامِ خطا یا رشتهٔ خالی."""
+    dest = os.path.join(settings.cookies_dir, name)
+    try:
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(dest, 0o600)  # best-effort
+    except OSError:
+        return "ذخیره نشد."
+    except Exception:  # noqa: BLE001
+        pass
+    await _mirror_cookie(redis, name, text)  # تا نودها هم ببینند
+    return ""
+
+
+async def cookies_add(request: web.Request) -> web.Response:
+    """افزودنِ اکانت با **چسباندنِ متنِ کوکی** (بدونِ آپلودِ فایل)."""
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     if not _cookies_dir_ok():
         raise web.HTTPFound("/cookies?err=" + "پوشهٔ کوکی‌ها نوشتنی نیست.")
-    reader = await request.multipart()
-    platform, label, content = "other", "", b""
-    async for part in reader:
-        if part.name == "platform":
-            platform = (await part.text()).strip() or "other"
-        elif part.name == "label":
-            label = (await part.text()).strip()
-        elif part.name == "file":
-            content = await part.read(decode=False)
-    if not content:
-        raise web.HTTPFound("/cookies?err=" + "فایلی انتخاب نشد.")
-    if len(content) > 512 * 1024:
-        raise web.HTTPFound("/cookies?err=" + "فایل خیلی بزرگ است.")
-    try:
-        text = content.decode("utf-8-sig", "replace")
-    except Exception:  # noqa: BLE001
-        raise web.HTTPFound("/cookies?err=" + "فایل خوانا نیست.")
-    if not _looks_like_cookiejar(text):
-        converted = _json_to_netscape(text)  # خروجیِ JSONِ Cookie-Editor را هم بپذیر
-        if converted:
-            text = converted
-        else:
-            raise web.HTTPFound(
-                "/cookies?err=" + "نه cookies.txt (Netscape) است نه JSONِ معتبرِ کوکی.")
+    form = await request.post()
+    platform = (form.get("platform") or "other").strip()
+    label = (form.get("label") or "").strip()
+    text, err = _normalize_cookie_text(form.get("content") or "")
+    if err:
+        raise web.HTTPFound("/cookies?err=" + err)
     if platform not in {k for k, _ in COOKIE_PLATFORMS}:
         platform = "other"
-    # نامِ فایل: پلتفرم + برچسب، تا `_pick_cookies` با substringِ platform تطبیقش دهد.
+    err = _check_required(text, platform)
+    if err:
+        raise web.HTTPFound("/cookies?err=" + err)
+    # نامِ فایل با پیشوندِ پلتفرم (استخر با همین پلتفرم را تشخیص می‌دهد)
     stem = platform if platform != "other" else "cookies"
     if label:
         stem += "_" + label
     name = _safe_cookie_name(stem) or "cookies.txt"
-    dest = os.path.join(settings.cookies_dir, name)
-    if os.path.exists(dest):  # برخورد → پسوندِ کوتاه
+    if os.path.exists(os.path.join(settings.cookies_dir, name)):
         name = _safe_cookie_name(f"{stem}_{secrets.token_hex(2)}") or name
-        dest = os.path.join(settings.cookies_dir, name)
-    try:
-        with open(dest, "w", encoding="utf-8") as fh:
-            fh.write(text)
-    except OSError:
-        raise web.HTTPFound("/cookies?err=" + "ذخیره نشد.")
-    try:
-        os.chmod(dest, 0o600)  # best-effort؛ روی برخی bind-mountها اجازه ندارد
-    except OSError:
-        pass
-    await _mirror_cookie(request.app["redis"], name, text)  # تا نودها هم ببینند
-    log.info("cookie uploaded: %s (%d bytes)", name, len(content))
+    redis = request.app["redis"]
+    err = await _save_cookie(redis, name, text)
+    if err:
+        raise web.HTTPFound("/cookies?err=" + err)
+    meta = await ck_pool.get_meta(redis, name)
+    meta.update({"label": label or os.path.splitext(name)[0], "platform": platform,
+                 "added": int(time.time()), "fail_streak": 0, "disabled": False})
+    await ck_pool.set_meta(redis, name, meta)
+    log.info("cookie account added: %s (%d bytes)", name, len(text))
     raise web.HTTPFound("/cookies?ok=up")
+
+
+async def cookies_replace(request: web.Request) -> web.Response:
+    """جایگزینیِ **درجای** کوکیِ یک اکانت (برچسب/تاریخچه حفظ، خطاها صفر می‌شوند)."""
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    if not _cookies_dir_ok():
+        raise web.HTTPFound("/cookies?err=" + "پوشهٔ کوکی‌ها نوشتنی نیست.")
+    form = await request.post()
+    name = _safe_cookie_name(form.get("name") or "")
+    text, err = _normalize_cookie_text(form.get("content") or "")
+    if not name or err:
+        raise web.HTTPFound("/cookies?err=" + (err or "اکانت نامعتبر."))
+    redis = request.app["redis"]
+    meta = await ck_pool.get_meta(redis, name)
+    err = _check_required(text, meta.get("platform") or ck_pool.guess_platform(name))
+    if err:
+        raise web.HTTPFound("/cookies?err=" + err)
+    err = await _save_cookie(redis, name, text)
+    if err:
+        raise web.HTTPFound("/cookies?err=" + err)
+    await ck_pool.mark_ok(redis, name)      # کوکیِ تازه → سالم + کول‌داون پاک
+    log.info("cookie replaced for %s", name)
+    raise web.HTTPFound("/cookies?ok=rep")
 
 
 async def cookies_delete(request: web.Request) -> web.Response:
@@ -1674,10 +1779,10 @@ async def cookies_delete(request: web.Request) -> web.Response:
         if os.path.isfile(path) and os.path.dirname(os.path.abspath(path)) == os.path.abspath(settings.cookies_dir):
             try:
                 os.remove(path)
-                await request.app["redis"].delete(f"ckcd:{name}")
             except Exception:  # noqa: BLE001
                 pass
             await _unmirror_cookie(request.app["redis"], name)  # از آینهٔ نودها هم بردار
+            await ck_pool.del_meta(request.app["redis"], name)  # متادیتا + کول‌داون
     raise web.HTTPFound("/cookies?ok=del")
 
 
@@ -1759,7 +1864,8 @@ def build_app() -> web.Application:
     app.router.add_get("/logout", logout)
     app.router.add_post("/save", save)
     app.router.add_get("/cookies", cookies_page)
-    app.router.add_post("/cookies/upload", cookies_upload)
+    app.router.add_post("/cookies/add", cookies_add)
+    app.router.add_post("/cookies/replace", cookies_replace)
     app.router.add_post("/cookies/delete", cookies_delete)
     app.router.add_post("/cookies/cooldown", cookies_cooldown)
     app.router.add_get("/health", health_page)
