@@ -204,6 +204,7 @@ MESSAGES: dict[str, str] = {
         "(Spotify works without any setup; for more reliability an admin can set a "
         "<code>Client ID</code>/<code>Secret</code> in the panel.)"
     ),
+    "dl_retry_account": "Trying another account",
     "dl_almost": "Final moments — almost there",
     "dl_uploading": "📤 Sending it to you…",
     "dl_downloading": "⬇️ Downloading… {pct}%",

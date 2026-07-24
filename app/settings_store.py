@@ -33,6 +33,7 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "compress_tiny_height": ("int", settings.compress_tiny_height),
     "vjoin_max_mb": ("int", settings.vjoin_max_mb),
     "stream_base": ("str", settings.stream_base),   # نودِ استریم: پایهٔ عمومیِ لینک‌ها
+    "cookie_alert_min": ("int", settings.cookie_alert_min),  # آستانهٔ هشدارِ کوکی
     # ── دانلودر ──
     "downloader_enabled": ("bool", settings.downloader_enabled),
     "dl_allow_unknown": ("bool", settings.dl_allow_unknown),
