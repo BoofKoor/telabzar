@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from aiogram.types import CallbackQuery, Message
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import cookies as ck_pool
 from .. import dl_cache, nodes, safety, settings_store
 from ..callbacks import Dl
 from ..config import settings
@@ -24,18 +26,31 @@ from ..downloader import (
 from ..i18n import t
 from ..models import User
 
+log = logging.getLogger("telabzar.dl.route")
 router = Router(name="download")
 
 _DL_QUEUE = "arq:queue:dl"                 # نودِ دانلود این را برمی‌دارد (IPِ تمیز)
 _DL_QUEUE_MASTER = "arq:queue:dl:master"   # ورکرِ دانلودِ مستر این را برمی‌دارد (fallback)
 
 
-async def _dl_queue(arq_pool: ArqRedis) -> str:
+async def _dl_queue(arq_pool: ArqRedis, platform: str = "") -> str:
     """صفِ مقصدِ دانلود: اگر نودِ دانلود آنلاین است → صفِ نود (`arq:queue:dl`، فقط نود
     برش می‌دارد، IPِ تمیز)؛ وگرنه صفِ مسترِ `arq:queue:dl:master`. اینطوری وقتی نود هست
     هیچ دانلودی روی مستر (IPِ فلگ‌شده) نمی‌افتد و بات‌چکِ «یکی‌درمیان»‌ِ یوتیوب حذف می‌شود."""
     try:
-        if await nodes.role_online(arq_pool, "download"):
+        live = await nodes.list_live(arq_pool)
+        dl_nodes = [nid for nid, v in live.items() if v.get("role") == "download"]
+        if dl_nodes:
+            # اگر **همهٔ** نودهای دانلود برای این پلتفرم مقصر شناخته شده‌اند، به‌جای
+            # اصرار روی آن‌ها به مستر برگرد — همان کاری که ادمین دستی می‌کرد.
+            # محدودیتِ امروز: همهٔ نودهای دانلود یک صفِ مشترک دارند، پس انتخابِ
+            # «کدام نود» ممکن نیست؛ فقط نود-در-برابر-مستر.
+            if platform:
+                cooled = [await ck_pool.exit_cooled(arq_pool, nid, platform)
+                          for nid in dl_nodes]
+                if cooled and all(cooled):
+                    log.info("all download exits cooled for %s → master", platform)
+                    return _DL_QUEUE_MASTER
             return _DL_QUEUE
     except Exception:  # noqa: BLE001  — خطای رجیستری نباید enqueue را بشکند
         pass
@@ -188,7 +203,7 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
             "lang": lang, "url": url, "platform": platform, "engine": engine,
             "owner_id": owner_id, "tg_user_id": uid}
 
-    dlq = await _dl_queue(arq_pool)
+    dlq = await _dl_queue(arq_pool, platform)
     if quick:  # quick-grab: بهترین کیفیت (صوت برای پلتفرمِ صوتی)
         await _charge(arq_pool, uid)
         await arq_pool.enqueue_job(
@@ -246,5 +261,7 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
                "lang": lang, "url": ctx["url"], "platform": ctx["platform"],
                "engine": ctx["engine"], "owner_id": ctx["owner_id"], "tg_user_id": uid,
                "phase": "fetch", "selector": sel}
-    await arq_pool.enqueue_job("run_download", payload, _queue_name=await _dl_queue(arq_pool))
+    await arq_pool.enqueue_job(
+        "run_download", payload,
+        _queue_name=await _dl_queue(arq_pool, str(ctx.get("platform") or "")))
     await cq.answer()

@@ -68,6 +68,29 @@ async def note_exit(redis, node_id: str | None, platform: str, ok: bool) -> None
         pass
 
 
+_CK_EXIT_CD = "ckexitcd:"   # ckexitcd:<exit>:<platform> → خروجی موقتاً کنار گذاشته شد
+
+
+async def cool_exit(redis, node_id: str | None, platform: str, seconds: int) -> None:
+    """خروجی (نه اکانت) کنار گذاشته شود. وقتی IP مقصر است، کول‌داون‌دادن به
+    اکانت‌ها دقیقاً اشتباهِ برعکس است — سشنِ سالم را از سرویس خارج می‌کند."""
+    if redis is None or not platform or seconds <= 0:
+        return
+    try:
+        await redis.set(f"{_CK_EXIT_CD}{exit_label(node_id)}:{platform}", "1", ex=seconds)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def exit_cooled(redis, node_id: str | None, platform: str) -> bool:
+    if redis is None or not platform:
+        return False
+    try:
+        return bool(await redis.exists(f"{_CK_EXIT_CD}{exit_label(node_id)}:{platform}"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def exit_stats(redis, platform: str | None = None) -> list[dict]:
     """[{exit, platform, ok, fail, rate, blocked}] برای امروز.
 
@@ -204,14 +227,28 @@ async def usage(redis, name: str, now: int | None = None) -> int:
 
 
 async def note_use(redis, name: str | None) -> None:
-    """یک استفاده را ثبت کن (سطلِ ساعتی + مهرِ زمانِ آخرین استفاده)."""
+    """اکانت تحویل داده شد → فقط مهرِ زمان (برای فاصلهٔ حداقلی).
+
+    سطلِ ساعتی این‌جا زیاد **نمی‌شود**: سرِ تحویل هنوز نمی‌دانیم این تلاش واقعاً
+    مصرف شد یا خروجی جلوی راه را گرفت. با `note_spend` بعد از معلوم‌شدنِ نتیجه
+    شمرده می‌شود — وگرنه یک خروجیِ مسدود در دو درخواست سهمیهٔ کلِ استخر را می‌خورد.
+    """
+    if not name or redis is None:
+        return
+    try:
+        await redis.set(_CK_LAST + name, str(int(time.time())), ex=3600)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def note_spend(redis, name: str | None) -> None:
+    """تلاش واقعاً به‌حسابِ اکانت خورد (موفق، یا شکستی که تقصیرِ خودش بود)."""
     if not name or redis is None:
         return
     try:
         k = _hour_key(name)
         if await redis.incr(k) == 1:
             await redis.expire(k, 7200)
-        await redis.set(_CK_LAST + name, str(int(time.time())), ex=3600)
     except Exception:  # noqa: BLE001
         pass
 
@@ -475,6 +512,16 @@ async def pick(redis, platform: str, exclude: set[str] | None = None,
             return await pick(redis, platform, exclude, node_id, True, lim)
         return None
     ranked.sort()
+    # هم‌رتبه‌ها را چرخشی انتخاب کن. بدونِ این، وقتی همهٔ اکانت‌ها تازه‌اند
+    # (`last_ok=0`) مرتب‌سازی به **نام** می‌افتد و همیشه یک اکانتِ ثابت قربانیِ
+    # اولین تلاش می‌شود — `_CK_ROT` برای همین ساخته شده بود ولی استفاده نمی‌شد.
+    top = [r for r in ranked if r[:3] == ranked[0][:3]]
+    if len(top) > 1:
+        try:
+            rot = int(await redis.incr(_CK_ROT + platform))
+        except Exception:  # noqa: BLE001
+            rot = 0
+        return top[rot % len(top)][3]
     return ranked[0][3]
 
 
