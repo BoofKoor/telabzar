@@ -34,6 +34,18 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "vjoin_max_mb": ("int", settings.vjoin_max_mb),
     "stream_base": ("str", settings.stream_base),   # نودِ استریم: پایهٔ عمومیِ لینک‌ها
     "cookie_alert_min": ("int", settings.cookie_alert_min),  # آستانهٔ هشدارِ کوکی
+    # ── سهمیه و سرعت‌گیرِ استخرِ سشن (app/cookies.py:Limits) ──
+    "ck_cap_instagram": ("int", settings.ck_cap_instagram),
+    "ck_cap_youtube": ("int", settings.ck_cap_youtube),
+    "ck_cap_twitter": ("int", settings.ck_cap_twitter),
+    "ck_cap_tiktok": ("int", settings.ck_cap_tiktok),
+    "ck_cap_default": ("int", settings.ck_cap_default),
+    "ck_min_gap_sec": ("int", settings.ck_min_gap_sec),
+    "ck_warmup_days": ("int", settings.ck_warmup_days),
+    "ck_warmup_pct": ("int", settings.ck_warmup_pct),
+    "ck_cooldown_min": ("int", settings.ck_cooldown_min),
+    "ck_rate_cooldown_min": ("int", settings.ck_rate_cooldown_min),
+    "ck_invalid_at": ("int", settings.ck_invalid_at),
     # ── دانلودر ──
     "downloader_enabled": ("bool", settings.downloader_enabled),
     "dl_allow_unknown": ("bool", settings.dl_allow_unknown),

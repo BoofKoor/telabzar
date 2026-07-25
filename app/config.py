@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     proxy_url: str = ""            # egressِ تمیزِ خودت، مثل socks5h://host:1080 (خالی = مستقیم)
     cookies_dir: str = ""          # پوشهٔ کوکی‌ها (چرخشِ اکانت برای اینستا/X)
     cookie_alert_min: int = 1      # اگر اکانت‌های سالمِ یک پلتفرم کمتر از این شد → هشدار به ادمین (۰=خاموش)
+    # سهمیه و سرعت‌گیرِ استخرِ سشن — همه از پنل قابلِ تنظیم (`cookies.load_limits`).
+    # تحقیق: فشارِ ۲× یعنی سوختنِ ۴×؛ پس پیش‌فرض‌ها عمداً محافظه‌کارند.
+    ck_cap_instagram: int = 30     # سقفِ استفادهٔ ساعتیِ هر اکانت (۰ = نامحدود)
+    ck_cap_youtube: int = 120
+    ck_cap_twitter: int = 40
+    ck_cap_tiktok: int = 40
+    ck_cap_default: int = 60       # پلتفرم‌های دیگر
+    ck_min_gap_sec: int = 20       # حداقل فاصله بینِ دو استفاده از **یک** اکانت
+    ck_warmup_days: int = 4        # اکانتِ تازه طیِ این چند روز به ظرفیتِ کامل می‌رسد (۰ = بی‌گرم‌کردن)
+    ck_warmup_pct: int = 25        # سهمِ روزِ اول، درصدِ ظرفیت
+    ck_cooldown_min: int = 30      # کول‌داونِ پایه پس از خطا (پلکانی می‌شود)
+    ck_rate_cooldown_min: int = 60 # استراحتِ محدودیتِ نرخ (بدونِ ضربه به اکانت)
+    ck_invalid_at: int = 3         # این تعداد خطای پشتِ‌هم = «باطل، نیازِ تعویض»
     pot_provider_url: str = ""     # http://bgutil-pot-provider:4416 (توکنِ یوتیوب)
     dl_pot_enabled: bool = True    # استفاده از pot-provider؛ اگر پلاگین کرش کند از پنل خاموشش کن
     dl_default_ux: str = "quick"   # probe | quick — پیش‌فرضِ رفتارِ لینک

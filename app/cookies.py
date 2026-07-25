@@ -17,7 +17,9 @@ import json
 import logging
 import os
 import time
+from typing import NamedTuple
 
+from . import settings_store
 from .config import settings
 
 log = logging.getLogger("telabzar.cookies")
@@ -32,43 +34,93 @@ _CK_ROT = "ckrot:"         # ckrot:<platform> → شمارندهٔ چرخش
 HEALTHY, SUSPECT, INVALID, COOLDOWN, DISABLED, FROZEN = (
     "healthy", "suspect", "invalid", "cooldown", "disabled", "frozen")
 
-_INVALID_AT = 3            # این تعداد خطای پشتِ‌هم = «باطل، نیازِ تعویض»
-_COOLDOWN_SEC = 1800       # کول‌داونِ پایه (پلکانی می‌شود)
-_RATE_COOLDOWN = 3600      # سرعت‌گیر: استراحتِ بلند، **بدونِ** ضربه به اکانت
-
 _CK_USE = "ckuse:"         # ckuse:<name>:<yyyymmddHH> → مصرفِ ساعتی (سطلِ توکن)
 _CK_LAST = "cklast:"       # cklast:<name> → زمانِ آخرین استفاده (فاصلهٔ حداقلی)
 
-# سقفِ ساعتیِ هر اکانت. تحقیق: فشارِ ۲× یعنی سوختنِ ۴×، پس محافظه‌کار می‌مانیم.
-# یک IPِ خانگی حدودِ ۲۰۰ درخواست/ساعت تحمل می‌کند؛ ما خیلی زیرِ آن می‌مانیم.
-_HOURLY_CAP = {"instagram": 30, "twitter": 40, "tiktok": 40, "youtube": 120}
-_HOURLY_DEFAULT = 60
-_MIN_GAP_SEC = 20          # حداقل فاصله بین دو استفاده از **یک** اکانت
 
-# گرم‌کردن: اکانتِ تازه با سهمِ کم شروع می‌کند و طیِ چند روز به ظرفیتِ کامل می‌رسد.
-# یک اکانتِ نو که ناگهان پرمصرف شود، دقیقاً الگویی است که تشخیص داده می‌شود.
-_WARMUP_DAYS = 4
-_WARMUP_FLOOR = 0.25       # روزِ اول ۲۵٪ ظرفیت
+# ── سهمیه و سرعت‌گیر (همه از پنل تنظیم‌شدنی) ─────────────────────
+# این اعداد تا دیروز ثابت بودند. حالا `Limits` یک عکسِ فوریِ مقادیرِ زنده است:
+# ریاضیِ خالص **همگام** می‌ماند (تستِ ساده، بدونِ Redis) و فقط `load_limits()`
+# ناهمگام است. هر تابعی که `lim` نگیرد به پیش‌فرضِ env برمی‌گردد، پس مسیرهای
+# قدیمی و تست‌ها دست‌نخورده کار می‌کنند.
+class Limits(NamedTuple):
+    caps: dict[str, int]   # پلتفرم → سقفِ استفادهٔ ساعتیِ هر اکانت (۰ = نامحدود)
+    cap_default: int       # پلتفرمِ خارج از فهرست
+    min_gap: int           # ثانیه، بینِ دو استفاده از یک اکانت
+    warmup_days: int
+    warmup_floor: float    # سهمِ روزِ اول (۰..۱)
+    cooldown: int          # ثانیه — کول‌داونِ پایهٔ خطا (پلکانی)
+    rate_cooldown: int     # ثانیه — استراحتِ محدودیتِ نرخ
+    invalid_at: int        # خطای پشتِ‌هم تا «باطل»
 
 
-def hourly_cap(platform: str) -> int:
-    return _HOURLY_CAP.get(platform, _HOURLY_DEFAULT)
+def _limits_from(cap_ig: int, cap_yt: int, cap_tw: int, cap_tt: int, cap_def: int,
+                 gap: int, wd: int, wpct: int, cd_min: int, rate_min: int,
+                 invalid: int) -> Limits:
+    return Limits(caps={"instagram": max(0, cap_ig), "youtube": max(0, cap_yt),
+                        "twitter": max(0, cap_tw), "tiktok": max(0, cap_tt)},
+                  cap_default=max(0, cap_def), min_gap=max(0, gap),
+                  warmup_days=max(0, wd), warmup_floor=min(1.0, max(0.0, wpct / 100.0)),
+                  cooldown=max(60, cd_min * 60), rate_cooldown=max(60, rate_min * 60),
+                  invalid_at=max(1, invalid))
 
 
-def warmup_factor(added_ts: int, now: int | None = None) -> float:
-    """ضریبِ ظرفیت بر اساسِ سنِ اکانت (۰٫۲۵ → ۱٫۰ طیِ `_WARMUP_DAYS` روز)."""
-    if not added_ts:
+def default_limits() -> Limits:
+    """پیش‌فرضِ env — وقتی settings_store در دسترس نیست (تست/بوت)."""
+    s = settings
+    return _limits_from(s.ck_cap_instagram, s.ck_cap_youtube, s.ck_cap_twitter,
+                        s.ck_cap_tiktok, s.ck_cap_default, s.ck_min_gap_sec,
+                        s.ck_warmup_days, s.ck_warmup_pct, s.ck_cooldown_min,
+                        s.ck_rate_cooldown_min, s.ck_invalid_at)
+
+
+async def load_limits() -> Limits:
+    """مقادیرِ زندهٔ پنل. یک‌بار سرِ هر عملیات خوانده و پایین پاس داده می‌شود."""
+    s, g = settings, settings_store.get_int
+    return _limits_from(
+        await g("ck_cap_instagram", s.ck_cap_instagram),
+        await g("ck_cap_youtube", s.ck_cap_youtube),
+        await g("ck_cap_twitter", s.ck_cap_twitter),
+        await g("ck_cap_tiktok", s.ck_cap_tiktok),
+        await g("ck_cap_default", s.ck_cap_default),
+        await g("ck_min_gap_sec", s.ck_min_gap_sec),
+        await g("ck_warmup_days", s.ck_warmup_days),
+        await g("ck_warmup_pct", s.ck_warmup_pct),
+        await g("ck_cooldown_min", s.ck_cooldown_min),
+        await g("ck_rate_cooldown_min", s.ck_rate_cooldown_min),
+        await g("ck_invalid_at", s.ck_invalid_at))
+
+
+def hourly_cap(platform: str, lim: Limits | None = None) -> int:
+    """۰ = نامحدود (ادمین عمداً سرعت‌گیر را برداشته)."""
+    lim = lim or default_limits()
+    return lim.caps.get(platform, lim.cap_default)
+
+
+def warmup_factor(added_ts: int, now: int | None = None, lim: Limits | None = None) -> float:
+    """ضریبِ ظرفیت بر اساسِ سنِ اکانت (کف → ۱٫۰ طیِ `warmup_days` روز).
+
+    اکانتِ نویی که ناگهان پرمصرف شود، خودش الگویی است که تشخیص داده می‌شود.
+    """
+    lim = lim or default_limits()
+    if not added_ts or lim.warmup_days <= 0:
         return 1.0
     age_days = max(0.0, ((now or int(time.time())) - int(added_ts)) / 86400.0)
-    if age_days >= _WARMUP_DAYS:
+    if age_days >= lim.warmup_days:
         return 1.0
-    return _WARMUP_FLOOR + (1.0 - _WARMUP_FLOOR) * (age_days / _WARMUP_DAYS)
+    return lim.warmup_floor + (1.0 - lim.warmup_floor) * (age_days / lim.warmup_days)
 
 
-def budget_of(meta: dict, now: int | None = None) -> int:
-    """سقفِ مجازِ این ساعت برای این اکانت (ظرفیتِ پلتفرم × ضریبِ گرم‌شدن)."""
-    cap = hourly_cap(str(meta.get("platform") or ""))
-    return max(1, int(cap * warmup_factor(int(meta.get("added") or 0), now)))
+def budget_of(meta: dict, now: int | None = None, lim: Limits | None = None) -> int:
+    """سقفِ مجازِ این ساعت برای این اکانت (ظرفیتِ پلتفرم × ضریبِ گرم‌شدن).
+
+    ۰ یعنی «بی‌نهایت» — سرعت‌گیر از پنل خاموش شده.
+    """
+    lim = lim or default_limits()
+    cap = hourly_cap(str(meta.get("platform") or ""), lim)
+    if cap <= 0:
+        return 0
+    return max(1, int(cap * warmup_factor(int(meta.get("added") or 0), now, lim)))
 
 
 def _hour_key(name: str, now: int | None = None) -> str:
@@ -98,15 +150,20 @@ async def note_use(redis, name: str | None) -> None:
         pass
 
 
-async def _over_budget(redis, name: str, meta: dict, now: int) -> bool:
+async def _over_budget(redis, name: str, meta: dict, now: int,
+                       lim: Limits | None = None) -> bool:
     """آیا این اکانت سهمیهٔ ساعتی‌اش را تمام کرده یا خیلی زود دوباره صدا زده می‌شود؟"""
-    if await usage(redis, name, now) >= budget_of(meta, now):
+    lim = lim or default_limits()
+    cap = budget_of(meta, now, lim)
+    if cap and await usage(redis, name, now) >= cap:
         return True
+    if lim.min_gap <= 0:
+        return False
     try:
         last = int(await redis.get(_CK_LAST + name) or 0)
     except Exception:  # noqa: BLE001
         last = 0
-    return bool(last and now - last < _MIN_GAP_SEC)
+    return bool(last and now - last < lim.min_gap)
 
 # ── دسته‌بندیِ خطا ───────────────────────────────────────────────
 # شمارندهٔ «۳ خطای پشتِ‌هم = باطل» خام بود: یک محدودیتِ نرخ (که یعنی *ما* تند رفتیم)
@@ -216,7 +273,8 @@ async def list_names(redis) -> tuple[list[str], bool]:
     return names, False
 
 
-async def status_of(redis, name: str, meta: dict | None = None) -> str:
+async def status_of(redis, name: str, meta: dict | None = None,
+                    lim: Limits | None = None) -> str:
     meta = meta if meta is not None else await get_meta(redis, name)
     if meta.get("disabled"):
         return DISABLED
@@ -229,20 +287,22 @@ async def status_of(redis, name: str, meta: dict | None = None) -> str:
         except Exception:  # noqa: BLE001
             pass
     fs = int(meta.get("fail_streak") or 0)
-    if fs >= _INVALID_AT:
+    if fs >= (lim or default_limits()).invalid_at:
         return INVALID
     return SUSPECT if fs > 0 else HEALTHY
 
 
-async def accounts(redis, platform: str | None = None) -> list[dict]:
+async def accounts(redis, platform: str | None = None,
+                   lim: Limits | None = None) -> list[dict]:
     """همهٔ اکانت‌ها با وضعیت (برای پنل). اگر platform داده شود، فیلتر می‌شود."""
+    lim = lim or await load_limits()
     names, _local = await list_names(redis)
     out: list[dict] = []
     for n in names:
         meta = await get_meta(redis, n)
         if platform and meta.get("platform") != platform:
             continue
-        st = await status_of(redis, n, meta)
+        st = await status_of(redis, n, meta, lim)
         cd = 0
         if redis is not None and st == COOLDOWN:
             try:
@@ -276,7 +336,8 @@ _USE_ORDER = (HEALTHY, SUSPECT, INVALID)  # کول‌داون/غیرفعال ه�
 
 
 async def pick(redis, platform: str, exclude: set[str] | None = None,
-               node_id: str | None = None, ignore_budget: bool = False) -> str | None:
+               node_id: str | None = None, ignore_budget: bool = False,
+               lim: Limits | None = None) -> str | None:
     """نامِ کوکیِ بعدیِ قابلِ‌استفاده برای این پلتفرم (یا None اگر چیزی نماند).
 
     اولویت: سالم → مشکوک → باطل (آخرین چاره؛ بهتر از هیچ). غیرفعال/کول‌داون/فریز رد
@@ -289,9 +350,10 @@ async def pick(redis, platform: str, exclude: set[str] | None = None,
     اگر همه سهمیه‌شان تمام باشد، `ignore_budget=True` آخرین تلاش را ممکن می‌کند.
     """
     exclude = exclude or set()
+    lim = lim or await load_limits()   # یک‌بار برای کلِ انتخاب (نه per-account)
     now = int(time.time())
     ranked: list[tuple[int, int, int, str]] = []
-    for a in await accounts(redis, platform):
+    for a in await accounts(redis, platform, lim):
         if a["name"] in exclude or a["status"] in (COOLDOWN, DISABLED, FROZEN):
             continue
         try:
@@ -301,7 +363,7 @@ async def pick(redis, platform: str, exclude: set[str] | None = None,
         pinned = str(a.get("node_id") or "")
         if pinned and node_id and pinned != node_id:
             continue                       # هویتِ این اکانت به خروجیِ دیگری بسته است
-        if not ignore_budget and await _over_budget(redis, a["name"], a, now):
+        if not ignore_budget and await _over_budget(redis, a["name"], a, now, lim):
             continue
         # اکانتِ پین‌شده به همین خروجی مقدم است (هویتِ پایدار = عمرِ بیشتر)
         affinity = 0 if (pinned and pinned == node_id) else 1
@@ -309,7 +371,7 @@ async def pick(redis, platform: str, exclude: set[str] | None = None,
     if not ranked:
         # همه سهمیه‌شان پر است؟ یک‌بار بدونِ سرعت‌گیر تلاش کن تا کاربر بی‌جواب نماند
         if not ignore_budget:
-            return await pick(redis, platform, exclude, node_id, ignore_budget=True)
+            return await pick(redis, platform, exclude, node_id, True, lim)
         return None
     ranked.sort()
     return ranked[0][3]
@@ -359,7 +421,8 @@ async def mark_ok(redis, name: str | None) -> None:
 
 
 async def mark_fail(redis, name: str | None, cooldown: bool = True,
-                    error_class: str = "", message: str = "") -> dict:
+                    error_class: str = "", message: str = "",
+                    lim: Limits | None = None) -> dict:
     """خطا → واکنشِ **متناسب با دستهٔ آن**، نه یک شمارندهٔ واحد.
 
     - `rate_limit`: فقط استراحتِ بلند. ضربه‌ای به اکانت نمی‌خورد — اکانت سالم است،
@@ -369,6 +432,7 @@ async def mark_fail(redis, name: str | None, cooldown: bool = True,
     """
     if not name or redis is None:
         return {}
+    lim = lim or await load_limits()
     meta = await get_meta(redis, name)
     meta["last_error"] = (error_class or "") + ((" · " + " ".join(message.split())[:120])
                                                 if message else "")
@@ -377,7 +441,7 @@ async def mark_fail(redis, name: str | None, cooldown: bool = True,
     if error_class == RATE_LIMIT:
         await set_meta(redis, name, meta)
         try:
-            await redis.set(_CK_CD + name, "1", ex=_RATE_COOLDOWN)
+            await redis.set(_CK_CD + name, "1", ex=lim.rate_cooldown)
         except Exception:  # noqa: BLE001
             pass
         return meta
@@ -390,7 +454,7 @@ async def mark_fail(redis, name: str | None, cooldown: bool = True,
     meta["fail_streak"] = int(meta.get("fail_streak") or 0) + 1
     await set_meta(redis, name, meta)
     if cooldown:
-        sec = min(_COOLDOWN_SEC * (2 ** (meta["fail_streak"] - 1)), 6 * 3600)
+        sec = min(lim.cooldown * (2 ** (meta["fail_streak"] - 1)), 6 * 3600)
         try:
             await redis.set(_CK_CD + name, "1", ex=sec)
         except Exception:  # noqa: BLE001
