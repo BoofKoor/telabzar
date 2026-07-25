@@ -111,6 +111,21 @@ GROUPS = [
     ("🍪 کوکی‌ها", [
         ("cookie_alert_min", "هشدار وقتی اکانتِ سالم کمتر از", "۰ = خاموش · به تلگرامِ ادمین"),
     ]),
+    # سهمیهٔ استخرِ سشن. تحقیق: فشارِ ۲× یعنی سوختنِ ۴× — بالا بردن این اعداد
+    # سرعت می‌دهد ولی عمرِ اکانت را کوتاه می‌کند.
+    ("🧬 سهمیهٔ استخرِ سشن", [
+        ("ck_cap_instagram", "سقفِ ساعتیِ اینستاگرام", "دانلود در ساعت، برای هر اکانت · ۰ = بی‌سقف"),
+        ("ck_cap_youtube", "سقفِ ساعتیِ یوتیوب", "ناشناس هم جواب می‌دهد، پس دست‌ودل‌بازتر"),
+        ("ck_cap_twitter", "سقفِ ساعتیِ X / توییتر", ""),
+        ("ck_cap_tiktok", "سقفِ ساعتیِ تیک‌تاک", ""),
+        ("ck_cap_default", "سقفِ ساعتیِ بقیه", "پلتفرمِ خارج از فهرست"),
+        ("ck_min_gap_sec", "حداقل فاصلهٔ دو استفاده (ثانیه)", "از یک اکانت · ۰ = بدونِ فاصله"),
+        ("ck_warmup_days", "روزهای گرم‌کردنِ اکانتِ تازه", "۰ = بدونِ گرم‌کردن"),
+        ("ck_warmup_pct", "سهمِ روزِ اول (درصد)", "۲۵ = یک‌چهارمِ ظرفیت، بعد پلکانی تا ۱۰۰"),
+        ("ck_cooldown_min", "کول‌داونِ خطا (دقیقه)", "پایه · هر خطای بعدی دوبرابر، تا ۶ ساعت"),
+        ("ck_rate_cooldown_min", "استراحتِ محدودیتِ نرخ (دقیقه)", "بدونِ ضربه به اکانت"),
+        ("ck_invalid_at", "خطای پشتِ‌هم تا «باطل»", "این تعداد شکست = نیازمندِ تعویض"),
+    ]),
     ("🔗 لینک و استریم", [
         ("stream_base", "پایهٔ لینک (نودِ استریم)", "خالی = دامنهٔ مستر · مثل https://cdn.example.com"),
     ]),
@@ -454,7 +469,7 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
       <b class=ck-name>{{c.label}}</b>
       <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
       <span class=ck-meta>آخرین موفقیت: {{c.last_ok_fa}} · خطا: <bdi>{{c.fail_streak}}</bdi> · افزوده: {{c.added_fa}}
-        · سهمیه: <bdi>{{c.used}}/{{c.budget}}</bdi> در ساعت{% if c.warming %} <span class=chip>در حالِ گرم‌شدن</span>{% endif %}
+        · سهمیه: {% if c.budget %}<bdi>{{c.used}}/{{c.budget}}</bdi> در ساعت{% else %}<bdi>{{c.used}}</bdi> در ساعت · بی‌سقف{% endif %}{% if c.warming %} <span class=chip>در حالِ گرم‌شدن</span>{% endif %}
         {%- if c.node_id %} · خروجی: <span class=mono>{{c.node_name}}</span>{% endif %}</span>
       <span class=ck-acts>
         <button class=btn-sm onclick="var d=document.getElementById('i-{{loop.index0}}-{{g.platform}}');
@@ -2008,7 +2023,8 @@ async def cookies_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     redis = request.app["redis"]
-    accounts = await ck_pool.accounts(redis)
+    lim = await ck_pool.load_limits()   # سهمیهٔ زنده (از /settings) — یک‌بار برای کلِ صفحه
+    accounts = await ck_pool.accounts(redis, lim=lim)
     # نودهای موجود برای پینِ خروجی (هویتِ سشن = کوکی + IP + UA)
     async with Sessionmaker() as db:
         node_rows = (await db.execute(select(Node))).scalars().all()
@@ -2022,8 +2038,8 @@ async def cookies_page(request: web.Request) -> web.Response:
                 "last_ok_fa": _ago_fa(a.get("last_ok") or 0),
                 "added_fa": _ago_fa(a.get("added") or 0),
                 "used": await ck_pool.usage(redis, a["name"]),
-                "budget": ck_pool.budget_of(a),
-                "warming": ck_pool.warmup_factor(int(a.get("added") or 0)) < 1.0,
+                "budget": ck_pool.budget_of(a, None, lim),
+                "warming": ck_pool.warmup_factor(int(a.get("added") or 0), None, lim) < 1.0,
                 "node_id": a.get("node_id") or "", "proxy": a.get("proxy") or "",
                 "user_agent": a.get("user_agent") or "",
                 "node_name": node_names.get(a.get("node_id") or "", a.get("node_id") or "")}
