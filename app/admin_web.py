@@ -465,6 +465,36 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
   </div>
 </div>
 
+{% if exits %}
+<div class=card><h3>🌐 خروجی‌ها <span class=tag>امروز</span></h3><div class=rows>
+  <div class=hint style="border:0;padding:0 0 10px">
+    وقتی <b>همهٔ</b> اکانت‌ها می‌افتند، معمولاً مقصر سشن‌ها نیستند بلکه IPی است که
+    از آن بیرون می‌رویم — اینستاگرام IP را هویت می‌داند و رنجِ دیتاسنتر را می‌بندد.
+    این جدول همان تفاوت را نشان می‌دهد.
+  </div>
+  {% for e in exits %}
+    <div class=stat><b>{{ pfa.get(e.platform, e.platform) }} · <span class=mono>{{e.exit}}</span></b>
+      <div class=meter><i style="width:{{e.rate}}%;background:{{'#16a34a' if e.rate>=70 else '#dc2626' if e.blocked else '#d97706'}}"></i></div>
+      <span class=num>{{e.rate}}% · {{e.ok}}/{{e.ok+e.fail}}</span></div>
+    {% if e.blocked %}<div class=errbox>هیچ دانلودِ موفقی از این خروجی برای
+      «{{ pfa.get(e.platform, e.platform) }}» ثبت نشده ({{e.fail}} شکست). به‌احتمالِ زیاد
+      IPِ این خروجی مسدود است، نه کوکی‌ها — تعویضِ سشن کمکی نمی‌کند؛ خروجی/پروکسی را عوض کن.</div>{% endif %}
+  {% endfor %}
+</div></div>
+{% endif %}
+
+{% if mirror_gap %}
+<div class=card style="border-color:#fecaca"><h3>⚠️ ناهمخوانیِ آینهٔ کوکی‌ها</h3><div class=pad>
+  {# عدد و واژهٔ لاتین را کنارِ هم نگذار: در پاراگرافِ RTL جابه‌جا رندر می‌شوند.
+     هر کدام باید بینِ کلمه‌های فارسی بنشیند. #}
+  <div class=errbox>روی دیسک <bdi>{{disk_count}}</bdi> کوکی هست، ولی فقط
+    <bdi>{{mirrored}}</bdi> تا از آن‌ها در Redis آینه شده — نودِ دانلود بقیه را
+    اصلاً نمی‌بیند.</div>
+  <form class=inline method=post action=/cookies/resync style="margin-top:10px">
+    <button class=btn-go>همگام‌سازیِ دوباره</button></form>
+</div></div>
+{% endif %}
+
 {% if attention %}
 <div class=card style="border-color:#fecaca">
   <h3>🛑 نیازمندِ رسیدگی <span class="tag" style="background:#fef2f2;color:#b91c1c">{{attention|length}}</span></h3>
@@ -505,7 +535,9 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
       <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
       <span class=ck-meta>آخرین موفقیت: {{c.last_ok_fa}} · خطا: <bdi>{{c.fail_streak}}</bdi> · افزوده: {{c.added_fa}}
         · سهمیه: {% if c.budget %}<bdi>{{c.used}}/{{c.budget}}</bdi> در ساعت{% else %}<bdi>{{c.used}}</bdi> در ساعت · بی‌سقف{% endif %}{% if c.warming %} <span class=chip>در حالِ گرم‌شدن</span>{% endif %}
-        {%- if c.node_id %} · خروجی: <span class=mono>{{c.node_name}}</span>{% endif %}</span>
+        {%- if c.node_id %} · خروجی: <span class=mono>{{c.node_name}}</span>{% endif %}
+        {%- if c.err_txt %}<br><span style="color:#b45309">آخرین خطا ({{c.err_fa}}):
+          <span class=mono>{{c.err_txt}}</span></span>{% endif %}</span>
       <span class=ck-acts>
         <button class=btn-sm onclick="var d=document.getElementById('i-{{loop.index0}}-{{g.platform}}');
           d.style.display=d.style.display=='none'?'block':'none';return false">🧬 هویت</button>
@@ -2047,10 +2079,11 @@ async def node_peers(request: web.Request) -> web.Response:
 
 _STATUS_FA = {ck_pool.HEALTHY: "سالم", ck_pool.SUSPECT: "مشکوک", ck_pool.INVALID: "باطل — نیازِ تعویض",
               ck_pool.COOLDOWN: "کنارگذاشته", ck_pool.DISABLED: "غیرفعال",
-              ck_pool.FROZEN: "چک‌پوینت — نیازِ انسان"}
+              ck_pool.FROZEN: "چک‌پوینت — نیازِ انسان",
+              ck_pool.UNPROVEN: "آخرین تلاش ناموفق"}
 _STATUS_BADGE = {ck_pool.HEALTHY: "ok", ck_pool.SUSPECT: "warn", ck_pool.INVALID: "err",
                  ck_pool.COOLDOWN: "warn", ck_pool.DISABLED: "mute",
-                 ck_pool.FROZEN: "err"}
+                 ck_pool.FROZEN: "err", ck_pool.UNPROVEN: "warn"}
 
 
 def _ago_fa(ts: int) -> str:
@@ -2088,6 +2121,10 @@ async def cookies_page(request: web.Request) -> web.Response:
                 "used": await ck_pool.usage(redis, a["name"]),
                 "budget": ck_pool.budget_of(a, None, lim),
                 "warming": ck_pool.warmup_factor(int(a.get("added") or 0), None, lim) < 1.0,
+                # متنِ خطا تا امروز ذخیره می‌شد ولی هیچ‌جا دیده نمی‌شد — همان چیزی
+                # که ادمین برای فهمیدنِ «چرا کار نمی‌کند» لازم دارد.
+                "err_txt": (a.get("last_error") or "")[:150],
+                "err_fa": _ago_fa(a.get("last_error_at") or 0),
                 "node_id": a.get("node_id") or "", "proxy": a.get("proxy") or "",
                 "user_agent": a.get("user_agent") or "",
                 "node_name": node_names.get(a.get("node_id") or "", a.get("node_id") or "")}
@@ -2098,11 +2135,11 @@ async def cookies_page(request: web.Request) -> web.Response:
         if items:
             groups.append({"platform": key, "items": items, "total": len(items),
                            "healthy": sum(1 for i in items
-                                          if i["status"] in (ck_pool.HEALTHY, ck_pool.SUSPECT))})
+                                          if i["status"] in ck_pool.USABLE)})
     for key, items in by_platform.items():  # پلتفرم‌های خارج از فهرست
         groups.append({"platform": key, "items": items, "total": len(items),
                        "healthy": sum(1 for i in items
-                                      if i["status"] in (ck_pool.HEALTHY, ck_pool.SUSPECT))})
+                                      if i["status"] in ck_pool.USABLE)})
     # صفِ رسیدگی: فریزشده (چک‌پوینت/۲FA) یا باطل — با تلاشِ خودکار درست نمی‌شوند
     attention = [{**a, "status_fa": _STATUS_FA.get(a["status"], a["status"]),
                   "badge": _STATUS_BADGE.get(a["status"], "mute")}
@@ -2110,20 +2147,28 @@ async def cookies_page(request: web.Request) -> web.Response:
     msg = {"up": "اکانت اضافه شد.", "del": "اکانت حذف شد.", "rep": "کوکی جایگزین شد.",
            "cd": "وضعیتِ اکانت به‌روزرسانی شد.",
            "fix": "اکانت به چرخش برگشت.",
-           "ident": "هویتِ اکانت ذخیره شد."}.get(request.query.get("ok", ""), "")
+           "ident": "هویتِ اکانت ذخیره شد.",
+           "sync": "آینهٔ کوکی‌ها همگام شد."}.get(request.query.get("ok", ""), "")
     dl_node = await node_mod.role_online(redis, "download")
     mirrored = 0
     try:
         mirrored = await redis.scard(_CK_SET)
     except Exception:  # noqa: BLE001
         pass
+    # آینه باید دقیقاً به‌اندازهٔ فایل‌های روی دیسک باشد؛ اگر نیست، نودِ دانلود
+    # بخشی از اکانت‌ها را اصلاً نمی‌بیند و علتش هم بی‌سروصدا می‌ماند.
+    disk_count = len(glob.glob(os.path.join(settings.cookies_dir, "*.txt"))) \
+        if settings.cookies_dir and os.path.isdir(settings.cookies_dir) else 0
+    exits = await ck_pool.exit_stats(redis)
     return _render("cookies", admin_id=_session_admin(request), active="cookies",
                    pill_ok=await _pill_ok(request.app), groups=groups,
                    platforms=COOKIE_PLATFORMS, dir_ok=_cookies_dir_ok(),
                    attention=attention, nodes=nodes,
                    cookies_dir=settings.cookies_dir, saved=msg,
                    error=request.query.get("err", ""),
-                   dl_node_online=dl_node, mirrored=mirrored)
+                   dl_node_online=dl_node, mirrored=mirrored,
+                   disk_count=disk_count, exits=exits, pfa=PLATFORM_LABELS,
+                   mirror_gap=bool(disk_count and disk_count != mirrored))
 
 
 # ── آینهٔ کوکی در Redis (تا نودِ دانلود که دیسکِ کوکیِ مستر را ندارد هم ببیندشان) ──
@@ -2189,6 +2234,14 @@ async def cookies_identity(request: web.Request) -> web.Response:
     meta["user_agent"] = (form.get("user_agent") or "").strip()[:300]
     await ck_pool.set_meta(redis, name, meta)
     raise web.HTTPFound("/cookies?ok=ident")
+
+
+async def cookies_resync(request: web.Request) -> web.Response:
+    """آینهٔ Redis را دوباره از روی دیسک بساز — نودِ دانلود فقط همین را می‌بیند."""
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    await _mirror_all_cookies(request.app["redis"])
+    raise web.HTTPFound("/cookies?ok=sync")
 
 
 async def cookies_unfreeze(request: web.Request) -> web.Response:
@@ -2366,6 +2419,7 @@ def build_app() -> web.Application:
     app.router.add_post("/cookies/replace", cookies_replace)
     app.router.add_post("/cookies/delete", cookies_delete)
     app.router.add_post("/cookies/unfreeze", cookies_unfreeze)
+    app.router.add_post("/cookies/resync", cookies_resync)
     app.router.add_post("/cookies/identity", cookies_identity)
     app.router.add_post("/cookies/cooldown", cookies_cooldown)
     app.router.add_get("/health", health_page)
