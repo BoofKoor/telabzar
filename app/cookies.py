@@ -339,10 +339,18 @@ async def del_meta(redis, name: str) -> None:
 
 # ── فهرستِ نام‌ها (مستر: دیسک · نود: آینهٔ Redis) ────────────────
 async def list_names(redis) -> tuple[list[str], bool]:
-    """(نام‌ها, محلی‌بودن). محلی=True یعنی مستر (فایل روی دیسک)."""
+    """(نام‌ها, محلی‌بودن). محلی=True یعنی مستر (فایل روی دیسک).
+
+    نکتهٔ ظریف: شاخهٔ دیسک فقط وقتی برنده است که **واقعاً فایلی پیدا کند**. اگر
+    `COOKIES_DIR` روی نود ست شده باشد ولی خالی/اشتباه باشد، صرفِ «وجود داشتنِ
+    پوشه» باعث می‌شد فهرست خالی برگردد و آینهٔ Redis اصلاً خوانده نشود — یعنی نود
+    هیچ اکانتی نمی‌دید و دانلود بی‌کوکی می‌رفت، بی‌آنکه جایی ثبت شود.
+    """
     d = settings.cookies_dir
     if d and os.path.isdir(d):
-        return sorted(os.path.basename(f) for f in glob.glob(os.path.join(d, "*.txt"))), True
+        local = sorted(os.path.basename(f) for f in glob.glob(os.path.join(d, "*.txt")))
+        if local:
+            return local, True
     names: list[str] = []
     if redis is not None:
         try:
@@ -476,7 +484,10 @@ async def materialize(redis, name: str, workdir: str | None) -> str | None:
     d = settings.cookies_dir
     if d and os.path.isdir(d):
         p = os.path.join(d, name)
-        return p if os.path.exists(p) else None
+        if os.path.exists(p):
+            return p
+        # روی دیسک نبود → به‌جای تسلیم، آینهٔ Redis را امتحان کن. وگرنه یک
+        # COOKIES_DIRِ اشتباه/خالی روی نود همهٔ اکانت‌ها را نامرئی می‌کند.
     if redis is None or not workdir:
         return None
     try:
