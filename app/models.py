@@ -57,6 +57,9 @@ class File(Base):
     # متنِ اصلیِ پستِ مبدأ (کپشنِ اینستاگرام، عنوان/توضیحِ یوتیوب) — خامِ **بدونِ HTML**؛
     # حالتِ جمع‌شدهٔ کارت آن را در بلاک‌کوتِ بسته نشان می‌دهد (سرِ رندر escape می‌شود).
     post_caption: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # پلتفرمِ مبدأ برای فایلِ دانلودی (youtube/instagram/…). شمارنده‌های Redis فقط ۲ روز
+    # عمر دارند، پس بدونِ این ستون آمارِ تاریخیِ «کدام پلتفرم» ساخته نمی‌شود.
+    platform: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -153,6 +156,10 @@ class DownloadCache(Base):
     width: Mapped[int | None] = mapped_column(nullable=True)
     height: Mapped[int | None] = mapped_column(nullable=True)
     duration: Mapped[int | None] = mapped_column(nullable=True)
+    # کپشنِ پست و پلتفرم هم کش می‌شوند، وگرنه تحویلِ آنی کارتِ فقیرتری از دانلودِ واقعی می‌دهد
+    post_caption: Mapped[str | None] = mapped_column(Text, nullable=True)
+    platform: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    hits: Mapped[int] = mapped_column(default=0)  # چندبار از کش تحویل شد (سنجشِ سودِ کش)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

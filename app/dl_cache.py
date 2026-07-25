@@ -34,11 +34,13 @@ async def put_cached(session: AsyncSession, url: str, selector: str, f: File) ->
         session.add(DownloadCache(
             key=key, file_id=f.file_id, file_unique_id=f.file_unique_id, kind=f.kind,
             name=f.name, size=f.size, width=f.width, height=f.height, duration=f.duration,
+            post_caption=f.post_caption, platform=f.platform,
         ))
     else:
         row.file_id, row.file_unique_id = f.file_id, f.file_unique_id
         row.kind, row.name, row.size = f.kind, f.name, f.size
         row.width, row.height, row.duration = f.width, f.height, f.duration
+        row.post_caption, row.platform = f.post_caption, f.platform
     await session.commit()
 
 
@@ -51,9 +53,10 @@ async def deliver_from_cache(bot: Bot, session: AsyncSession, chat_id: int, owne
         file_unique_id=cache.file_unique_id or "", file_id=cache.file_id,
         kind=cache.kind, mime=None, name=cache.name, size=cache.size,
         width=cache.width, height=cache.height, duration=cache.duration,
-        changelog=[], source="dl",
+        changelog=[], source="dl", post_caption=cache.post_caption, platform=cache.platform,
     )
     session.add(f)
+    cache.hits = (cache.hits or 0) + 1   # سودِ کش قابلِ‌سنجش شود (صفحهٔ آمار)
     await session.commit()
     if anchor_mid is not None:
         await update_card(bot, chat_id, anchor_mid, f, lang)  # عکسِ منو → ویدیو، درجا
