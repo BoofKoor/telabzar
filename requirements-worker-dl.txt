@@ -8,3 +8,5 @@ gallery-dl                 # گالری/کاروسلِ عکس
 bgutil-ytdlp-pot-provider  # پلاگینِ PO Token یوتیوب
 aiohttp                    # Spotify Web API + Cobalt (aiogram هم می‌آورد؛ صریح برای اطمینان)
 ytmusicapi>=1.8,<2         # سرچِ کاتالوگِ «songs»ی YouTube Music (تطبیقِ دقیقِ اسپاتیفای)
+nudenet>=3.4,<4            # فیلترِ بزرگسال — باید همان‌جا که دانلود می‌شود اجرا شود
+onnxruntime>=1.16,<2       # موتورِ NudeNet (تنها بخشِ سنگینی که این ایمیج می‌گیرد)

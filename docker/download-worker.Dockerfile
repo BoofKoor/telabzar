@@ -22,6 +22,10 @@ WORKDIR /srv
 COPY requirements.txt requirements-worker-dl.txt ./
 RUN pip install --no-cache-dir -r requirements-worker-dl.txt
 
+# مدلِ NudeNet را همین‌جا آماده کن: نودِ دانلود ممکن است egressِ محدود داشته باشد
+# و دانلودِ مدل سرِ اولین فایل، بی‌سروصدا فیلتر را خاموش می‌کند.
+RUN python -c "from nudenet import NudeDetector; NudeDetector()"
+
 COPY app ./app
 
 CMD ["arq", "app.worker.DownloadWorkerSettings"]

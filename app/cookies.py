@@ -168,8 +168,8 @@ async def _over_budget(redis, name: str, meta: dict, now: int,
 # ── دسته‌بندیِ خطا ───────────────────────────────────────────────
 # شمارندهٔ «۳ خطای پشتِ‌هم = باطل» خام بود: یک محدودیتِ نرخ (که یعنی *ما* تند رفتیم)
 # با یک لاگین‌نداشتنِ واقعی یکی حساب می‌شد. حالا هر خطا دسته می‌گیرد و واکنش فرق می‌کند.
-RATE_LIMIT, CHECKPOINT, LOGIN_REQUIRED, BOT_CHECK, UNRELATED = (
-    "rate_limit", "checkpoint", "login_required", "bot_check", "unrelated")
+RATE_LIMIT, CHECKPOINT, LOGIN_REQUIRED, BOT_CHECK, TRANSIENT, UNRELATED = (
+    "rate_limit", "checkpoint", "login_required", "bot_check", "transient", "unrelated")
 
 _CLASS_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # ترتیب مهم است: خاص‌ترین اول. «چک‌پوینت» باید قبل از «لاگین» بیاید چون
@@ -186,6 +186,14 @@ _CLASS_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (LOGIN_REQUIRED, ("login required", "login_required", "not logged", "sign in",
                       "requires authentication", "unauthorized", "401", "403",
                       "login page", "redirect to home page", "session expired", "csrf")),
+    # پاسخِ بی‌معنا از سرور: بدنهٔ خالی یا HTML به‌جای JSON. اینستاگرام وقتی سشن/IP
+    # را قبول ندارد اغلب همین را می‌دهد (نه پیامِ لاگین)، **ولی** همین خطا وقتی
+    # هم می‌آید که خودِ extractor با تغییرِ سایت عقب افتاده باشد. پس مبهم است:
+    # اکانتِ بعدی را امتحان کن، اما هیچ اکانتی را مقصر ندان.
+    (TRANSIENT, ("jsondecodeerror", "failed to parse json", "unable to parse json",
+                 "expecting value: line 1 column 1", "empty response",
+                 "unexpected error occurred", "connection reset", "read timed out",
+                 "remote end closed connection")),
 )
 
 
@@ -206,7 +214,11 @@ def needs_human(cls: str) -> bool:
 
 
 def burns_account(cls: str) -> bool:
-    """آیا این خطا واقعاً به اعتبارِ اکانت می‌خورد؟ محدودیتِ نرخ **نمی‌خورد**."""
+    """آیا این خطا واقعاً به اعتبارِ اکانت می‌خورد؟
+
+    محدودیتِ نرخ **نمی‌خورد** (ما تند رفته‌ایم، نه اکانت خراب است) و خطای
+    `transient` هم نه (پاسخِ بی‌معنای سرور می‌تواند اصلاً ربطی به اکانت نداشته باشد).
+    """
     return cls in (CHECKPOINT, LOGIN_REQUIRED, BOT_CHECK)
 
 
@@ -446,6 +458,13 @@ async def mark_fail(redis, name: str | None, cooldown: bool = True,
             await redis.set(_CK_CD + name, "1", ex=lim.rate_cooldown)
         except Exception:  # noqa: BLE001
             pass
+        return meta
+
+    if error_class == TRANSIENT:
+        # فقط ثبت می‌شود تا در پنل دیده شود. نه شمارنده، نه کول‌داون: اگر علت
+        # واقعاً سمتِ سایت/extractor باشد، کول‌داون‌دادن یعنی کلِ استخر را برای
+        # مشکلی که ربطی به اکانت‌ها ندارد از دور خارج کرده‌ایم.
+        await set_meta(redis, name, meta)
         return meta
 
     if error_class == CHECKPOINT:

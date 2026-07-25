@@ -32,6 +32,7 @@ from . import cookies as ck
 from . import dl_cache
 from . import downloader as D
 from . import processing as P
+from . import safety
 from . import settings_store
 from . import textstore
 from .cards import message_media_id, progress_note, send_card, update_card
@@ -50,6 +51,13 @@ _BAN_HINTS = ("login required", "rate-limit", "rate limit", "sign in", "checkpoi
 # حساب می‌شد → نه اکانتِ بعدی امتحان می‌شد و نه اکانتِ مرده علامت می‌خورد.
 _LOGIN_HINTS = ("login", "not logged", "sign in", "account", "checkpoint", "challenge",
                 "redirect to home page")
+# پاسخِ بی‌معنا (بدنهٔ خالی/HTML به‌جای JSON). اینستاگرام وقتی سشن یا IP را قبول
+# ندارد اغلب همین را می‌دهد، ولی همین خطا وقتی هم می‌آید که خودِ extractor عقب
+# افتاده باشد. پس ارزشِ **تلاش با اکانتِ بعدی** را دارد ولی نباید اکانت را بسوزاند
+# (رجوع به `cookies.TRANSIENT` که نه شمارنده بالا می‌برد نه کول‌داون می‌دهد).
+_TRANSIENT_HINTS = ("jsondecodeerror", "failed to parse json", "unable to parse json",
+                    "expecting value: line 1 column 1", "empty response",
+                    "unexpected error occurred")
 
 
 class DownloadTooLarge(Exception):
@@ -71,7 +79,8 @@ def _is_cookie_error(msg: str, platform: str | None = None) -> bool:
     low = (msg or "").lower()
     if D.is_youtube_botcheck(msg, platform):
         return True
-    return any(h in low for h in _BAN_HINTS) or any(h in low for h in _LOGIN_HINTS)
+    return (any(h in low for h in _BAN_HINTS) or any(h in low for h in _LOGIN_HINTS)
+            or any(h in low for h in _TRANSIENT_HINTS))
 
 
 # یوتیوب بدونِ لاگین ~۳۰۰ ویدیو در ساعت می‌دهد (با لاگین ~۲۰۰۰). پس چسباندنِ کوکی به
@@ -489,6 +498,20 @@ async def _apply_spotify_meta(
     return out
 
 
+async def _nsfw_stop(bot: Bot, chat_id: int, mid: int, lang: str, redis,
+                     pol, tg_user_id: int, why: str, url: str) -> None:
+    """محتوای غیرمجاز: پیامِ وضعیت را به ردِ محترمانه تبدیل کن و تخلف را ثبت کن."""
+    log.info("nsfw blocked (%s) for %s", why, url[:90])
+    await _edit(bot, chat_id, mid, t(lang, "nsfw_blocked"))
+    banned = await safety.report_block(bot, redis, tg_user_id, why, pol,
+                                       detail=f"لینک: <code>{escape(url[:80])}</code>")
+    if banned:
+        try:
+            await bot.send_message(chat_id, t(lang, "nsfw_user_blocked"))
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def run_download(ctx: dict, payload: dict) -> None:
     bot: Bot = ctx["bot"]
     await textstore.refresh_if_stale()  # متن‌های ادمین‌ویرایش‌شده تازه بمانند
@@ -564,6 +587,15 @@ async def run_download(ctx: dict, payload: dict) -> None:
                             t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
         shutil.rmtree(workdir, ignore_errors=True)  # probe چیزی نگه نمی‌دارد
+        # فیلترِ بزرگسال، لایهٔ ۲ — `age_limit` را خودِ yt-dlp می‌دهد؛ رایگان‌ترین
+        # سیگنالِ ممکن، و **قبل از** دانلودِ حتی یک بایت.
+        pol = await safety.load_policy()
+        if pol.enabled:
+            why = safety.check_meta(info)
+            if why:
+                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
+                                 payload.get("tg_user_id") or 0, why, url)
+                return
         cap_min = await settings_store.get_int("dl_max_duration_min", settings.dl_max_duration_min)
         if cap_min > 0 and (info.get("duration") or 0) > cap_min * 60:
             await _edit(bot, chat_id, status_mid, t(lang, "dl_too_long", min=cap_min))
@@ -797,6 +829,12 @@ async def run_download(ctx: dict, payload: dict) -> None:
                             t(lang, "dl_spotify_setup") + f"\n<code>{escape(msg[:200])}</code>")
             elif D.is_youtube_botcheck(msg, platform):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
+            elif any(h in low for h in _TRANSIENT_HINTS):
+                # همهٔ اکانت‌ها همین را دادند → یا هیچ سشنی معتبر نیست، یا مشکل
+                # سمتِ سایت/موتور است. پیام هر دو را می‌گوید تا ادمین بداند کجا را
+                # نگاه کند، به‌جای تریس‌بکِ خامِ gallery-dl.
+                await _edit(bot, chat_id, status_mid,
+                            t(lang, "dl_bad_response", platform=plabel))
             elif any(h in low for h in _LOGIN_HINTS):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_need_cookies", platform=plabel))
             else:
@@ -821,6 +859,28 @@ async def run_download(ctx: dict, payload: dict) -> None:
             await _edit(bot, chat_id, status_mid,
                         t(lang, "dl_too_large", mb=round(total / 1024 / 1024), cap=max_mb))
             return
+
+        # فیلترِ بزرگسال، لایه‌های ۲ و ۳ — آخرین در قبل از آپلود. quick-grab اصلاً
+        # probe نکرده، پس متادیتا هم این‌جا دوباره چک می‌شود.
+        pol = await safety.load_policy()
+        if pol.enabled:
+            why = ""
+            for p, i, _t in paths:
+                why = safety.check_meta(i) or safety.check_text(os.path.basename(p)) or ""
+                if why:
+                    break
+            if not why and pol.scan_pixels:
+                for p, i, _t in paths:
+                    hit, score, label = await safety.scan_file(
+                        p, _kind_from_info(i, p), pol.threshold, pol.frames, workdir)
+                    if hit:
+                        why = f"pixel:{label}:{score:.2f}"
+                        break
+            if why:
+                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
+                                 payload.get("tg_user_id") or 0, why, url)
+                await _metric(redis, platform, ok=False)
+                return
 
         # ثبتِ حجمِ روزانه (شمارشِ واقعی بعد از دانلود)
         if redis is not None:

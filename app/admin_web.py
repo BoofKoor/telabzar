@@ -129,10 +129,26 @@ GROUPS = [
         ("ck_rate_cooldown_min", "استراحتِ محدودیتِ نرخ (دقیقه)", "بدونِ ضربه به اکانت"),
         ("ck_invalid_at", "خطای پشتِ‌هم تا «باطل»", "این تعداد شکست = نیازمندِ تعویض"),
     ]),
+    # ربات هر فایلی را دوباره آپلود می‌کند، پس خودش توزیع‌کننده است — این فیلتر
+    # جلوی همان مسیرِ بن‌شدنِ ربات را می‌گیرد.
+    ("🔞 فیلترِ محتوای بزرگسال", [
+        ("safety_enabled", "فیلتر فعال", "لینک و فایلِ آپلودی، هر دو"),
+        ("safety_scan_pixels", "بررسیِ خودِ تصویر", "خاموش = فقط دامنه و متادیتا"),
+        ("safety_threshold", "آستانهٔ اطمینان (درصد)", "بالاتر = سهل‌گیرتر · پیش‌فرض ۵۵"),
+        ("safety_video_frames", "تعدادِ فریمِ بررسیِ ویدیو", "بیشتر = دقیق‌تر و کندتر"),
+        ("safety_block_domains", "دامنه‌های مسدودِ اضافی", "با کاما یا خطِ جدید"),
+        ("safety_allow_domains", "استثنا (هرگز مسدود نشود)", "برای رفعِ مسدودیِ اشتباه"),
+        ("safety_notify_admin", "گزارشِ هر مسدودی به ادمین", ""),
+        ("safety_strikes", "مسدودیِ خودکارِ کاربر پس از", "این تعداد تخلف · ۰ = خاموش"),
+    ]),
     ("🔗 لینک و استریم", [
         ("stream_base", "پایهٔ لینک (نودِ استریم)", "خالی = دامنهٔ مستر · مثل https://cdn.example.com"),
     ]),
 ]
+
+# کلیدهایی که مقدارشان فهرست/متنِ چندخطی است — ورودیِ ۱۶۰ پیکسلی برایشان
+# بی‌فایده است، پس textarea می‌گیرند.
+LONGTEXT_KEYS = ("safety_block_domains", "safety_allow_domains")
 
 ENUM_LABELS = {
     "probe": "منوی کیفیت", "quick": "گرفتنِ سریع", "": "— ارث از پیش‌فرض",
@@ -214,6 +230,7 @@ a{text-decoration:none;color:inherit}
 .pad{padding:14px 18px}
 .row{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px dashed #eef2f7;gap:12px}
 .row:last-child{border-bottom:0}.row label{font-size:13.5px;color:#334155}.row label small{display:block;color:#94a3b8;font-size:11.5px;margin-top:2px}
+.ta-inline{width:230px;min-height:64px;border:1px solid #cbd5e1;border-radius:9px;padding:8px 10px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#fff;color:var(--ink);resize:vertical;unicode-bidi:isolate}
 .inp{width:160px;height:36px;border:1px solid #cbd5e1;border-radius:9px;padding:0 11px;font-size:13.5px;font-family:inherit;text-align:center;background:#fff;color:var(--ink)}
 .sel{width:160px;height:36px;border:1px solid #cbd5e1;border-radius:9px;padding:0 8px;font-size:13.5px;font-family:inherit;background:#fff;color:var(--ink)}
 .tg{appearance:none;width:46px;height:26px;border-radius:999px;background:#cbd5e1;position:relative;cursor:pointer;flex:none}
@@ -332,6 +349,19 @@ _HEALTH_CARDS = """
   {% if health.hosts %}{% for h in health.hosts %}
     <div class=stat><b>{{ pfa.get(h.name, h.name) }}</b><div class=meter><i style="width:{{h.rate}}%;background:{{'#16a34a' if h.rate>=70 else '#d97706'}}"></i></div><span class=num>{{h.rate}}% · {{h.ok}}/{{h.ok+h.fail}}</span></div>
   {% endfor %}{% else %}<div class=empty>هنوز دانلودی امروز ثبت نشده.</div>{% endif %}
+</div></div>
+<div class=card><h3>🧩 نسخهٔ موتورهای دانلود</h3><div class=rows>
+  {% if health.engines %}{% for e in health.engines %}
+    {# کلِ این سلول یک رشتهٔ لاتینِ خالص است → .ltr (هم ایزوله هم direction:ltr).
+       با .mono تنها، ترتیبِ دو span در پاراگرافِ RTL برعکس می‌شد. #}
+    <div class=row><label>{{ e.who }}<small>گزارش‌شده سرِ استارتِ ورکر</small></label>
+      <span class="mono ltr">gallery-dl {{ e['gallery-dl'] or '—' }} &nbsp;·&nbsp;
+        yt-dlp {{ e['yt-dlp'] or '—' }}</span></div>
+  {% endfor %}
+  <div class=hint>وقتی یک پلتفرم «پاسخِ نامعتبر» می‌دهد، اول این‌جا را ببین. اگر موتور
+    قدیمی است روی مستر <span class=mono>telabzar update</span> بزن و روی نود
+    <span class=mono>node/update.sh</span> — وگرنه سشن باید عوض شود.</div>
+  {% else %}<div class=empty>هنوز ورکرِ دانلودی نسخه‌اش را گزارش نکرده (پس از ری‌استارتِ بعدی می‌آید).</div>{% endif %}
 </div></div>"""
 
 _SETTINGS = """{% extends 'base' %}{% block title %}تنظیمات{% endblock %}{% block heading %}تنظیمات{% endblock %}
@@ -348,6 +378,8 @@ _SETTINGS = """{% extends 'base' %}{% block title %}تنظیمات{% endblock %}
       {% elif key in enums %}<select class=sel name="{{key}}">
         {% for opt in enums[key] %}<option value="{{opt}}" {% if v[key]|string == opt %}selected{% endif %}>{{ labels.get(opt, opt) }}</option>{% endfor %}
       </select>
+      {% elif key in longtext %}<textarea class="ta-inline" name="{{key}}" rows=3
+        dir=ltr spellcheck=false>{{v[key]}}</textarea>
       {% else %}<input class=inp name="{{key}}" value="{{v[key]}}">{% endif %}
       </div>
     {% endfor %}
@@ -1101,6 +1133,18 @@ async def _health(app: web.Application) -> dict:
                     h["pot"] = resp.status == 200  # 404/403 = خطا، نه «آنلاین»
         except Exception:  # noqa: BLE001
             h["pot"] = False
+    # نسخهٔ موتورها که هر ورکرِ دانلود سرِ استارت گزارش کرده. اولین سؤال وقتی یک
+    # پلتفرم «پاسخِ نامعتبر» می‌دهد: موتور عقب افتاده یا سشن مرده؟
+    h["engines"] = []
+    try:
+        async for key in r.scan_iter(match="dlver:*", count=100):
+            try:
+                h["engines"].append(json.loads(await r.get(key) or "{}"))
+            except (ValueError, TypeError):
+                pass
+        h["engines"].sort(key=lambda e: str(e.get("who") or ""))
+    except Exception:  # noqa: BLE001
+        h["engines"] = []
     # نرخِ per-host امروز (لیستِ مرتب برای رندر)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     hosts = []
@@ -1571,7 +1615,8 @@ async def dashboard(request: web.Request) -> web.Response:
     health = await _health(request.app)
     return _render("settings", admin_id=_session_admin(request), active="settings",
                    pill_ok=health["all_ok"], groups=GROUPS, meta=RUNTIME_KEYS,
-                   enums=ENUM_VALUES, labels=ENUM_LABELS, v=await _effective(),
+                   enums=ENUM_VALUES, labels=ENUM_LABELS, longtext=LONGTEXT_KEYS,
+                   v=await _effective(),
                    health=health, saved=request.query.get("saved") == "1")
 
 
