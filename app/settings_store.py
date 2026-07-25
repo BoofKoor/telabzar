@@ -69,6 +69,15 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "dl_min_free_gb": ("int", settings.dl_min_free_gb),
     "dl_direct_enabled": ("bool", settings.dl_direct_enabled),
     "dl_direct_max_mb": ("int", settings.dl_direct_max_mb),
+    # ── فیلترِ محتوای بزرگسال (app/safety.py) ──
+    "safety_enabled": ("bool", settings.safety_enabled),
+    "safety_scan_pixels": ("bool", settings.safety_scan_pixels),
+    "safety_threshold": ("int", settings.safety_threshold),
+    "safety_video_frames": ("int", settings.safety_video_frames),
+    "safety_notify_admin": ("bool", settings.safety_notify_admin),
+    "safety_strikes": ("int", settings.safety_strikes),
+    "safety_block_domains": ("str", ""),   # دامنه‌های اضافیِ ادمین
+    "safety_allow_domains": ("str", ""),   # استثنا (رفعِ مثبتِ کاذب)
     "dl_sponsorblock": ("str", settings.dl_sponsorblock),
     "dl_subs": ("bool", settings.dl_subs),
     # ── اسپاتیفای ──

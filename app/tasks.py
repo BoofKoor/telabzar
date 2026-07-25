@@ -742,3 +742,77 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             if settings.node_role:  # مشاهده‌پذیری: کارِ انجام‌شدهٔ این نود را بشمار
                 from . import nodes
                 nodes.note_job_done()
+
+
+async def run_screen(ctx: dict, payload: dict) -> None:
+    """گیتِ محتوای بزرگسال برای **فایلِ آپلودیِ کاربر** — قبل از ساختنِ کارت.
+
+    چرا در ورکر و نه در ربات: بارگذاری/اجرای مدل کارِ CPU است و نباید حلقهٔ
+    long-pollingِ ربات را بگیرد. چرا **قبل** از کارت و نه بعدش: کارت یعنی ربات
+    خودش فایل را دوباره آپلود کرده — همان کاری که نباید با محتوای غیرمجاز بکند.
+    هر شکستی (مدل نبود، دانلود نشد) = «مجاز»، چون فیلتر نباید سرویس را بخورد.
+    """
+    from . import safety
+    bot: Bot = ctx["bot"]
+    await textstore.refresh_if_stale()
+    file_id_row, chat_id = payload["file_id_row"], payload["chat_id"]
+    note_mid, lang = payload.get("note_mid"), payload["lang"]
+    tg_user_id = payload.get("tg_user_id") or 0
+    workdir = os.path.join(settings.work_dir, f"scr-{secrets.token_urlsafe(6)[:8]}")
+
+    async def _drop_note() -> None:
+        if note_mid:
+            try:
+                await bot.delete_message(chat_id, note_mid)
+            except Exception:  # noqa: BLE001
+                pass
+
+    why, pol = "", None
+    try:
+        async with Sessionmaker() as session:
+            file = await session.get(File, file_id_row)
+        if file is None:
+            await _drop_note()
+            return
+        pol = await safety.load_policy()
+        if pol.enabled and pol.scan_pixels:
+            os.makedirs(workdir, exist_ok=True)
+            local = await _localize(bot, file.file_id, workdir)
+            if local:
+                hit, score, label = await safety.scan_file(
+                    local, file.kind, pol.threshold, pol.frames, workdir)
+                if hit:
+                    why = f"pixel:{label}:{score:.2f}"
+    except Exception:  # noqa: BLE001
+        log.warning("screen failed for file row %s", file_id_row, exc_info=True)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    if not why:                       # پاک است → همان کارتِ همیشگی
+        await _drop_note()
+        async with Sessionmaker() as session:
+            file = await session.get(File, file_id_row)
+            if file is not None:
+                await send_card(bot, chat_id, file, lang)
+        return
+
+    log.info("nsfw blocked upload (%s) from %s", why, tg_user_id)
+    async with Sessionmaker() as session:   # ردیفِ فایل نباید بماند
+        file = await session.get(File, file_id_row)
+        if file is not None:
+            await session.delete(file)
+            await session.commit()
+    if note_mid:
+        try:
+            await bot.edit_message_text(t(lang, "nsfw_blocked"), chat_id, note_mid)
+        except Exception:  # noqa: BLE001
+            await _drop_note()
+    else:
+        await bot.send_message(chat_id, t(lang, "nsfw_blocked"))
+    banned = await safety.report_block(bot, ctx.get("redis"), tg_user_id, why, pol,
+                                       detail=f"فایلِ آپلودی · {file_id_row}")
+    if banned:
+        try:
+            await bot.send_message(chat_id, t(lang, "nsfw_user_blocked"))
+        except Exception:  # noqa: BLE001
+            pass

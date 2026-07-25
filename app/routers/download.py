@@ -15,7 +15,7 @@ from aiogram.types import CallbackQuery, Message
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import dl_cache, nodes, settings_store
+from .. import dl_cache, nodes, safety, settings_store
 from ..callbacks import Dl
 from ..config import settings
 from ..downloader import (
@@ -102,6 +102,17 @@ async def _charge(pool: ArqRedis, uid: int) -> None:
         pass
 
 
+async def _reject(message: Message, arq_pool: ArqRedis, user: User | None, lang: str,
+                  pol: safety.Policy, why: str) -> None:
+    """لینکِ غیرمجاز: رد + ثبتِ تخلف (و مسدودیِ خودکار اگر ادمین خواسته)."""
+    await message.reply(t(lang, "nsfw_blocked"))
+    banned = await safety.report_block(message.bot, arq_pool,
+                                       user.tg_user_id if user else 0, why, pol,
+                                       detail=f"لینک: <code>{(message.text or '')[:80]}</code>")
+    if banned:
+        await message.answer(t(lang, "nsfw_user_blocked"))
+
+
 @router.message(F.text.regexp(r"https?://"))
 async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | None,
                   session: AsyncSession) -> None:
@@ -113,6 +124,14 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     if not is_safe_url(url):
         await message.reply(t(lang, "dl_bad_link"))
         return
+    # فیلترِ بزرگسال، لایهٔ ۱ — **قبل از هر بایت**. ربات فایل را دوباره آپلود
+    # می‌کند، پس دانلودِ چنین لینکی یعنی خودِ ربات توزیع‌کننده شود.
+    pol = await safety.load_policy()
+    if pol.enabled:
+        why = safety.check_url(url, pol.block, pol.allow) or safety.check_text(message.text)
+        if why:
+            await _reject(message, arq_pool, user, lang, pol, why)
+            return
     platform = platform_of(url)
     # هاستِ ناشناخته فقط اگر ادمین «تلاش برای هر لینک» را روشن گذاشته باشد
     if platform == "other" and not await settings_store.get_bool(

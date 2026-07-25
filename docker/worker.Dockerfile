@@ -31,6 +31,7 @@ ENV U2NET_HOME=/opt/models/u2net \
 RUN mkdir -p /opt/models/u2net /opt/models/hf \
     && python -c "from rembg import new_session; new_session('u2net')" \
     && python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')" \
+    && python -c "from nudenet import NudeDetector; NudeDetector()" \
     && chmod -R a+rX /opt/models
 
 COPY app ./app

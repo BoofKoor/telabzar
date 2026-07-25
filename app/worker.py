@@ -10,7 +10,7 @@ from . import settings_store
 from .bot import create_bot
 from .config import settings
 from .db import init_models
-from .tasks import run_op
+from .tasks import run_op, run_screen
 from .tasks_download import run_download
 
 logging.basicConfig(
@@ -88,7 +88,7 @@ async def shutdown(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions = [run_op]
+    functions = [run_op, run_screen]
     on_startup = startup_master
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

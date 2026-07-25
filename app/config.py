@@ -101,6 +101,16 @@ class Settings(BaseSettings):
     # فایلِ مستقیم (ریلیزِ گیت‌هاب، APK، PDF، …) — هرچه صفحهٔ HTML نیست خودمان استریم می‌کنیم
     dl_direct_enabled: bool = True
     dl_direct_max_mb: int = 500    # سقفِ فایلِ مستقیم (سقفِ آپلودِ تلگرام همیشه حاکم است)
+
+    # ── فیلترِ محتوای بزرگسال (app/safety.py) ──
+    # ربات هر فایلی را **دوباره آپلود** می‌کند، پس توزیع‌کننده خودش است؛ این فیلتر
+    # جلوی همان مسیرِ بن‌شدن را می‌گیرد. همه از پنل تنظیم‌شدنی.
+    safety_enabled: bool = True
+    safety_scan_pixels: bool = True   # لایهٔ ۳ (NudeNet)؛ خاموش = فقط دامنه/متادیتا
+    safety_threshold: int = 55        # درصدِ اطمینانِ لازم برای مسدودی (بالاتر = سهل‌گیرتر)
+    safety_video_frames: int = 5      # چند فریمِ ویدیو نمونه‌برداری شود
+    safety_notify_admin: bool = False  # هر مسدودی به ادمین گزارش شود
+    safety_strikes: int = 0           # این تعداد تخلف = مسدودیِ خودکارِ کاربر (۰ = خاموش)
     # فاز C — اکسترا/سختی‌سازی
     dl_sponsorblock: str = ""      # دسته‌های SponsorBlock برای حذف (مثل sponsor,selfpromo)؛ خالی=خاموش
     dl_subs: bool = False          # جاسازیِ زیرنویسِ خودکار (en+fa) در ویدیو
