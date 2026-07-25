@@ -200,7 +200,7 @@ _ALBUM_VID = (".mp4", ".mov", ".webm", ".mkv", ".m4v")
 
 
 async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str],
-                         caption: str | None, lang: str) -> None:
+                         caption: str | None, lang: str) -> list[dict]:
     """پستِ چند‌تاییِ گالری (کاروسلِ اینستاگرام) → آلبومِ سوایپ‌شدنیِ تلگرام.
 
     کپشنِ پست (بدونِ هشتگ) روی آیتمِ اول؛ عکس و ویدیو در همان آلبوم؛ بدونِ دکمه/کارت
@@ -214,9 +214,10 @@ async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str]
         for p in media:
             kind = "video" if p.lower().endswith(_ALBUM_VID) else "image"
             await _spawn(bot, chat_id, owner_id, p, os.path.basename(p), kind, {}, lang)
-        return
+        return []
     cap_text = D.clean_caption(caption)  # تضمینِ بدونِ‌هشتگ + سقفِ ۱۰۲۴ (idempotent)
     cap = escape(cap_text) if cap_text else None  # parse_mode=HTML → کپشنِ کاربر escape شود
+    items: list[dict] = []
     for gi in range(0, len(media), 10):  # سقفِ ۱۰ آیتم در هر media group
         batch = media[gi:gi + 10]
         b = MediaGroupBuilder(caption=cap if gi == 0 else None)
@@ -226,9 +227,11 @@ async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str]
             else:
                 b.add_photo(media=FSInputFile(p))
         try:
-            await bot.send_media_group(chat_id, media=b.build())
+            sent = await bot.send_media_group(chat_id, media=b.build())
+            items += dl_cache.collect_album_items(sent)   # برای کشِ کاروسل
         except Exception:  # noqa: BLE001
             log.exception("album send failed (batch starting %d)", gi)
+    return items
 
 
 async def _deliver_rich_post(bot: Bot, chat_id: int, owner_id: int, files: list[str],
@@ -318,8 +321,10 @@ def _post_text(info: dict, gallery_caption: str | None) -> str | None:
 
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
                  kind: str, info: dict, lang: str, thumb_path: str | None = None,
-                 post_caption: str | None = None, platform: str | None = None) -> None:
-    """فایلِ دانلودی را وارد pipeline می‌کند (الگوی spawn) با source='dl'."""
+                 post_caption: str | None = None, platform: str | None = None,
+                 url: str | None = None, selector: str | None = None) -> None:
+    """فایلِ دانلودی را وارد pipeline می‌کند (الگوی spawn) با source='dl'.
+    url/selector اگر داده شوند، نتیجه کش می‌شود (مسیرِ gallery-dl از این‌جا می‌آید)."""
     path, info, thumb_path = await _media_meta(path, kind, info, thumb_path)
     name = os.path.basename(path)   # remux ممکن است پسوند را به mp4 عوض کرده باشد
     thumb = None
@@ -345,6 +350,8 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
                 f.file_id = fid
             if fuid:
                 f.file_unique_id = fuid
+            if url and f.file_id:
+                await dl_cache.put_cached(s, url, selector or "best", f)  # دفعهٔ بعد آنی
         except Exception:  # noqa: BLE001
             log.exception("dl spawn-card send failed")
         await s.commit()
@@ -721,7 +728,16 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 except Exception as exc:  # noqa: BLE001
                     log.warning("rich post failed (%s); fallback به آلبوم", str(exc)[:120])
             if not delivered:
-                await _deliver_album(bot, chat_id, owner_id, media_paths, gallery_caption, lang)
+                items = await _deliver_album(bot, chat_id, owner_id, media_paths,
+                                             gallery_caption, lang)
+                if items:   # کاروسل هم کش می‌شود → بارِ بعد آنی، بدونِ دانلود
+                    try:
+                        async with Sessionmaker() as cs:
+                            await dl_cache.put_album_cached(
+                                cs, url, selector, items,
+                                caption=D.clean_caption(gallery_caption), platform=platform)
+                    except Exception:  # noqa: BLE001
+                        log.warning("album cache write failed", exc_info=True)
             try:
                 await bot.delete_message(chat_id, status_mid)
             except Exception:  # noqa: BLE001
@@ -740,7 +756,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
                              _kind_from_info(info, p), info, lang, thumb_path=thumb,
                              post_caption=_post_text(info, gallery_caption),
-                             platform=platform)
+                             platform=platform,
+                             # تک‌فایلِ گالری (ریلز/عکسِ تکی) هم کش شود
+                             url=url if len(paths) == 1 else None, selector=selector)
             try:
                 await bot.delete_message(chat_id, status_mid)  # کارت‌ها جایگزینش شدند
             except Exception:  # noqa: BLE001

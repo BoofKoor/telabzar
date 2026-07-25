@@ -159,6 +159,8 @@ class DownloadCache(Base):
     # کپشنِ پست و پلتفرم هم کش می‌شوند، وگرنه تحویلِ آنی کارتِ فقیرتری از دانلودِ واقعی می‌دهد
     post_caption: Mapped[str | None] = mapped_column(Text, nullable=True)
     platform: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # کاروسل/آلبوم: فهرستِ مرتبِ آیتم‌ها ([{file_id, kind, size}, …]). None = تک‌فایل.
+    items: Mapped[list | None] = mapped_column(JSON, nullable=True)
     hits: Mapped[int] = mapped_column(default=0)  # چندبار از کش تحویل شد (سنجشِ سودِ کش)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

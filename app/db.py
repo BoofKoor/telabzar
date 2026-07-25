@@ -27,6 +27,7 @@ _MIGRATIONS = [
     "ALTER TABLE download_cache ADD COLUMN IF NOT EXISTS post_caption TEXT",
     "ALTER TABLE download_cache ADD COLUMN IF NOT EXISTS platform VARCHAR(24)",
     "ALTER TABLE download_cache ADD COLUMN IF NOT EXISTS hits INTEGER DEFAULT 0",
+    "ALTER TABLE download_cache ADD COLUMN IF NOT EXISTS items JSON",
     # ایندکس‌های آمار: بدونِ این‌ها GROUP BY روی بازهٔ ۳۰ روزه با رشدِ داده کند می‌شود
     "CREATE INDEX IF NOT EXISTS ix_files_created_at ON files (created_at)",
     "CREATE INDEX IF NOT EXISTS ix_files_platform ON files (platform)",
