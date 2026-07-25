@@ -93,6 +93,41 @@ def _anon_first(platform: str) -> bool:
     return platform in _ANON_FIRST
 
 
+async def _warn_cookieless(redis, bot, platform: str, node: str) -> None:
+    """پلتفرمی که کوکی **لازم دارد** بدونِ کوکی اجرا شد → این خرابیِ سیستم است، نه
+    «ادمین کوکی نگذاشته».
+
+    بدونِ این هشدار کاملاً نامرئی بود: چون `cookie_name` تهی است، هیچ‌چیز روی هیچ
+    اکانتی ثبت نمی‌شود و پنل «سالم · خطا: ۰» می‌ماند در حالی که هیچ دانلودی کار
+    نمی‌کند. حالت‌های واقعی‌اش: آینهٔ Redis خالی، `COOKIES_DIR`ِ اشتباه روی نود، یا
+    همهٔ اکانت‌ها در کول‌داون/فریز.
+    """
+    if redis is None:
+        return
+    try:
+        usable = await ck.healthy_count(redis, platform)
+        log.error("cookieless attempt on %s from exit %s — %d usable account(s) in the pool",
+                  platform, ck.exit_label(node), usable)
+        if not usable:
+            return                       # واقعاً اکانتی نیست؛ پیامِ عادی درست است
+        if not await redis.set(f"ckblind:{platform}", "1", ex=3 * 3600, nx=True):
+            return                       # تازه خبر داده‌ایم
+        text = (f"🛠 <b>اکانت‌ها به ورکر نرسیدند</b>\n\n"
+                f"پلتفرم: {D.platform_label(platform, 'fa')}\n"
+                f"خروجی: <code>{escape(ck.exit_label(node))}</code>\n"
+                f"استخر <b>{usable}</b> اکانتِ قابلِ‌استفاده دارد، ولی این دانلود "
+                f"<b>بی‌کوکی</b> اجرا شد — یعنی ورکر آن‌ها را نمی‌بیند.\n\n"
+                f"در پنل → کوکی‌ها، «همگام‌سازیِ دوباره» را بزن؛ اگر نودِ دانلود داری "
+                f"مطمئن شو <code>COOKIES_DIR</code> رویش ست نشده باشد.")
+        for aid in settings.admin_id_set:
+            try:
+                await bot.send_message(aid, text)
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        log.debug("cookieless warning failed", exc_info=True)
+
+
 def _cookie_platform(platform: str) -> str:
     """اسپاتیفای دانلودِ واقعی را از یوتیوب می‌گیرد → کوکیِ یوتیوب لازم است، نه اسپاتیفای."""
     return "youtube" if platform == "spotify" else platform
@@ -713,6 +748,11 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 cookie_name, cookie_path = None, None
             else:
                 cookie_name, cookie_path = await _next_cookie(redis, platform, workdir, tried)
+                # پلتفرمی که دسترسیِ ناشناس ندارد (اینستاگرام) و کوکی هم نگرفت:
+                # بدونِ این هشدار، شکست روی هیچ اکانتی ثبت نمی‌شود و پنل سبز می‌ماند.
+                if not cookie_name and not tried:
+                    await _warn_cookieless(redis, bot, _cookie_platform(platform),
+                                           settings.node_id)
             ident = await ck.get_meta(redis, cookie_name) if cookie_name else None
             opts = await _opts(redis, platform, workdir, cookie_path, identity=ident)
             try:
