@@ -89,8 +89,85 @@ def _is_cookie_error(msg: str, platform: str | None = None) -> bool:
 _ANON_FIRST = {"youtube", "spotify", "tiktok", "pinterest", "other"}
 
 
+# خطاهایی که قطعاً دربارهٔ **خودِ محتوا** هستند، نه اکانت. فقط این‌ها چرخش را
+# متوقف می‌کنند. این فهرست برخلافِ فهرستِ «خطای کوکی» کوتاه و پایدار است، چون
+# دربارهٔ چیزی است که هر موتوری یکسان می‌بیند: لینک وجود ندارد یا خصوصی است.
+_CONTENT_HINTS = ("404", "not found", "is private", "this post is private",
+                  "unavailable", "no longer available", "has been removed",
+                  "removed by", "was deleted", "unsupported url",
+                  "no suitable extractor", "no video formats", "no media found",
+                  "file is larger", "too large")
+
+
+def _content_error(msg: str) -> bool:
+    """آیا مشکل از خودِ لینک است؟ (آن‌وقت امتحانِ اکانتِ بعدی بی‌فایده است)"""
+    low = (msg or "").lower()
+    return any(h in low for h in _CONTENT_HINTS)
+
+
 def _anon_first(platform: str) -> bool:
     return platform in _ANON_FIRST
+
+
+async def _resolve_blame(redis, bot, platform: str, node: str,
+                         failures: list[tuple[str, str, str]], won: bool) -> bool:
+    """تصمیمِ تقصیر — **بعد از** پایانِ درخواست، از روی شواهد نه متنِ خطا.
+
+    متنِ خطا ذاتاً مبهم است: وقتی اینستاگرام یک **IP** را رد می‌کند همان
+    `redirect to login page`ی را می‌دهد که برای سشنِ مرده می‌دهد. پس با یک پیام
+    نمی‌شود قضاوت کرد؛ ولی با **الگو** می‌شود:
+
+    - درخواست موفق شد → اکانت‌هایی که قبلش افتادند واقعاً خراب‌اند (چون همین
+      خروجی برای اکانتِ بعدی جواب داد) → تقصیرِ عادی.
+    - درخواست شکست خورد و **≥۲ اکانتِ متفاوت** امتحان شد → مقصر اکانت‌ها نیستند،
+      خروجی است → **هیچ ضربه‌ای به هیچ اکانتی** + خروجی کنار گذاشته می‌شود.
+    - فقط یک اکانت داشتیم → قابلِ تفکیک نیست → همان تقصیرِ عادی.
+
+    خروجی: آیا خروجی مقصر شناخته شد؟
+    """
+    if not failures:
+        return False
+    blame_exit = (not won) and len({n for n, _m, _c in failures}) >= 2
+    if blame_exit:
+        for name, msg, _cls in failures:      # فقط ثبت، بدونِ شمارنده و کول‌داون
+            await ck.mark_fail(redis, name, cooldown=False,
+                               error_class=ck.TRANSIENT, message=msg)
+        mins = await settings_store.get_int("dl_exit_cooldown_min",
+                                            settings.dl_exit_cooldown_min)
+        await ck.cool_exit(redis, node, platform, mins * 60)
+        log.warning("exit %s judged bad for %s (%d accounts failed) — cooling %dm",
+                    ck.exit_label(node), platform, len(failures), mins)
+        if redis is not None:
+            try:
+                if await redis.set(f"ckexitalert:{ck.exit_label(node)}:{platform}",
+                                   "1", ex=3 * 3600, nx=True):
+                    names = "، ".join(sorted({n for n, _m, _c in failures}))[:200]
+                    for aid in settings.admin_id_set:
+                        try:
+                            await bot.send_message(aid, (
+                                f"🌐 <b>خروجی کنار گذاشته شد</b>\n\n"
+                                f"پلتفرم: {D.platform_label(platform, 'fa')}\n"
+                                f"خروجی: <code>{escape(ck.exit_label(node))}</code>\n"
+                                f"<b>{len(failures)}</b> اکانت روی همین خروجی افتادند "
+                                f"({escape(names)}) — پس مقصر IP است، نه سشن‌ها.\n"
+                                f"تا <b>{mins}</b> دقیقه از این خروجی استفاده نمی‌شود. "
+                                f"کوکی‌ها را عوض نکن."))
+                        except Exception:  # noqa: BLE001
+                            pass
+            except Exception:  # noqa: BLE001
+                pass
+        return True
+    # تقصیرِ عادی: هر اکانت طبقِ دستهٔ خطای خودش
+    for name, msg, cls in failures:
+        await ck.note_spend(redis, name)      # این تلاش واقعاً پای اکانت نوشته شد
+        if _is_cookie_error(msg, platform):
+            await ck.mark_fail(redis, name, error_class=cls, message=msg)
+            if ck.needs_human(cls):
+                await _alert_checkpoint(redis, bot, name, platform, msg)
+        else:
+            await ck.mark_fail(redis, name, cooldown=False,
+                               error_class=ck.UNRELATED, message=msg)
+    return False
 
 
 async def _warn_cookieless(redis, bot, platform: str, node: str) -> None:
@@ -733,9 +810,18 @@ async def run_download(ctx: dict, payload: dict) -> None:
 
         gallery_caption = None
         # ── حلقهٔ تلاش با چرخشِ اکانت ──
-        # اگر کوکیِ فعلی خطای لاگین/بن داد، اکانت را علامت‌دار و **با کوکیِ بعدی** دوباره
-        # تلاش می‌کنیم. فقط وقتی هیچ کوکیِ قابلِ‌استفاده‌ای نماند به کاربر خطا می‌دهیم.
+        # قاعده: **پیش‌فرض بچرخ**. تا دیروز چرخش به این گره خورده بود که متنِ خطا با
+        # فهرستِ کلیدواژه‌های «کوکی‌محور» جور شود — و آن فهرست هیچ‌وقت کامل نمی‌شود،
+        # پس یک خطای ناشناخته کلِ درخواست را با **یک** تلاش تمام می‌کرد در حالی که
+        # اکانت‌های دست‌نخورده کنارش بودند. حالا فقط خطاهای «محتوایی» (۴۰۴/خصوصی/
+        # حذف‌شده) چرخش را متوقف می‌کنند، چون امتحانِ اکانتِ بعدی برایشان بی‌فایده است.
+        # تقصیر هم این‌جا تعیین نمی‌شود؛ `failures` جمع می‌شود و `_resolve_blame`
+        # در پایان از روی **الگو** تصمیم می‌گیرد (اکانت خراب است یا خروجی).
         paths, dl_err, tried = None, None, set()
+        failures: list[tuple[str, str, str]] = []
+        cookieless_used, attempts = False, 0
+        max_tries = await settings_store.get_int("dl_max_cookie_tries",
+                                                 settings.dl_max_cookie_tries)
         # پاسِ اول **ناشناس** برای پلتفرم‌هایی که بدونِ لاگین جواب می‌دهند (یوتیوب و…):
         # کوکی فقط وقتی می‌آید که خودِ سرویس بخواهد → اکانت‌ها بی‌دلیل نمی‌سوزند.
         # فایلِ مستقیم هیچ‌وقت کوکی نمی‌خواهد (و نباید اکانتی را بسوزاند)
@@ -748,11 +834,14 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 cookie_name, cookie_path = None, None
             else:
                 cookie_name, cookie_path = await _next_cookie(redis, platform, workdir, tried)
-                # پلتفرمی که دسترسیِ ناشناس ندارد (اینستاگرام) و کوکی هم نگرفت:
-                # بدونِ این هشدار، شکست روی هیچ اکانتی ثبت نمی‌شود و پنل سبز می‌ماند.
-                if not cookie_name and not tried:
+                if not cookie_name:
+                    if tried or cookieless_used:
+                        break        # استخر تمام شد — `_next_cookie` تنها مرجعِ این تصمیم است
+                    # پلتفرمی که دسترسیِ ناشناس ندارد و کوکی هم نگرفت: خرابیِ سیستم
                     await _warn_cookieless(redis, bot, _cookie_platform(platform),
                                            settings.node_id)
+                    cookieless_used = True      # فقط یک تلاشِ بی‌کوکی، نه حلقهٔ بی‌پایان
+            attempts += 1
             ident = await ck.get_meta(redis, cookie_name) if cookie_name else None
             opts = await _opts(redis, platform, workdir, cookie_path, identity=ident)
             try:
@@ -809,6 +898,11 @@ async def run_download(ctx: dict, payload: dict) -> None:
                                 raise ytdlp_exc
                     paths = [(path, info, thumb)]
                 await ck.mark_ok(redis, cookie_name)   # این اکانت سالم است
+                await ck.note_spend(redis, cookie_name)
+                # همین خروجی برای این اکانت جواب داد → پس اکانت‌هایی که قبلش
+                # افتادند واقعاً خراب‌اند و تقصیر مالِ خودشان است.
+                await _resolve_blame(redis, bot, _cookie_platform(platform),
+                                     settings.node_id, failures, won=True)
                 break
             except P.ProcessingCancelled:
                 await _stop_ticker()
@@ -826,46 +920,48 @@ async def run_download(ctx: dict, payload: dict) -> None:
                         log.info("anonymous attempt failed (%s); retrying with a cookie", cls)
                         continue
                     break
-                # هر شکستی روی اکانت **ثبت** می‌شود، حتی وقتی تقصیرِ اکانت نیست.
-                # `mark_fail` فقط برای دسته‌های کوکی‌محور شمارنده/کول‌داون می‌دهد؛ بقیه
-                # صرفاً `last_error` می‌گیرند. بدونِ این، خطای شناخته‌نشده هرگز به استخر
-                # نمی‌رسید و پنل تا ابد «سالم · خطا: ۰» نشان می‌داد.
-                if cookie_name and not _is_cookie_error(str(exc), platform):
-                    await ck.mark_fail(redis, cookie_name, cooldown=False,
-                                       error_class=ck.UNRELATED, message=str(exc))
-                if cookie_name and _is_cookie_error(str(exc), platform):
-                    # واکنش به **دستهٔ** خطا: محدودیتِ نرخ ضربه نمی‌زند، چک‌پوینت فریز می‌کند
-                    await ck.mark_fail(redis, cookie_name, error_class=cls, message=str(exc))
-                    if ck.needs_human(cls):
-                        await _alert_checkpoint(redis, bot, cookie_name,
-                                                _cookie_platform(platform), str(exc))
-                    tried.add(cookie_name)
-                    await _alert_if_low(redis, bot, _cookie_platform(platform))
-                    if await ck.pick(redis, _cookie_platform(platform), exclude=tried):
-                        log.info("cookie %s failed (%s); retrying with next account",
-                                 cookie_name, str(exc)[:90])
-                        # نیمه‌کاره‌های تلاشِ قبلی را پاک کن تا با خروجیِ تلاشِ بعدی قاطی نشود
-                        for _n in os.listdir(workdir):
-                            if _n != "ck":
-                                _p = os.path.join(workdir, _n)
-                                shutil.rmtree(_p, ignore_errors=True) if os.path.isdir(_p) \
-                                    else os.remove(_p)
-                        await _edit(bot, chat_id, status_mid,
-                                    progress_note(t(lang, "dl_retry_account"), None, None,
-                                                  time.monotonic() - nstart, 0),
-                                    kb=download_cancel_kb(ref, lang))
-                        continue      # ← کوکیِ بعدی
-                break                 # کوکیِ دیگری نمانده (یا خطا کوکی‌محور نبود)
+                if cookie_name:
+                    tried.add(cookie_name)          # هر اکانتِ استفاده‌شده، نه فقط کوکی‌محورها
+                    failures.append((cookie_name, str(exc), cls))
+                if _content_error(str(exc)):
+                    log.info("content error (%s) — not an account problem, stopping",
+                             str(exc)[:90])
+                    break                           # اکانتِ بعدی هم همین را می‌گیرد
+                if max_tries and attempts >= max_tries:
+                    log.info("stopping after %d attempts (dl_max_cookie_tries)", attempts)
+                    break
+                log.info("attempt %d failed (%s); rotating: %s",
+                         attempts, cls, str(exc)[:90])
+                # نیمه‌کاره‌های تلاشِ قبلی را پاک کن تا با خروجیِ تلاشِ بعدی قاطی نشود
+                for _n in os.listdir(workdir):
+                    if _n != "ck":
+                        _p = os.path.join(workdir, _n)
+                        shutil.rmtree(_p, ignore_errors=True) if os.path.isdir(_p) \
+                            else os.remove(_p)
+                await _edit(bot, chat_id, status_mid,
+                            progress_note(t(lang, "dl_retry_account"), None, None,
+                                          time.monotonic() - nstart, 0),
+                            kb=download_cancel_kb(ref, lang))
+                continue        # ← اکانتِ بعدی؛ اتمامِ استخر را سرِ حلقه می‌فهمیم
 
         if paths is None:
             await _stop_ticker()
             msg = str(dl_err) if dl_err else "download failed"
             low = msg.lower()
+            # تقصیر این‌جا تعیین می‌شود، نه وسطِ حلقه: اگر ≥۲ اکانتِ متفاوت روی همین
+            # خروجی افتادند، مقصر خروجی است و هیچ اکانتی نباید ضربه بخورد.
+            exit_bad = await _resolve_blame(redis, bot, _cookie_platform(platform),
+                                            settings.node_id, failures, won=False)
+            await _alert_if_low(redis, bot, _cookie_platform(platform))
             await _metric(redis, platform, ok=False)
             # شکستِ واقعیِ شبکه‌ای (نه ردِ سیاستی) → به حسابِ همین خروجی. اگر همهٔ
             # اکانت‌ها روی یک خروجی بیفتند، مقصر IP است نه سشن‌ها.
             await ck.note_exit(redis, settings.node_id, platform, ok=False)
-            if isinstance(dl_err, D.DirectTooLarge):
+            if exit_bad:
+                # پیامِ «کوکی ست کن» این‌جا دروغ است — کوکی‌ها سالم‌اند، IP مقصر است
+                await _edit(bot, chat_id, status_mid,
+                            t(lang, "dl_exit_problem", platform=plabel))
+            elif isinstance(dl_err, D.DirectTooLarge):
                 # فایلِ مستقیم کیفیتِ دیگری ندارد که پیشنهاد شود → پیامِ سرراست.
                 # رو به **بالا** گرد می‌شود، وگرنه ۱٫۴MB با سقفِ ۱MB می‌شود «۱ از ۱ بیشتر است».
                 await _edit(bot, chat_id, status_mid,
