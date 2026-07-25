@@ -67,6 +67,8 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "dl_cooldown_sec": ("int", settings.dl_cooldown_sec),
     "dl_op_daily_min": ("int", settings.dl_op_daily_min),
     "dl_min_free_gb": ("int", settings.dl_min_free_gb),
+    "dl_direct_enabled": ("bool", settings.dl_direct_enabled),
+    "dl_direct_max_mb": ("int", settings.dl_direct_max_mb),
     "dl_sponsorblock": ("str", settings.dl_sponsorblock),
     "dl_subs": ("bool", settings.dl_subs),
     # ── اسپاتیفای ──

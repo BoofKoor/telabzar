@@ -181,9 +181,11 @@ _CLASS_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
                   "please wait a few minutes", "try again later", "temporarily blocked")),
     (BOT_CHECK, ("sign in to confirm", "confirm you\u2019re not a bot", "confirm you're not a bot",
                  "not a bot")),
+    # «redirect to home page»/«redirect to login page» = پاسخِ gallery-dl وقتی سشنِ
+    # اینستاگرام دیگر معتبر نیست؛ کلمهٔ login در اولی نیست ولی دقیقاً همان معنا را دارد.
     (LOGIN_REQUIRED, ("login required", "login_required", "not logged", "sign in",
                       "requires authentication", "unauthorized", "401", "403",
-                      "login page", "session expired", "csrf")),
+                      "login page", "redirect to home page", "session expired", "csrf")),
 )
 
 

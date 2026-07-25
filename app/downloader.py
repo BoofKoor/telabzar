@@ -17,12 +17,13 @@ import ipaddress
 import json
 import logging
 import math
+import mimetypes
 import os
 import re
 import shutil
 import tempfile
 import unicodedata
-from urllib.parse import urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from .exceptions import ProcessingCancelled
 
@@ -690,6 +691,207 @@ _BROWSER_HEADERS = {
 def _http_proxy(proxy: str | None) -> str | None:
     """aiohttp فقط پروکسیِ http(s) را می‌فهمد (نه socks) → فقط همان را پاس بده."""
     return proxy if proxy and proxy.startswith(("http://", "https://")) else None
+
+
+# ── موتورِ «فایلِ مستقیم» (لینکِ دانلودِ گیت‌هاب/APK/PDF/…) ──────────
+# yt-dlp برای این‌ها ساخته نشده: روی یک لینکِ امضاشدهٔ blob با نامِ GUIDدار و کوئریِ
+# بلند، سرِ نوشتنِ فایلِ متادیتا می‌شکند. هرچه «صفحه» نیست را خودمان استریم می‌کنیم.
+class DirectTooLarge(Exception):
+    """فایلِ مستقیم از سقفِ مجاز بزرگ‌تر است (قبل یا حینِ دانلود کشف می‌شود)."""
+
+    def __init__(self, size: int, cap_bytes: int) -> None:
+        super().__init__(f"direct file too large: {size} > {cap_bytes}")
+        self.size, self.cap_bytes = size, cap_bytes
+
+
+_DIRECT_HOPS = 5           # سقفِ ریدایرکت (هر پرش دوباره SSRF-چک می‌شود)
+_DIRECT_CHUNK = 256 * 1024
+# نوعِ محتواهایی که «صفحه/فید» هستند نه فایل → همان مسیرِ قبلی (yt-dlp)
+_PAGE_TYPES = ("text/html", "application/xhtml", "text/plain", "text/xml",
+               "application/json", "application/xml", "application/rss+xml",
+               "application/atom+xml", "application/javascript")
+# مانیفستِ استریم: فایل نیست، فهرستِ قطعه است → حتماً yt-dlp
+_MANIFEST_TYPES = ("application/vnd.apple.mpegurl", "application/x-mpegurl",
+                   "application/dash+xml")
+_DIRECT_EXTS = (
+    ".apk", ".ipa", ".exe", ".msi", ".dmg", ".deb", ".rpm", ".appimage",
+    ".zip", ".rar", ".7z", ".tar", ".gz", ".xz", ".bz2", ".tgz",
+    ".pdf", ".epub", ".mobi", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".txt", ".csv", ".srt", ".vtt", ".iso", ".img", ".bin", ".jar",
+    ".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi",
+    ".mp3", ".m4a", ".opus", ".ogg", ".wav", ".flac", ".aac",
+    ".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg", ".heic",
+)
+
+
+def _url_ext(url: str) -> str:
+    return os.path.splitext(unquote(urlparse(url).path or ""))[1].lower()
+
+
+def has_file_ext(url: str) -> bool:
+    """آیا خودِ مسیرِ URL به پسوندِ فایلِ شناخته‌شده ختم می‌شود؟ (چارهٔ HEADِ ناموفق)"""
+    return _url_ext(url) in _DIRECT_EXTS
+
+
+_CD_STAR_RE = re.compile(r"filename\*\s*=\s*[^']*'[^']*'([^;]+)", re.I)
+_CD_PLAIN_RE = re.compile(r'filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)', re.I)
+
+
+def _safe_name(name: str) -> str:
+    """نامِ فایلِ امن: بدونِ مسیر، بدونِ کاراکترِ کنترلی، با سقفِ طول."""
+    name = unquote((name or "").strip().strip('"').replace("\\", "/").split("/")[-1])
+    name = re.sub(r'[\x00-\x1f<>:"|?*]+', "", name).strip(" .")
+    if len(name) > 120:                       # پسوند را نگه دار، تنه را کوتاه کن
+        stem, ext = os.path.splitext(name)
+        name = stem[:120 - len(ext)] + ext
+    return name
+
+
+def direct_filename(url: str, disposition: str | None, content_type: str | None) -> str:
+    """نامِ فایل: اول Content-Disposition، بعد مسیرِ URL، در آخر از نوعِ محتوا."""
+    for rx in (_CD_STAR_RE, _CD_PLAIN_RE):
+        m = rx.search(disposition or "")
+        if m:
+            got = _safe_name(next(g for g in m.groups() if g))
+            if got:
+                return got
+    got = _safe_name(os.path.basename(unquote(urlparse(url).path or "")))
+    if got and os.path.splitext(got)[1]:
+        return got
+    ct = (content_type or "").split(";")[0].strip().lower()
+    ext = mimetypes.guess_extension(ct) if ct else None
+    return (got or "download") + (ext or ".bin")
+
+
+def is_direct_response(content_type: str | None, disposition: str | None, url: str) -> bool:
+    """آیا این پاسخ یک **فایل** است (نه صفحهٔ HTML و نه مانیفستِ استریم)؟"""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ct in _MANIFEST_TYPES:
+        return False                                  # m3u8/mpd → کارِ yt-dlp
+    if "attachment" in (disposition or "").lower():
+        return True                                   # سرور خودش گفته «دانلود کن»
+    if not ct:
+        return has_file_ext(url)
+    if ct.startswith(_PAGE_TYPES):
+        return False
+    return True                                       # application/* , video/* , image/* …
+
+
+def _direct_headers(opts: dict) -> dict:
+    h = dict(_BROWSER_HEADERS)
+    h["Accept"] = "*/*"
+    if opts.get("user_agent"):
+        h["User-Agent"] = opts["user_agent"]
+    return h
+
+
+async def _follow(sess, method: str, url: str, proxy: str | None):
+    """ریدایرکت را **دستی** دنبال کن تا هر پرش هم از فیلترِ SSRF رد شود.
+
+    aiohttp با allow_redirects خودش پرش‌ها را نشان نمی‌دهد، و یک ریدایرکت به
+    ۱۶۹٫۲۵۴٫۱۶۹٫۲۵۴ دقیقاً همان چیزی است که is_safe_url جلویش را می‌گیرد.
+    """
+    for _ in range(_DIRECT_HOPS):
+        if not is_safe_url(url):
+            raise RuntimeError(f"blocked url: {url[:120]}")
+        resp = await sess.request(method, url, proxy=proxy, allow_redirects=False)
+        if resp.status in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
+            nxt = urljoin(str(resp.url), resp.headers["Location"])
+            resp.release()
+            url = nxt
+            continue
+        return resp
+    raise RuntimeError("too many redirects")
+
+
+async def probe_direct(url: str, opts: dict | None = None) -> dict | None:
+    """HEADِ سبک: آیا این لینک فایلِ مستقیم است؟ → {is_file, size, filename, …}
+
+    HEAD بدنه را مصرف نمی‌کند (مهم برای لینکِ امضاشدهٔ یک‌بارمصرف). اگر سرور HEAD
+    را نپذیرفت، به پسوندِ خودِ URL برمی‌گردیم — بدترین حالتش رفتارِ امروز است.
+    """
+    import aiohttp
+    opts = opts or {}
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)   # HEAD است؛ بیش از این یعنی سرور نمی‌دهد
+        async with aiohttp.ClientSession(headers=_direct_headers(opts),
+                                         timeout=timeout) as sess:
+            resp = await _follow(sess, "HEAD", url, _http_proxy(opts.get("proxy")))
+            try:
+                if resp.status >= 400:
+                    raise RuntimeError(f"HTTP {resp.status}")
+                ct = resp.headers.get("Content-Type")
+                cd = resp.headers.get("Content-Disposition")
+                try:
+                    size = int(resp.headers.get("Content-Length") or 0)
+                except ValueError:
+                    size = 0
+                return {"is_file": is_direct_response(ct, cd, str(resp.url)),
+                        "size": size, "content_type": ct,
+                        "filename": direct_filename(str(resp.url), cd, ct),
+                        "url": str(resp.url)}
+            finally:
+                resp.release()
+    except Exception as exc:  # noqa: BLE001 — HEAD اختیاری است، شکستش کشنده نیست
+        log.debug("direct probe failed for %s: %s", url[:90], exc)
+        if not has_file_ext(url):
+            return None                      # نمی‌دانیم → همان مسیرِ امروز (yt-dlp)
+        return {"is_file": True, "size": 0, "content_type": None,
+                "filename": direct_filename(url, None, None), "url": url}
+
+
+async def download_direct(url: str, workdir: str, opts: dict | None = None,
+                          max_bytes: int = 0, progress=None,
+                          cancel=None) -> tuple[str, dict]:
+    """فایل را مستقیم استریم کن → (مسیر, info). سقف در **دو** لایه اعمال می‌شود.
+
+    Content-Length پیش از شروع بررسی می‌شود (رد کردنِ ارزان)، ولی چون سرور ممکن است
+    اصلاً ندهد یا دروغ بگوید، شمارشِ واقعیِ بایت‌ها هم حین دانلود سقف را اعمال می‌کند
+    و فایلِ نیمه‌کاره پاک می‌شود.
+    """
+    import aiohttp
+    opts = opts or {}
+    os.makedirs(workdir, exist_ok=True)
+    timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=120)
+    async with aiohttp.ClientSession(headers=_direct_headers(opts), timeout=timeout) as sess:
+        resp = await _follow(sess, "GET", url, _http_proxy(opts.get("proxy")))
+        try:
+            if resp.status >= 400:
+                raise RuntimeError(f"HTTP {resp.status} for {urlparse(url).hostname}")
+            ct = resp.headers.get("Content-Type")
+            cd = resp.headers.get("Content-Disposition")
+            try:
+                total = int(resp.headers.get("Content-Length") or 0)
+            except ValueError:
+                total = 0
+            if max_bytes and total > max_bytes:
+                raise DirectTooLarge(total, max_bytes)
+            name = direct_filename(str(resp.url), cd, ct)
+            out = os.path.join(workdir, name)
+            got, last_pct = 0, -1
+            with open(out, "wb") as fh:
+                async for chunk in resp.content.iter_chunked(_DIRECT_CHUNK):
+                    if cancel is not None and await cancel():
+                        fh.close()
+                        os.remove(out)
+                        raise ProcessingCancelled()
+                    got += len(chunk)
+                    if max_bytes and got > max_bytes:
+                        fh.close()
+                        os.remove(out)
+                        raise DirectTooLarge(got, max_bytes)
+                    fh.write(chunk)
+                    if progress is not None and total:
+                        pct = min(99, int(got * 100 / total))
+                        if pct != last_pct:      # فقط سرِ تغییرِ درصد، نه هر ۲۵۶ کیلوبایت
+                            last_pct = pct
+                            await progress(float(pct))
+        finally:
+            resp.release()
+    from .filetypes import _document_kind
+    # عمداً بدونِ title: کارت برای فایل باید نمای فنی بدهد، نه «کپشنِ پست»
+    return out, {"kind": _document_kind((ct or "").split(";")[0].strip() or None, name),
+                 "filesize": got, "direct": True}
 
 
 async def _spotify_scrape(url: str, max_tracks: int, proxy: str | None = None) -> dict:
