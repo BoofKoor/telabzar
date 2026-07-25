@@ -5,7 +5,7 @@ from aiogram.types import CopyTextButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from . import textstore
-from .callbacks import Act, Cmp, Conv, Dl, Lang, Meta, Rot, Rsz, Spd, Tr, Wm
+from .callbacks import Act, Ck, Cmp, Conv, Dl, Lang, Meta, Rot, Rsz, Spd, Tr, Wm
 from .i18n import t
 
 # رزولوشن‌های هدفِ کاهشِ حجمِ ویدیو → (ارتفاع, بیت‌ریتِ ویدیو kbps)
@@ -359,4 +359,14 @@ def convert_menu_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
         sizes.append(len(fmts) % 3)
     sizes.append(1)  # بازگشت
     b.adjust(*sizes)
+    return b.as_markup()
+
+
+def cookie_attention_kb(token: str):
+    """سه اقدامِ ادمین روی اکانتی که چک‌پوینت خورده (پیامِ هشدار در تلگرام)."""
+    b = InlineKeyboardBuilder()
+    b.button(text="📋 کوکیِ تازه می‌فرستم", callback_data=Ck(act="paste", tok=token))
+    b.button(text="⏸ فعلاً کنار بگذار", callback_data=Ck(act="off", tok=token))
+    b.button(text="🗑 حذفِ اکانت", callback_data=Ck(act="del", tok=token))
+    b.adjust(1, 2)
     return b.as_markup()

@@ -56,3 +56,11 @@ class Tr(CallbackData, prefix="tr"):
 class Dl(CallbackData, prefix="dl"):
     ref: str
     sel: str  # توکنِ کوتاهِ کیفیت (best/audio/شاخصِ فرمت) یا cancel
+
+
+class Ck(CallbackData, prefix="ck"):
+    """اقدامِ ادمین روی اکانتِ کوکیِ نیازمندِ رسیدگی. `tok` = توکنِ کوتاهِ Redis
+    (نامِ فایل می‌تواند بلند باشد و سقفِ ۶۴ بایتِ callback را بشکند)."""
+
+    act: str   # paste | off | del
+    tok: str

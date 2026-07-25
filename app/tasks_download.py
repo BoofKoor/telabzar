@@ -38,7 +38,7 @@ from .cards import message_media_id, progress_note, send_card, update_card
 from .config import settings
 from .db import Sessionmaker
 from .i18n import t
-from .keyboards import download_cancel_kb, download_menu_kb
+from .keyboards import cookie_attention_kb, download_cancel_kb, download_menu_kb
 from .models import File
 
 log = logging.getLogger("telabzar.dl")
@@ -68,6 +68,16 @@ def _is_cookie_error(msg: str, platform: str | None = None) -> bool:
     if D.is_youtube_botcheck(msg, platform):
         return True
     return any(h in low for h in _BAN_HINTS) or any(h in low for h in _LOGIN_HINTS)
+
+
+# یوتیوب بدونِ لاگین ~۳۰۰ ویدیو در ساعت می‌دهد (با لاگین ~۲۰۰۰). پس چسباندنِ کوکی به
+# **هر** دانلود فقط اکانت را می‌سوزاند بدونِ اینکه لازم باشد. این پلتفرم‌ها اول ناشناس
+# تلاش می‌شوند و کوکی تنها وقتی می‌آید که خودِ سرویس بخواهد.
+_ANON_FIRST = {"youtube", "spotify", "tiktok", "pinterest", "other"}
+
+
+def _anon_first(platform: str) -> bool:
+    return platform in _ANON_FIRST
 
 
 def _cookie_platform(platform: str) -> str:
@@ -116,6 +126,37 @@ async def _alert_if_low(redis, bot, platform: str) -> None:
                 pass
     except Exception as exc:  # noqa: BLE001
         log.debug("cookie alert skipped: %s", exc)
+
+
+async def _alert_checkpoint(redis, bot, name: str, platform: str, msg: str) -> None:
+    """اکانت چک‌پوینت/۲FA خورد → این با تلاشِ خودکار حل نمی‌شود؛ ادمین را صدا بزن.
+
+    پیام سه دکمه دارد و ادمین می‌تواند کوکیِ تازه را **همان‌جا در تلگرام** بچسباند
+    (بدونِ بازکردنِ پنل) — همان «جایی که انسان وارد عمل می‌شود».
+    """
+    if redis is None:
+        return
+    try:
+        if not await redis.set(f"ckcheck:{name}", "1", ex=6 * 3600, nx=True):
+            return                                  # تازه خبر داده‌ایم
+        meta = await ck.get_meta(redis, name)
+        label = escape(str(meta.get("label") or name))
+        # نامِ فایل می‌تواند سقفِ ۶۴ بایتِ callback را بشکند → توکنِ کوتاه در Redis
+        tok = secrets.token_urlsafe(6)[:8]
+        await redis.set(f"cktok:{tok}", name, ex=7 * 86400)
+        text = (f"🛑 <b>اکانت نیازِ رسیدگی دارد</b>\n\n"
+                f"پلتفرم: {D.platform_label(platform, 'fa')}\n"
+                f"اکانت: <b>{label}</b>\n"
+                f"دلیل: چک‌پوینت/تأییدِ هویت — با تلاشِ دوباره حل نمی‌شود.\n"
+                f"<code>{escape(' '.join((msg or '').split())[:160])}</code>\n\n"
+                f"تا رسیدگی، این اکانت کنار گذاشته شد و بقیه کار می‌کنند.")
+        for aid in settings.admin_id_set:
+            try:
+                await bot.send_message(aid, text, reply_markup=cookie_attention_kb(tok))
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception as exc:  # noqa: BLE001
+        log.debug("checkpoint alert skipped: %s", exc)
 
 
 async def _metric(redis, platform: str, ok: bool) -> None:
@@ -587,8 +628,16 @@ async def run_download(ctx: dict, payload: dict) -> None:
         # اگر کوکیِ فعلی خطای لاگین/بن داد، اکانت را علامت‌دار و **با کوکیِ بعدی** دوباره
         # تلاش می‌کنیم. فقط وقتی هیچ کوکیِ قابلِ‌استفاده‌ای نماند به کاربر خطا می‌دهیم.
         paths, dl_err, tried = None, None, set()
+        # پاسِ اول **ناشناس** برای پلتفرم‌هایی که بدونِ لاگین جواب می‌دهند (یوتیوب و…):
+        # کوکی فقط وقتی می‌آید که خودِ سرویس بخواهد → اکانت‌ها بی‌دلیل نمی‌سوزند.
+        anon = (_anon_first(platform)
+                and await settings_store.get_bool("dl_cookie_when_needed",
+                                                  settings.dl_cookie_when_needed))
         while True:
-            cookie_name, cookie_path = await _next_cookie(redis, platform, workdir, tried)
+            if anon:
+                cookie_name, cookie_path = None, None
+            else:
+                cookie_name, cookie_path = await _next_cookie(redis, platform, workdir, tried)
             opts = await _opts(redis, platform, workdir, cookie_path)
             try:
                 if engine == "gallerydl":
@@ -646,8 +695,20 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 return
             except Exception as exc:  # noqa: BLE001
                 dl_err = exc
+                cls = ck.classify_error(str(exc))
+                if anon:
+                    # ناشناس نشد → حالا (و فقط حالا) سراغِ کوکی برو. هیچ اکانتی مقصر نیست.
+                    anon = False
+                    if cls != ck.UNRELATED and await ck.pick(redis, _cookie_platform(platform)):
+                        log.info("anonymous attempt failed (%s); retrying with a cookie", cls)
+                        continue
+                    break
                 if cookie_name and _is_cookie_error(str(exc), platform):
-                    await ck.mark_fail(redis, cookie_name)   # خطا + کول‌داونِ پلکانی
+                    # واکنش به **دستهٔ** خطا: محدودیتِ نرخ ضربه نمی‌زند، چک‌پوینت فریز می‌کند
+                    await ck.mark_fail(redis, cookie_name, error_class=cls, message=str(exc))
+                    if ck.needs_human(cls):
+                        await _alert_checkpoint(redis, bot, cookie_name,
+                                                _cookie_platform(platform), str(exc))
                     tried.add(cookie_name)
                     await _alert_if_low(redis, bot, _cookie_platform(platform))
                     if await ck.pick(redis, _cookie_platform(platform), exclude=tried):

@@ -39,6 +39,7 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "dl_allow_unknown": ("bool", settings.dl_allow_unknown),
     "dl_rich_posts": ("bool", settings.dl_rich_posts),
     "dl_cache_enabled": ("bool", settings.dl_cache_enabled),
+    "dl_cookie_when_needed": ("bool", settings.dl_cookie_when_needed),
     "dl_pot_enabled": ("bool", settings.dl_pot_enabled),
     "proxy_url": ("str", settings.proxy_url),
     "dl_default_ux": ("str", settings.dl_default_ux),

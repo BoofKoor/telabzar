@@ -8,14 +8,20 @@ from __future__ import annotations
 
 from html import escape
 
-from aiogram import Router
+from aiogram import F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 from arq import ArqRedis
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import os
+
+from .. import cookies as ck
 from .. import settings_store
+from ..callbacks import Ck
+from ..config import settings
 from ..settings_store import ENUM_VALUES, RUNTIME_KEYS
 
 router = Router(name="admin")
@@ -153,3 +159,80 @@ async def _health(arq_pool: ArqRedis, session: AsyncSession) -> str:
     except Exception:  # noqa: BLE001
         pass
     return "\n".join(lines)
+
+
+# ── صفِ رسیدگیِ کوکی: ادمین از داخلِ تلگرام اکانتِ فریزشده را درست می‌کند ────────
+# چک‌پوینت/۲FA با تلاشِ خودکار حل نمی‌شود. ربات هشدار می‌دهد و ادمین یا کوکیِ تازه
+# می‌چسباند (همین‌جا، بدونِ بازکردنِ پنل) یا اکانت را کنار می‌گذارد/حذف می‌کند.
+_CK_TOK = "cktok:"      # cktok:<token> → نامِ فایلِ کوکی
+_CK_WAIT = "ckwait:"    # ckwait:<admin_id> → نامِ فایلی که منتظرِ متنِ تازه است
+
+
+@router.callback_query(Ck.filter())
+async def cookie_action(cq: CallbackQuery, callback_data: Ck, is_admin: bool,
+                        arq_pool: ArqRedis) -> None:
+    if not is_admin:
+        return
+    name = await arq_pool.get(_CK_TOK + callback_data.tok)
+    name = name if isinstance(name, str) else (name.decode() if name else None)
+    if not name:
+        await cq.answer("این هشدار منقضی شده — از پنل رسیدگی کن.", show_alert=True)
+        return
+    meta = await ck.get_meta(arq_pool, name)
+    label = escape(str(meta.get("label") or name))
+
+    if callback_data.act == "paste":
+        await arq_pool.set(_CK_WAIT + str(cq.from_user.id), name, ex=1800)
+        await cq.message.answer(
+            f"📋 متنِ کوکیِ تازهٔ «{label}» را همین‌جا بفرست.\n"
+            f"<i>Netscape یا JSONِ Cookie-Editor — هر دو قبول است. ۳۰ دقیقه وقت داری.</i>")
+        await cq.answer()
+        return
+
+    if callback_data.act == "off":
+        meta["disabled"] = True
+        await ck.set_meta(arq_pool, name, meta)
+        await cq.answer("کنار گذاشته شد.")
+    else:                                    # del
+        await ck.del_meta(arq_pool, name)
+        try:
+            os.remove(os.path.join(settings.cookies_dir, name))
+        except OSError:
+            pass
+        await ck._unmirror_cookie(arq_pool, name)
+        await cq.answer("حذف شد.")
+    try:
+        await cq.message.edit_reply_markup(reply_markup=None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@router.message(F.text.len() > 60)
+async def cookie_paste(message: Message, is_admin: bool, arq_pool: ArqRedis) -> None:
+    """متنِ بلندی که ادمین بعد از زدنِ «کوکیِ تازه می‌فرستم» می‌فرستد = همان کوکی.
+
+    فیلترِ طولِ ۶۰ کاراکتر جلوی گرفتنِ پیام‌های عادی را می‌گیرد، و اگر انتظاری ثبت
+    نشده باشد این هندلر عبور می‌کند تا مسیرهای بعدی (لینک/فایل) کارِ خودشان را بکنند.
+    """
+    waiting = await arq_pool.get(_CK_WAIT + str(message.from_user.id)) if is_admin else None
+    name = waiting if isinstance(waiting, str) else (waiting.decode() if waiting else None)
+    if not name:
+        raise SkipHandler
+    text, err = ck._normalize_cookie_text(message.text)
+    if err:
+        await message.reply(f"⚠️ {err}")
+        return
+    meta = await ck.get_meta(arq_pool, name)
+    err = ck._check_required(text, str(meta.get("platform") or ""))
+    if err:
+        await message.reply(f"⚠️ {err}")
+        return
+    err = await ck._save_cookie(arq_pool, name, text)
+    if err:
+        await message.reply(f"⚠️ {err}")
+        return
+    await ck.unfreeze(arq_pool, name)                    # از صفِ رسیدگی خارج
+    await arq_pool.delete(_CK_WAIT + str(message.from_user.id))
+    await arq_pool.delete(f"ckcheck:{name}")             # هشدارِ بعدی دوباره مجاز
+    await message.reply(f"✅ کوکیِ «{escape(str(meta.get('label') or name))}» به‌روز شد "
+                        f"و اکانت دوباره واردِ چرخش شد.")

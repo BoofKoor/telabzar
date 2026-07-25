@@ -72,6 +72,8 @@ GROUPS = [
         ("downloader_enabled", "دانلودر فعال", ""),
         ("dl_allow_unknown", "تلاش برای هر لینک", "هاستِ ناشناخته را هم دانلود کن"),
         ("dl_rich_posts", "پستِ چند‌عکسی به‌شکلِ مقاله", "Rich Message؛ خطا → آلبوم"),
+        ("dl_cookie_when_needed", "کوکی فقط وقتی لازم است",
+         "اول ناشناس تلاش کن — اکانت‌ها کمتر می‌سوزند"),
         ("dl_cache_enabled", "کشِ لینک‌های تکراری",
          "لینکِ قبلاً دانلودشده آنی از تلگرام تحویل می‌شود"),
         ("dl_pot_enabled", "توکنِ یوتیوب (pot-provider)", "اگر دانلودِ یوتیوب کرش کرد خاموشش کن"),
@@ -352,15 +354,39 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
 .ck-row:first-child{border-top:0}
 .sdot{width:9px;height:9px;border-radius:50%;flex:none}
 .s-healthy{background:#16a34a}.s-suspect{background:#d97706}.s-invalid{background:#dc2626}
-.s-cooldown{background:#0ea5e9}.s-disabled{background:#cbd5e1}
+.s-cooldown{background:#0ea5e9}.s-disabled{background:#cbd5e1}.s-frozen{background:#b91c1c}
 .ck-name{font-size:13.5px;font-weight:700;min-width:96px}
 .ck-meta{color:#94a3b8;font-size:12px;min-width:170px}
 .ck-acts{display:flex;gap:6px;flex-wrap:wrap;margin-inline-start:auto}
+.guide{margin:0;padding-inline-start:20px;font-size:12.5px;line-height:2.1;color:#334155}
+.guide li{margin-bottom:2px}
 .repl{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:12px;margin:2px 0 10px}
 {% endblock %}
 {% block body %}
 {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
 {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
+
+<div class=card>
+  <h3>📌 روالِ درستِ استخراجِ کوکی <span class=tag>مهم‌ترین عاملِ عمرِ اکانت</span></h3>
+  <div class=pad>
+    <div class=note style=margin-bottom:12px>
+      <b>چرا کوکیِ یوتیوب زود می‌میرد:</b> اگر تبِ یوتیوب در مرورگرِ عادی باز بماند،
+      یوتیوب کوکی را <b>می‌چرخاند</b> و نسخه‌ای که export کرده‌ای باطل می‌شود. راهِ
+      درست طبقِ ویکیِ خودِ yt-dlp این است:
+    </div>
+    <ol class=guide>
+      <li>یک پنجرهٔ <b>ناشناس (Incognito / Private)</b> باز کن و لاگین کن.</li>
+      <li><b>در همان تب</b> برو به <span class="mono ltr">youtube.com/robots.txt</span>.</li>
+      <li>کوکی‌های <span class="mono ltr">youtube.com</span> را export کن.</li>
+      <li>پنجرهٔ ناشناس را <b>ببند</b> — <b>لاگ‌اوت نکن</b> (لاگ‌اوت سشن را باطل می‌کند).</li>
+    </ol>
+    <div class=hint style="border:0;padding:10px 0 0">
+      اینستاگرام: همان روال، ولی کافی است <span class=mono>sessionid</span> را داشته باشی.
+      سشنِ اینستاگرام به <b>IP و دستگاه</b> حساس است؛ کوکی را از همان‌جایی بگیر که
+      قرار است استفاده شود و اکانت‌ها را قاطیِ هم نکن.
+    </div>
+  </div>
+</div>
 
 <div class=card>
   <h3>➕ افزودنِ اکانت <span class=tag>کپی/پیست — بدونِ فایل</span></h3>
@@ -388,6 +414,34 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
     </form>
   </div>
 </div>
+
+{% if attention %}
+<div class=card style="border-color:#fecaca">
+  <h3>🛑 نیازمندِ رسیدگی <span class="tag" style="background:#fef2f2;color:#b91c1c">{{attention|length}}</span></h3>
+  <div class=pad>
+    <div class=hint style="border:0;padding:0 0 10px">
+      این اکانت‌ها با تلاشِ خودکار درست نمی‌شوند (چک‌پوینت/۲FA یا کوکیِ باطل).
+      ربات هم موقعِ رخ‌دادن در تلگرام خبر می‌دهد و می‌توانی همان‌جا کوکیِ تازه بچسبانی.
+    </div>
+    {% for c in attention %}
+    <div class=ck-row>
+      <span class="sdot s-{{c.status}}"></span>
+      <b class=ck-name>{{c.label}}</b>
+      <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
+      <span class=ck-meta>{{ pfa.get(c.platform, c.platform) }}
+        {%- if c.last_error %} · <span class=mono>{{c.last_error}}</span>{% endif %}</span>
+      <span class=ck-acts>
+        <form class=inline method=post action=/cookies/unfreeze>
+          <input type=hidden name=name value="{{c.name}}">
+          <button class=btn-sm>✅ رسیدگی شد</button></form>
+        <form class=inline method=post action=/cookies/delete onsubmit="return confirm('حذفِ {{c.label}}؟')">
+          <input type=hidden name=name value="{{c.name}}"><button class="btn-sm btn-danger">حذف</button></form>
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 {% for g in groups %}
 <div class=card>
@@ -1909,9 +1963,11 @@ async def node_peers(request: web.Request) -> web.Response:
 
 
 _STATUS_FA = {ck_pool.HEALTHY: "سالم", ck_pool.SUSPECT: "مشکوک", ck_pool.INVALID: "باطل — نیازِ تعویض",
-              ck_pool.COOLDOWN: "کنارگذاشته", ck_pool.DISABLED: "غیرفعال"}
+              ck_pool.COOLDOWN: "کنارگذاشته", ck_pool.DISABLED: "غیرفعال",
+              ck_pool.FROZEN: "چک‌پوینت — نیازِ انسان"}
 _STATUS_BADGE = {ck_pool.HEALTHY: "ok", ck_pool.SUSPECT: "warn", ck_pool.INVALID: "err",
-                 ck_pool.COOLDOWN: "warn", ck_pool.DISABLED: "mute"}
+                 ck_pool.COOLDOWN: "warn", ck_pool.DISABLED: "mute",
+                 ck_pool.FROZEN: "err"}
 
 
 def _ago_fa(ts: int) -> str:
@@ -1952,8 +2008,13 @@ async def cookies_page(request: web.Request) -> web.Response:
         groups.append({"platform": key, "items": items, "total": len(items),
                        "healthy": sum(1 for i in items
                                       if i["status"] in (ck_pool.HEALTHY, ck_pool.SUSPECT))})
+    # صفِ رسیدگی: فریزشده (چک‌پوینت/۲FA) یا باطل — با تلاشِ خودکار درست نمی‌شوند
+    attention = [{**a, "status_fa": _STATUS_FA.get(a["status"], a["status"]),
+                  "badge": _STATUS_BADGE.get(a["status"], "mute")}
+                 for a in accounts if a["status"] in (ck_pool.FROZEN, ck_pool.INVALID)]
     msg = {"up": "اکانت اضافه شد.", "del": "اکانت حذف شد.", "rep": "کوکی جایگزین شد.",
-           "cd": "وضعیتِ اکانت به‌روزرسانی شد."}.get(request.query.get("ok", ""), "")
+           "cd": "وضعیتِ اکانت به‌روزرسانی شد.",
+           "fix": "اکانت به چرخش برگشت."}.get(request.query.get("ok", ""), "")
     dl_node = await node_mod.role_online(redis, "download")
     mirrored = 0
     try:
@@ -1963,65 +2024,10 @@ async def cookies_page(request: web.Request) -> web.Response:
     return _render("cookies", admin_id=_session_admin(request), active="cookies",
                    pill_ok=await _pill_ok(request.app), groups=groups,
                    platforms=COOKIE_PLATFORMS, dir_ok=_cookies_dir_ok(),
+                   attention=attention,
                    cookies_dir=settings.cookies_dir, saved=msg,
                    error=request.query.get("err", ""),
                    dl_node_online=dl_node, mirrored=mirrored)
-
-
-def _looks_like_cookiejar(text: str) -> bool:
-    """اعتبارسنجیِ سبک: هدرِ Netscape یا خطوطِ tab-جدا (domain\\tflag\\t...)."""
-    head = text.lstrip()[:200].lower()
-    if head.startswith("# netscape") or "# http cookie file" in head:
-        return True
-    for line in text.splitlines():
-        if line and not line.startswith("#") and line.count("\t") >= 5:
-            return True
-    return False
-
-
-def _json_to_netscape(text: str) -> str | None:
-    """خروجیِ JSONِ افزونه‌ها (Cookie-Editor / EditThisCookie) را به cookies.txtِ
-    Netscape تبدیل می‌کند تا کاربر لازم نباشد فرمت را دستی عوض کند."""
-    try:
-        data = json.loads(text)
-    except (ValueError, TypeError):
-        return None
-    if isinstance(data, dict):  # بعضی خروجی‌ها آرایه را می‌پیچند
-        for key in ("cookies", "Request Cookies", "data"):
-            if isinstance(data.get(key), list):
-                data = data[key]
-                break
-    if not isinstance(data, list):
-        return None
-    lines = ["# Netscape HTTP Cookie File", "# ساخته‌شده از خروجیِ JSON توسطِ پنلِ تل‌ابزار"]
-    used = False
-    for c in data:
-        if not isinstance(c, dict):
-            continue
-        name = c.get("name")
-        domain = c.get("domain") or c.get("host")
-        if not name or not domain:
-            continue
-        value = c.get("value", "") or ""
-        path = c.get("path") or "/"
-        secure = bool(c.get("secure"))
-        host_only = c.get("hostOnly")
-        if host_only is None:
-            host_only = not str(domain).startswith(".")
-        include_sub = not host_only
-        if include_sub and not str(domain).startswith("."):
-            domain = "." + str(domain)
-        exp = c.get("expirationDate") or c.get("expires") or c.get("expiry") or 0
-        try:
-            exp = max(0, int(float(exp)))
-        except (TypeError, ValueError):
-            exp = 0
-        lines.append("\t".join([
-            str(domain), "TRUE" if include_sub else "FALSE", str(path),
-            "TRUE" if secure else "FALSE", str(exp), str(name), str(value),
-        ]))
-        used = True
-    return "\n".join(lines) + "\n" if used else None
 
 
 # ── آینهٔ کوکی در Redis (تا نودِ دانلود که دیسکِ کوکیِ مستر را ندارد هم ببیندشان) ──
@@ -2030,20 +2036,16 @@ _CK_SET = "ckfiles"
 _CK_CONTENT = "ckfile:"
 
 
-async def _mirror_cookie(redis, name: str, content: str) -> None:
-    try:
-        await redis.sadd(_CK_SET, name)
-        await redis.set(_CK_CONTENT + name, content)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-async def _unmirror_cookie(redis, name: str) -> None:
-    try:
-        await redis.srem(_CK_SET, name)
-        await redis.delete(_CK_CONTENT + name)
-    except Exception:  # noqa: BLE001
-        pass
+# این توابع به `app/cookies.py` منتقل شدند (رباتْ هم برای پیستِ داخلِ تلگرام لازمشان
+# دارد و نباید به فرآیندِ پنل وابسته باشد). نام‌های محلی برای سازگاریِ صداکننده‌ها:
+_REQUIRED_COOKIE = ck_pool._REQUIRED_COOKIE
+_looks_like_cookiejar = ck_pool._looks_like_cookiejar
+_json_to_netscape = ck_pool._json_to_netscape
+_normalize_cookie_text = ck_pool._normalize_cookie_text
+_check_required = ck_pool._check_required
+_save_cookie = ck_pool._save_cookie
+_mirror_cookie = ck_pool._mirror_cookie
+_unmirror_cookie = ck_pool._unmirror_cookie
 
 
 async def _mirror_all_cookies(redis) -> None:
@@ -2074,50 +2076,22 @@ async def _mirror_all_cookies(redis) -> None:
 # کوکیِ «کلیدی» هر پلتفرم — اگر در متنِ چسبانده‌شده نباشد، همان لحظه خطا می‌دهیم
 # (به‌جای اینکه فردا وسطِ کارِ کاربر معلوم شود). یوتیوب: LOGIN_INFO همان سیگنالی است
 # که خودِ yt-dlp برای «کوکیِ لاگین‌شده» چک می‌کند — و چکش رایگان است (بدونِ شبکه).
-_REQUIRED_COOKIE = {"instagram": ("sessionid",), "youtube": ("LOGIN_INFO",),
-                    "twitter": ("auth_token",), "tiktok": ("sessionid",)}
 
 
-def _normalize_cookie_text(text: str) -> tuple[str | None, str]:
-    """(متنِ Netscape یا None, پیامِ خطا). JSONِ افزونه‌ها هم پذیرفته می‌شود."""
-    # BOM/کاراکترهای صفرعرض هنگامِ کپی‌پیست از فایل یا مرورگر می‌آیند و JSON را می‌شکنند
-    text = (text or "").replace("﻿", "").replace("​", "").replace("‎", "").strip()
-    if not text:
-        return None, "چیزی چسبانده نشد."
-    if len(text) > 512 * 1024:
-        return None, "متن خیلی بزرگ است."
-    if _looks_like_cookiejar(text):
-        return text, ""
-    converted = _json_to_netscape(text)
-    if converted:
-        return converted, ""
-    return None, "نه cookies.txt (Netscape) است نه JSONِ معتبرِ کوکی."
-
-
-def _check_required(text: str, platform: str) -> str:
-    """پیامِ خطا اگر کوکیِ کلیدیِ آن پلتفرم در متن نباشد (وگرنه رشتهٔ خالی)."""
-    need = _REQUIRED_COOKIE.get(platform)
-    if not need:
-        return ""
-    if any(n in text for n in need):
-        return ""
-    return (f"کوکیِ «{need[0]}» در متن پیدا نشد — مطمئن شو از اکانتِ لاگین‌شده "
-            f"و برای دامنهٔ درست کپی کرده‌ای.")
-
-
-async def _save_cookie(redis, name: str, text: str) -> str:
-    """نوشتن روی دیسکِ مستر + آینهٔ Redis. پیامِ خطا یا رشتهٔ خالی."""
-    dest = os.path.join(settings.cookies_dir, name)
-    try:
-        with open(dest, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        os.chmod(dest, 0o600)  # best-effort
-    except OSError:
-        return "ذخیره نشد."
-    except Exception:  # noqa: BLE001
-        pass
-    await _mirror_cookie(redis, name, text)  # تا نودها هم ببینند
-    return ""
+async def cookies_unfreeze(request: web.Request) -> web.Response:
+    """ادمین رسیدگی کرد → اکانت از صفِ «نیازمندِ انسان» بیرون و واردِ چرخش می‌شود."""
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    name = os.path.basename((form.get("name") or "").strip())
+    redis = request.app["redis"]
+    if name:
+        await ck_pool.unfreeze(redis, name)
+        try:
+            await redis.delete(f"ckcheck:{name}")   # هشدارِ بعدی دوباره مجاز شود
+        except Exception:  # noqa: BLE001
+            pass
+    raise web.HTTPFound("/cookies?ok=fix")
 
 
 async def cookies_add(request: web.Request) -> web.Response:
@@ -2278,6 +2252,7 @@ def build_app() -> web.Application:
     app.router.add_post("/cookies/add", cookies_add)
     app.router.add_post("/cookies/replace", cookies_replace)
     app.router.add_post("/cookies/delete", cookies_delete)
+    app.router.add_post("/cookies/unfreeze", cookies_unfreeze)
     app.router.add_post("/cookies/cooldown", cookies_cooldown)
     app.router.add_get("/health", health_page)
     app.router.add_get("/users", users_page)
