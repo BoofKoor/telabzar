@@ -229,6 +229,8 @@ def _common_flags(opts: dict) -> list[str]:
     flags = ["--no-warnings", "--no-playlist"]
     if opts.get("proxy"):
         flags += ["--proxy", opts["proxy"]]
+    if opts.get("user_agent"):   # هویتِ سشن: همان UA که اکانت با آن شناخته می‌شود
+        flags += ["--user-agent", opts["user_agent"]]
     if opts.get("cookies"):
         flags += ["--cookies", opts["cookies"]]
     if opts.get("pot_provider"):
@@ -941,6 +943,8 @@ async def _yt_search_candidates(query: str, opts: dict, limit: int = 6, timeout:
     flags = ["--flat-playlist", "-J", "--no-warnings"]
     if opts.get("proxy"):
         flags += ["--proxy", opts["proxy"]]
+    if opts.get("user_agent"):   # هویتِ سشن: همان UA که اکانت با آن شناخته می‌شود
+        flags += ["--user-agent", opts["user_agent"]]
     if ck or opts.get("cookies"):
         flags += ["--cookies", ck or opts["cookies"]]
     cmd = [YTDLP, *flags, f"ytsearch{limit}:{query}"]
@@ -1170,6 +1174,8 @@ async def download_gallerydl(url: str, workdir: str, opts: dict,
     cmd = [GALLERY_DL, "-D", outdir, "--write-metadata"]  # سایدکارِ .json برای کپشن
     if opts.get("proxy"):
         cmd += ["--proxy", opts["proxy"]]
+    if opts.get("user_agent"):   # هویتِ سشن: UAِ ثابتِ همان اکانت
+        cmd += ["--user-agent", opts["user_agent"]]
     cookie_arg = ck or opts.get("cookies")
     if cookie_arg:
         cmd += ["--cookies", cookie_arg]

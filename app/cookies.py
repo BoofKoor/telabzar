@@ -36,6 +36,78 @@ _INVALID_AT = 3            # این تعداد خطای پشتِ‌هم = «با
 _COOLDOWN_SEC = 1800       # کول‌داونِ پایه (پلکانی می‌شود)
 _RATE_COOLDOWN = 3600      # سرعت‌گیر: استراحتِ بلند، **بدونِ** ضربه به اکانت
 
+_CK_USE = "ckuse:"         # ckuse:<name>:<yyyymmddHH> → مصرفِ ساعتی (سطلِ توکن)
+_CK_LAST = "cklast:"       # cklast:<name> → زمانِ آخرین استفاده (فاصلهٔ حداقلی)
+
+# سقفِ ساعتیِ هر اکانت. تحقیق: فشارِ ۲× یعنی سوختنِ ۴×، پس محافظه‌کار می‌مانیم.
+# یک IPِ خانگی حدودِ ۲۰۰ درخواست/ساعت تحمل می‌کند؛ ما خیلی زیرِ آن می‌مانیم.
+_HOURLY_CAP = {"instagram": 30, "twitter": 40, "tiktok": 40, "youtube": 120}
+_HOURLY_DEFAULT = 60
+_MIN_GAP_SEC = 20          # حداقل فاصله بین دو استفاده از **یک** اکانت
+
+# گرم‌کردن: اکانتِ تازه با سهمِ کم شروع می‌کند و طیِ چند روز به ظرفیتِ کامل می‌رسد.
+# یک اکانتِ نو که ناگهان پرمصرف شود، دقیقاً الگویی است که تشخیص داده می‌شود.
+_WARMUP_DAYS = 4
+_WARMUP_FLOOR = 0.25       # روزِ اول ۲۵٪ ظرفیت
+
+
+def hourly_cap(platform: str) -> int:
+    return _HOURLY_CAP.get(platform, _HOURLY_DEFAULT)
+
+
+def warmup_factor(added_ts: int, now: int | None = None) -> float:
+    """ضریبِ ظرفیت بر اساسِ سنِ اکانت (۰٫۲۵ → ۱٫۰ طیِ `_WARMUP_DAYS` روز)."""
+    if not added_ts:
+        return 1.0
+    age_days = max(0.0, ((now or int(time.time())) - int(added_ts)) / 86400.0)
+    if age_days >= _WARMUP_DAYS:
+        return 1.0
+    return _WARMUP_FLOOR + (1.0 - _WARMUP_FLOOR) * (age_days / _WARMUP_DAYS)
+
+
+def budget_of(meta: dict, now: int | None = None) -> int:
+    """سقفِ مجازِ این ساعت برای این اکانت (ظرفیتِ پلتفرم × ضریبِ گرم‌شدن)."""
+    cap = hourly_cap(str(meta.get("platform") or ""))
+    return max(1, int(cap * warmup_factor(int(meta.get("added") or 0), now)))
+
+
+def _hour_key(name: str, now: int | None = None) -> str:
+    return _CK_USE + name + ":" + time.strftime("%Y%m%d%H", time.gmtime(now or time.time()))
+
+
+async def usage(redis, name: str, now: int | None = None) -> int:
+    """مصرفِ این ساعتِ اکانت."""
+    if redis is None:
+        return 0
+    try:
+        return int(await redis.get(_hour_key(name, now)) or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+async def note_use(redis, name: str | None) -> None:
+    """یک استفاده را ثبت کن (سطلِ ساعتی + مهرِ زمانِ آخرین استفاده)."""
+    if not name or redis is None:
+        return
+    try:
+        k = _hour_key(name)
+        if await redis.incr(k) == 1:
+            await redis.expire(k, 7200)
+        await redis.set(_CK_LAST + name, str(int(time.time())), ex=3600)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _over_budget(redis, name: str, meta: dict, now: int) -> bool:
+    """آیا این اکانت سهمیهٔ ساعتی‌اش را تمام کرده یا خیلی زود دوباره صدا زده می‌شود؟"""
+    if await usage(redis, name, now) >= budget_of(meta, now):
+        return True
+    try:
+        last = int(await redis.get(_CK_LAST + name) or 0)
+    except Exception:  # noqa: BLE001
+        last = 0
+    return bool(last and now - last < _MIN_GAP_SEC)
+
 # ── دسته‌بندیِ خطا ───────────────────────────────────────────────
 # شمارندهٔ «۳ خطای پشتِ‌هم = باطل» خام بود: یک محدودیتِ نرخ (که یعنی *ما* تند رفتیم)
 # با یک لاگین‌نداشتنِ واقعی یکی حساب می‌شد. حالا هر خطا دسته می‌گیرد و واکنش فرق می‌کند.
@@ -83,7 +155,9 @@ def burns_account(cls: str) -> bool:
 def _blank_meta(name: str) -> dict:
     return {"label": os.path.splitext(name)[0], "platform": guess_platform(name),
             "added": int(time.time()), "last_ok": 0, "fail_streak": 0, "disabled": False,
-            "frozen": False, "last_error": "", "last_error_at": 0}
+            "frozen": False, "last_error": "", "last_error_at": 0,
+            # هویتِ سشن: کوکی همیشه با همین خروجی و همین UA استفاده می‌شود
+            "node_id": "", "proxy": "", "user_agent": ""}
 
 
 def guess_platform(name: str) -> str:
@@ -201,26 +275,44 @@ async def healthy_count(redis, platform: str) -> int:
 _USE_ORDER = (HEALTHY, SUSPECT, INVALID)  # کول‌داون/غیرفعال هرگز
 
 
-async def pick(redis, platform: str, exclude: set[str] | None = None) -> str | None:
+async def pick(redis, platform: str, exclude: set[str] | None = None,
+               node_id: str | None = None, ignore_budget: bool = False) -> str | None:
     """نامِ کوکیِ بعدیِ قابلِ‌استفاده برای این پلتفرم (یا None اگر چیزی نماند).
 
-    اولویت: سالم → مشکوک → باطل (آخرین چاره؛ بهتر از هیچ). غیرفعال و کول‌داون رد
-    می‌شوند. بینِ هم‌رتبه‌ها، **کم‌استفاده‌ترین** (قدیمی‌ترین `last_ok`) انتخاب می‌شود تا
-    بار پخش شود و اکانت‌ها یکنواخت بسوزند."""
+    اولویت: سالم → مشکوک → باطل (آخرین چاره؛ بهتر از هیچ). غیرفعال/کول‌داون/فریز رد
+    می‌شوند، و اکانتی که سهمیهٔ ساعتی‌اش تمام شده یا تازه استفاده شده هم رد می‌شود
+    (سرعت‌گیر — فشارِ ۲× یعنی سوختنِ ۴×).
+
+    `node_id`: خروجیِ فعلی. اکانتی که به **همین** خروجی پین شده مقدم است؛ اکانتِ
+    پین‌شده به خروجیِ دیگر اصلاً برداشته نمی‌شود، چون اینستاگرام IP را هویت می‌داند و
+    جابه‌جاییِ IPِ یک سشن سریع‌ترین راهِ چک‌پوینت است.
+    اگر همه سهمیه‌شان تمام باشد، `ignore_budget=True` آخرین تلاش را ممکن می‌کند.
+    """
     exclude = exclude or set()
-    ranked: list[tuple[int, int, str]] = []
+    now = int(time.time())
+    ranked: list[tuple[int, int, int, str]] = []
     for a in await accounts(redis, platform):
-        if a["name"] in exclude or a["status"] in (COOLDOWN, DISABLED):
+        if a["name"] in exclude or a["status"] in (COOLDOWN, DISABLED, FROZEN):
             continue
         try:
             rank = _USE_ORDER.index(a["status"])
         except ValueError:
             continue
-        ranked.append((rank, int(a.get("last_ok") or 0), a["name"]))
+        pinned = str(a.get("node_id") or "")
+        if pinned and node_id and pinned != node_id:
+            continue                       # هویتِ این اکانت به خروجیِ دیگری بسته است
+        if not ignore_budget and await _over_budget(redis, a["name"], a, now):
+            continue
+        # اکانتِ پین‌شده به همین خروجی مقدم است (هویتِ پایدار = عمرِ بیشتر)
+        affinity = 0 if (pinned and pinned == node_id) else 1
+        ranked.append((affinity, rank, int(a.get("last_ok") or 0), a["name"]))
     if not ranked:
+        # همه سهمیه‌شان پر است؟ یک‌بار بدونِ سرعت‌گیر تلاش کن تا کاربر بی‌جواب نماند
+        if not ignore_budget:
+            return await pick(redis, platform, exclude, node_id, ignore_budget=True)
         return None
     ranked.sort()
-    return ranked[0][2]
+    return ranked[0][3]
 
 
 async def materialize(redis, name: str, workdir: str | None) -> str | None:

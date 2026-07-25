@@ -453,8 +453,12 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
       <span class="sdot s-{{c.status}}"></span>
       <b class=ck-name>{{c.label}}</b>
       <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
-      <span class=ck-meta>آخرین موفقیت: {{c.last_ok_fa}} · خطا: <bdi>{{c.fail_streak}}</bdi> · افزوده: {{c.added_fa}}</span>
+      <span class=ck-meta>آخرین موفقیت: {{c.last_ok_fa}} · خطا: <bdi>{{c.fail_streak}}</bdi> · افزوده: {{c.added_fa}}
+        · سهمیه: <bdi>{{c.used}}/{{c.budget}}</bdi> در ساعت{% if c.warming %} <span class=chip>در حالِ گرم‌شدن</span>{% endif %}
+        {%- if c.node_id %} · خروجی: <span class=mono>{{c.node_name}}</span>{% endif %}</span>
       <span class=ck-acts>
+        <button class=btn-sm onclick="var d=document.getElementById('i-{{loop.index0}}-{{g.platform}}');
+          d.style.display=d.style.display=='none'?'block':'none';return false">🧬 هویت</button>
         <button class=btn-sm onclick="var d=document.getElementById('r-{{loop.index0}}-{{g.platform}}');
           d.style.display=d.style.display=='none'?'block':'none';return false">🔄 کوکیِ تازه</button>
         <form class=inline method=post action=/cookies/cooldown><input type=hidden name=name value="{{c.name}}">
@@ -463,6 +467,22 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
         <form class=inline method=post action=/cookies/delete onsubmit="return confirm('حذفِ {{c.label}}؟')">
           <input type=hidden name=name value="{{c.name}}"><button class="btn-sm btn-danger">حذف</button></form>
       </span>
+    </div>
+    <div class=repl id="i-{{loop.index0}}-{{g.platform}}" style=display:none>
+      <div style="color:#64748b;font-size:12px;margin-bottom:7px">
+        هویتِ این اکانت — کوکی همیشه با <b>همین خروجی و همین UA</b> استفاده می‌شود.
+        سرویس‌ها IP را هویت می‌دانند؛ جابه‌جاییِ IPِ یک سشن سریع‌ترین راهِ چک‌پوینت است.
+      </div>
+      <form method=post action=/cookies/identity class=ck-form>
+        <input type=hidden name=name value="{{c.name}}">
+        <select class=sel name=node_id>
+          <option value="">خروجی: هرکدام</option>
+          {% for n in nodes %}<option value="{{n.id}}" {% if c.node_id==n.id %}selected{% endif %}>{{n.name}}</option>{% endfor %}
+        </select>
+        <input class=inp name=proxy value="{{c.proxy}}" placeholder="پروکسیِ اختصاصی (اختیاری)">
+        <input class=inp name=user_agent value="{{c.user_agent}}" placeholder="User-Agent (اختیاری)">
+        <button class=btn-go>ذخیره</button>
+      </form>
     </div>
     <div class=repl id="r-{{loop.index0}}-{{g.platform}}" style=display:none>
       <div style="color:#64748b;font-size:12px;margin-bottom:7px">کوکیِ تازهٔ همین اکانت را بچسبان — برچسب و تاریخچه حفظ می‌شود:</div>
@@ -1989,13 +2009,24 @@ async def cookies_page(request: web.Request) -> web.Response:
         raise web.HTTPFound("/login")
     redis = request.app["redis"]
     accounts = await ck_pool.accounts(redis)
+    # نودهای موجود برای پینِ خروجی (هویتِ سشن = کوکی + IP + UA)
+    async with Sessionmaker() as db:
+        node_rows = (await db.execute(select(Node))).scalars().all()
+    nodes = [{"id": n.id, "name": f"{n.name} · {n.role}"} for n in node_rows]
+    node_names = {n["id"]: n["name"] for n in nodes}
     # گروه‌بندی per-platform (به ترتیبِ ثابتِ COOKIE_PLATFORMS)
     by_platform: dict[str, list[dict]] = {}
     for a in accounts:
         item = {**a, "status_fa": _STATUS_FA.get(a["status"], a["status"]),
                 "badge": _STATUS_BADGE.get(a["status"], "mute"),
                 "last_ok_fa": _ago_fa(a.get("last_ok") or 0),
-                "added_fa": _ago_fa(a.get("added") or 0)}
+                "added_fa": _ago_fa(a.get("added") or 0),
+                "used": await ck_pool.usage(redis, a["name"]),
+                "budget": ck_pool.budget_of(a),
+                "warming": ck_pool.warmup_factor(int(a.get("added") or 0)) < 1.0,
+                "node_id": a.get("node_id") or "", "proxy": a.get("proxy") or "",
+                "user_agent": a.get("user_agent") or "",
+                "node_name": node_names.get(a.get("node_id") or "", a.get("node_id") or "")}
         by_platform.setdefault(a.get("platform") or "other", []).append(item)
     groups = []
     for key, _fa in COOKIE_PLATFORMS:
@@ -2014,7 +2045,8 @@ async def cookies_page(request: web.Request) -> web.Response:
                  for a in accounts if a["status"] in (ck_pool.FROZEN, ck_pool.INVALID)]
     msg = {"up": "اکانت اضافه شد.", "del": "اکانت حذف شد.", "rep": "کوکی جایگزین شد.",
            "cd": "وضعیتِ اکانت به‌روزرسانی شد.",
-           "fix": "اکانت به چرخش برگشت."}.get(request.query.get("ok", ""), "")
+           "fix": "اکانت به چرخش برگشت.",
+           "ident": "هویتِ اکانت ذخیره شد."}.get(request.query.get("ok", ""), "")
     dl_node = await node_mod.role_online(redis, "download")
     mirrored = 0
     try:
@@ -2024,7 +2056,7 @@ async def cookies_page(request: web.Request) -> web.Response:
     return _render("cookies", admin_id=_session_admin(request), active="cookies",
                    pill_ok=await _pill_ok(request.app), groups=groups,
                    platforms=COOKIE_PLATFORMS, dir_ok=_cookies_dir_ok(),
-                   attention=attention,
+                   attention=attention, nodes=nodes,
                    cookies_dir=settings.cookies_dir, saved=msg,
                    error=request.query.get("err", ""),
                    dl_node_online=dl_node, mirrored=mirrored)
@@ -2076,6 +2108,23 @@ async def _mirror_all_cookies(redis) -> None:
 # کوکیِ «کلیدی» هر پلتفرم — اگر در متنِ چسبانده‌شده نباشد، همان لحظه خطا می‌دهیم
 # (به‌جای اینکه فردا وسطِ کارِ کاربر معلوم شود). یوتیوب: LOGIN_INFO همان سیگنالی است
 # که خودِ yt-dlp برای «کوکیِ لاگین‌شده» چک می‌کند — و چکش رایگان است (بدونِ شبکه).
+
+
+async def cookies_identity(request: web.Request) -> web.Response:
+    """پینِ هویتِ اکانت: خروجی (نود) + پروکسیِ اختصاصی + User-Agent."""
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    name = os.path.basename((form.get("name") or "").strip())
+    if not name:
+        raise web.HTTPFound("/cookies")
+    redis = request.app["redis"]
+    meta = await ck_pool.get_meta(redis, name)
+    meta["node_id"] = (form.get("node_id") or "").strip()[:24]
+    meta["proxy"] = (form.get("proxy") or "").strip()[:200]
+    meta["user_agent"] = (form.get("user_agent") or "").strip()[:300]
+    await ck_pool.set_meta(redis, name, meta)
+    raise web.HTTPFound("/cookies?ok=ident")
 
 
 async def cookies_unfreeze(request: web.Request) -> web.Response:
@@ -2253,6 +2302,7 @@ def build_app() -> web.Application:
     app.router.add_post("/cookies/replace", cookies_replace)
     app.router.add_post("/cookies/delete", cookies_delete)
     app.router.add_post("/cookies/unfreeze", cookies_unfreeze)
+    app.router.add_post("/cookies/identity", cookies_identity)
     app.router.add_post("/cookies/cooldown", cookies_cooldown)
     app.router.add_get("/health", health_page)
     app.router.add_get("/users", users_page)
