@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     dl_cooldown_sec: int = 0       # فاصلهٔ حداقلی بینِ دو دانلودِ هر کاربر
     dl_op_daily_min: int = 0       # سقفِ دقیقهٔ رسانهٔ دانلودی که هر کاربر می‌تواند «پردازش» کند
     dl_min_free_gb: int = 3        # اگر فضای آزادِ /work کمتر از این بود، دانلود را رد کن
+    # فایلِ مستقیم (ریلیزِ گیت‌هاب، APK، PDF، …) — هرچه صفحهٔ HTML نیست خودمان استریم می‌کنیم
+    dl_direct_enabled: bool = True
+    dl_direct_max_mb: int = 500    # سقفِ فایلِ مستقیم (سقفِ آپلودِ تلگرام همیشه حاکم است)
     # فاز C — اکسترا/سختی‌سازی
     dl_sponsorblock: str = ""      # دسته‌های SponsorBlock برای حذف (مثل sponsor,selfpromo)؛ خالی=خاموش
     dl_subs: bool = False          # جاسازیِ زیرنویسِ خودکار (en+fa) در ویدیو

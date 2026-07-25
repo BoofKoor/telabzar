@@ -45,7 +45,11 @@ log = logging.getLogger("telabzar.dl")
 
 _BAN_HINTS = ("login required", "rate-limit", "rate limit", "sign in", "checkpoint",
               "challenge", "not logged", "401", "403", "temporary ban", "login page")
-_LOGIN_HINTS = ("login", "not logged", "sign in", "account", "checkpoint", "challenge")
+# «redirect to home page» = گالری-دی‌ال وقتی سشنِ اینستاگرام مرده است: درخواست به
+# صفحهٔ خانه پرتاب می‌شود. هیچ کلمهٔ login در آن نیست، پس تا امروز خطای «بی‌ربط»
+# حساب می‌شد → نه اکانتِ بعدی امتحان می‌شد و نه اکانتِ مرده علامت می‌خورد.
+_LOGIN_HINTS = ("login", "not logged", "sign in", "account", "checkpoint", "challenge",
+                "redirect to home page")
 
 
 class DownloadTooLarge(Exception):
@@ -222,6 +226,8 @@ async def _edit(bot: Bot, chat_id: int, mid: int, text: str, kb=None) -> None:
 
 
 def _kind_from_info(info: dict, path: str) -> str:
+    if info.get("kind"):        # موتورِ direct نوع را از Content-Type/پسوند می‌داند
+        return str(info["kind"])
     if info.get("vcodec") not in (None, "none") or info.get("height"):
         return "video"
     if info.get("acodec") not in (None, "none"):
@@ -507,6 +513,26 @@ async def run_download(ctx: dict, payload: dict) -> None:
         except Exception:  # noqa: BLE001
             return False
 
+    # ── لینکِ فایلِ مستقیم؟ (ریلیزِ گیت‌هاب، APK، PDF، هر لینکِ دانلود) ──
+    # yt-dlp برای صفحه‌های ویدیو ساخته شده؛ روی یک فایلِ مستقیم می‌شکند (و روی
+    # لینکِ امضاشده با نامِ GUIDدار حتی سرِ نوشتنِ فایلِ متادیتا). یک HEADِ ارزان
+    # جواب می‌دهد: هرچه HTML نیست، خودمان استریمش می‌کنیم. منوی کیفیت هم بی‌معنی
+    # است، پس مستقیم به fetch می‌رود.
+    direct_cap = 0
+    if engine == "ytdlp" and platform == "other":
+        if await settings_store.get_bool("dl_direct_enabled", settings.dl_direct_enabled):
+            head = await D.probe_direct(url, await _opts(redis, platform))
+            if head and head.get("is_file"):
+                engine, phase = "direct", "fetch"
+                log.info("direct file link (%s, %s B) — bypassing yt-dlp",
+                         head.get("content_type"), head.get("size"))
+    if engine == "direct":
+        direct_cap = await settings_store.get_int("dl_direct_max_mb",
+                                                  settings.dl_direct_max_mb)
+        hard = await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb)
+        if hard:      # سقفِ آپلودِ تلگرام همیشه حاکم است، حتی اگر سقفِ direct بالاتر باشد
+            direct_cap = min(direct_cap, hard) if direct_cap else hard
+
     # ── فازِ probe: منوی کیفیت ──
     if phase == "probe":
         await _edit(bot, chat_id, status_mid, t(lang, "dl_probing"))
@@ -644,9 +670,11 @@ async def run_download(ctx: dict, payload: dict) -> None:
         paths, dl_err, tried = None, None, set()
         # پاسِ اول **ناشناس** برای پلتفرم‌هایی که بدونِ لاگین جواب می‌دهند (یوتیوب و…):
         # کوکی فقط وقتی می‌آید که خودِ سرویس بخواهد → اکانت‌ها بی‌دلیل نمی‌سوزند.
-        anon = (_anon_first(platform)
-                and await settings_store.get_bool("dl_cookie_when_needed",
-                                                  settings.dl_cookie_when_needed))
+        # فایلِ مستقیم هیچ‌وقت کوکی نمی‌خواهد (و نباید اکانتی را بسوزاند)
+        anon = engine == "direct" or (
+            _anon_first(platform)
+            and await settings_store.get_bool("dl_cookie_when_needed",
+                                              settings.dl_cookie_when_needed))
         while True:
             if anon:
                 cookie_name, cookie_path = None, None
@@ -655,7 +683,12 @@ async def run_download(ctx: dict, payload: dict) -> None:
             ident = await ck.get_meta(redis, cookie_name) if cookie_name else None
             opts = await _opts(redis, platform, workdir, cookie_path, identity=ident)
             try:
-                if engine == "gallerydl":
+                if engine == "direct":
+                    dpath, dinfo = await D.download_direct(
+                        url, workdir, opts, max_bytes=direct_cap * 1024 * 1024,
+                        progress=_progress, cancel=_cancelled)
+                    paths = [(dpath, dinfo, None)]
+                elif engine == "gallerydl":
                     files, gallery_caption = await D.download_gallerydl(
                         url, workdir, opts, progress=_progress, cancel=_cancelled)
                     paths = [(p, {}, None) for p in files]
@@ -714,6 +747,8 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 if anon:
                     # ناشناس نشد → حالا (و فقط حالا) سراغِ کوکی برو. هیچ اکانتی مقصر نیست.
                     anon = False
+                    if engine == "direct":
+                        break          # فایلِ مستقیم با کوکی هم درست نمی‌شود
                     if cls != ck.UNRELATED and await ck.pick(redis, _cookie_platform(platform)):
                         log.info("anonymous attempt failed (%s); retrying with a cookie", cls)
                         continue
@@ -747,7 +782,13 @@ async def run_download(ctx: dict, payload: dict) -> None:
             msg = str(dl_err) if dl_err else "download failed"
             low = msg.lower()
             await _metric(redis, platform, ok=False)
-            if platform == "spotify" and D.is_youtube_botcheck(msg, "youtube"):
+            if isinstance(dl_err, D.DirectTooLarge):
+                # فایلِ مستقیم کیفیتِ دیگری ندارد که پیشنهاد شود → پیامِ سرراست.
+                # رو به **بالا** گرد می‌شود، وگرنه ۱٫۴MB با سقفِ ۱MB می‌شود «۱ از ۱ بیشتر است».
+                await _edit(bot, chat_id, status_mid,
+                            t(lang, "dl_direct_too_large",
+                              mb=-(-dl_err.size // (1024 * 1024)), cap=direct_cap))
+            elif platform == "spotify" and D.is_youtube_botcheck(msg, "youtube"):
                 # تطبیقِ اسپاتیفای از یوتیوب دانلود می‌کند؛ اگر یوتیوب bot-check داد، راهنمای کوکی
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
             elif platform == "spotify" and any(
