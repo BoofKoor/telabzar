@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     downloader_enabled: bool = True
     dl_allow_unknown: bool = True  # لینکِ هاستِ ناشناخته را هم با yt-dlp تلاش کن (از پنل خاموش‌شدنی)
     dl_rich_posts: bool = True     # پستِ چند‌عکسی را Rich Message بفرست (fallback: آلبوم)
+    dl_cache_enabled: bool = True  # لینکِ تکراری آنی از file_idِ کش‌شده تحویل شود
     proxy_url: str = ""            # egressِ تمیزِ خودت، مثل socks5h://host:1080 (خالی = مستقیم)
     cookies_dir: str = ""          # پوشهٔ کوکی‌ها (چرخشِ اکانت برای اینستا/X)
     cookie_alert_min: int = 1      # اگر اکانت‌های سالمِ یک پلتفرم کمتر از این شد → هشدار به ادمین (۰=خاموش)

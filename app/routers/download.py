@@ -138,15 +138,18 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     quick_sel = "audio" if platform in AUDIO_PLATFORMS else "best"
 
     # کشِ آنی (quick-grab) — بدونِ دانلودِ دوباره
-    if quick:
+    cached_status_mid = None
+    if quick and await settings_store.get_bool("dl_cache_enabled", settings.dl_cache_enabled):
         cache = await dl_cache.get_cached(session, url, quick_sel)
         if cache is not None:
             await _charge(arq_pool, uid)
             # لینک را نگه‌دار و روی همان ریپلای بده (به‌جای حذفِ پیامِ کاربر)
             status = await message.reply(detected)
-            await dl_cache.deliver_from_cache(message.bot, session, message.chat.id, owner_id, cache,
-                                              lang, anchor_mid=status.message_id)
-            return
+            if await dl_cache.deliver_from_cache(message.bot, session, message.chat.id, owner_id,
+                                                 cache, lang, anchor_mid=status.message_id):
+                return
+            # file_id باطل شده بود (ردیف پاک شد) → همین پیام را لنگرگاهِ دانلودِ عادی کن
+            cached_status_mid = status.message_id
 
     ref = secrets.token_urlsafe(6)[:8]
     ctx = {"url": url, "platform": platform, "engine": engine,
@@ -157,9 +160,12 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
         pass
 
     # لینک را نگه‌دار و وضعیت را روی همان ریپلای بده (تحویلِ نهایی همین را درجا عوض می‌کند)
-    status = await message.reply(detected)
+    if cached_status_mid is None:
+        status_mid = (await message.reply(detected)).message_id
+    else:
+        status_mid = cached_status_mid      # پیامِ کشِ شکست‌خورده دوباره استفاده می‌شود
 
-    base = {"ref": ref, "chat_id": message.chat.id, "status_mid": status.message_id,
+    base = {"ref": ref, "chat_id": message.chat.id, "status_mid": status_mid,
             "lang": lang, "url": url, "platform": platform, "engine": engine,
             "owner_id": owner_id, "tg_user_id": uid}
 
@@ -205,14 +211,16 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
         return
 
     # کشِ آنی — عکسِ منو را درجا به ویدیوی کش‌شده تبدیل کن (بدونِ دانلود)
-    cache = await dl_cache.get_cached(session, ctx["url"], sel)
-    if cache is not None:
-        await _charge(arq_pool, uid)
-        await cq.answer()
-        await dl_cache.deliver_from_cache(cq.message.bot, session, cq.message.chat.id,
-                                          ctx["owner_id"], cache, lang,
-                                          anchor_mid=cq.message.message_id)
-        return
+    if await settings_store.get_bool("dl_cache_enabled", settings.dl_cache_enabled):
+        cache = await dl_cache.get_cached(session, ctx["url"], sel)
+        if cache is not None:
+            await _charge(arq_pool, uid)
+            await cq.answer()
+            if await dl_cache.deliver_from_cache(cq.message.bot, session, cq.message.chat.id,
+                                                 ctx["owner_id"], cache, lang,
+                                                 anchor_mid=cq.message.message_id):
+                return
+            # file_id باطل بود → ادامه بده و واقعاً دانلود کن
 
     await _charge(arq_pool, uid)
     payload = {"ref": ref, "chat_id": cq.message.chat.id, "status_mid": cq.message.message_id,
