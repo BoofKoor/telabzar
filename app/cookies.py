@@ -31,11 +31,77 @@ _CK_CD = "ckcd:"           # ckcd:<name> → کول‌داون (TTL)
 _CK_ROT = "ckrot:"         # ckrot:<platform> → شمارندهٔ چرخش
 
 # وضعیت‌ها (به‌ترتیبِ اولویتِ استفاده)
-HEALTHY, SUSPECT, INVALID, COOLDOWN, DISABLED, FROZEN = (
-    "healthy", "suspect", "invalid", "cooldown", "disabled", "frozen")
+# `UNPROVEN` = آخرین اتفاقِ این اکانت یک **خطا** بود، نه یک موفقیت. لزوماً خراب
+# نیست (شاید لینک بد بوده یا سایت پاسخ نداده)، ولی «سالم» نشان‌دادنش دروغ است:
+# تنها چیزی که می‌دانیم این است که آخرین تلاش شکست خورد. این وضعیت اکانت را از
+# چرخش خارج نمی‌کند، فقط بعد از اکانت‌های واقعاً موفق قرار می‌گیرد.
+HEALTHY, SUSPECT, INVALID, COOLDOWN, DISABLED, FROZEN, UNPROVEN = (
+    "healthy", "suspect", "invalid", "cooldown", "disabled", "frozen", "unproven")
 
 _CK_USE = "ckuse:"         # ckuse:<name>:<yyyymmddHH> → مصرفِ ساعتی (سطلِ توکن)
 _CK_LAST = "cklast:"       # cklast:<name> → زمانِ آخرین استفاده (فاصلهٔ حداقلی)
+_CK_EXIT = "ckexit:"       # ckexit:<exit>:<platform>:<ok|fail>:<yyyymmdd>
+
+
+# ── آمارِ هر خروجی (سشنِ مرده یا IPِ مسدود؟) ────────────────────
+# آمارِ per-account به این سؤال جواب نمی‌دهد: وقتی **همهٔ** اکانت‌ها می‌افتند،
+# مقصر معمولاً سشن‌ها نیستند بلکه IPی است که از آن بیرون می‌رویم. اینستاگرام IP
+# را هویت می‌داند و رنجِ دیتاسنتر را می‌بندد. پس موفقیت/شکست را به تفکیکِ
+# **خروجی** هم می‌شماریم تا پنل بتواند تفاوت را نشان دهد.
+def _today_key() -> str:
+    return time.strftime("%Y%m%d", time.gmtime())
+
+
+def exit_label(node_id: str | None) -> str:
+    return str(node_id or "") or "master"
+
+
+async def note_exit(redis, node_id: str | None, platform: str, ok: bool) -> None:
+    if redis is None or not platform:
+        return
+    try:
+        k = (_CK_EXIT + exit_label(node_id) + ":" + platform
+             + (":ok:" if ok else ":fail:") + _today_key())
+        if await redis.incr(k) == 1:
+            await redis.expire(k, 3 * 86400)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def exit_stats(redis, platform: str | None = None) -> list[dict]:
+    """[{exit, platform, ok, fail, rate, blocked}] برای امروز.
+
+    `blocked=True` یعنی «هیچ موفقیتی نداشته و چند بار هم شکست خورده» — قوی‌ترین
+    نشانه‌ای که از این‌جا می‌شود داد که مشکل از خودِ خروجی است نه از اکانت‌ها.
+    """
+    if redis is None:
+        return []
+    day, agg = _today_key(), {}
+    try:
+        async for key in redis.scan_iter(match=f"{_CK_EXIT}*:{day}", count=500):
+            k = key if isinstance(key, str) else key.decode()
+            parts = k[len(_CK_EXIT):].rsplit(":", 3)     # exit, platform, kind, day
+            if len(parts) != 4:
+                continue
+            ex, plat, kind, _d = parts
+            if platform and plat != platform:
+                continue
+            row = agg.setdefault((ex, plat), {"exit": ex, "platform": plat,
+                                              "ok": 0, "fail": 0})
+            try:
+                row[kind] = int(await redis.get(k) or 0)
+            except (ValueError, TypeError):
+                pass
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for row in agg.values():
+        total = row["ok"] + row["fail"]
+        row["rate"] = round(row["ok"] * 100 / total) if total else 0
+        row["blocked"] = row["ok"] == 0 and row["fail"] >= 3
+        out.append(row)
+    out.sort(key=lambda r: (r["platform"], r["exit"]))
+    return out
 
 
 # ── سهمیه و سرعت‌گیر (همه از پنل تنظیم‌شدنی) ─────────────────────
@@ -303,7 +369,14 @@ async def status_of(redis, name: str, meta: dict | None = None,
     fs = int(meta.get("fail_streak") or 0)
     if fs >= (lim or default_limits()).invalid_at:
         return INVALID
-    return SUSPECT if fs > 0 else HEALTHY
+    if fs > 0:
+        return SUSPECT
+    # شمارنده صفر است — ولی اگر آخرین اتفاق یک خطا بوده (نه موفقیت)، «سالم» گفتن
+    # گمراه‌کننده است. این‌طور خطاها (transient/بی‌ربط) عمداً شمارنده بالا نمی‌برند،
+    # پس بدونِ این بررسی برای همیشه سبز می‌مانند حتی وقتی هیچ دانلودی موفق نیست.
+    if int(meta.get("last_error_at") or 0) > int(meta.get("last_ok") or 0):
+        return UNPROVEN
+    return HEALTHY
 
 
 async def accounts(redis, platform: str | None = None,
@@ -340,13 +413,19 @@ async def pool_summary(redis) -> dict[str, dict]:
     return agg
 
 
+#: وضعیت‌هایی که یعنی «هنوز قابلِ استفاده». `UNPROVEN` این‌جاست چون آخرین خطایش
+#: ضربه‌ای به اکانت نزده — اگر بیرونش بگذاریم، یک شکستِ بی‌تقصیر هشدارِ الکیِ
+#: «کوکیِ سالم کم است» می‌فرستد و شمارشِ پنل هم بی‌جهت می‌افتد.
+USABLE = (HEALTHY, UNPROVEN, SUSPECT)
+
+
 async def healthy_count(redis, platform: str) -> int:
-    return sum(1 for a in await accounts(redis, platform)
-               if a["status"] in (HEALTHY, SUSPECT))
+    return sum(1 for a in await accounts(redis, platform) if a["status"] in USABLE)
 
 
 # ── انتخابِ کوکی برای یک تلاش ───────────────────────────────────
-_USE_ORDER = (HEALTHY, SUSPECT, INVALID)  # کول‌داون/غیرفعال هرگز
+# «خطای اخیر» بعد از سالم می‌آید ولی قبل از مشکوک: هنوز هیچ ضربه‌ای نخورده.
+_USE_ORDER = (HEALTHY, UNPROVEN, SUSPECT, INVALID)  # کول‌داون/غیرفعال هرگز
 
 
 async def pick(redis, platform: str, exclude: set[str] | None = None,
@@ -442,7 +521,11 @@ async def mark_fail(redis, name: str | None, cooldown: bool = True,
     - `rate_limit`: فقط استراحتِ بلند. ضربه‌ای به اکانت نمی‌خورد — اکانت سالم است،
       ما تند رفته‌ایم؛ اگر ضربه بزنیم اکانتِ سالم را دور می‌ریزیم.
     - `checkpoint`: **فریز** + علامتِ نیازمندِ انسان. تلاشِ خودکارِ بیشتر فقط وضع را بدتر می‌کند.
-    - بقیه (لاگین/بات‌چک): شمارنده + کول‌داونِ پلکانی (۳۰د → ۱س → ۲س …).
+    - `transient`/`unrelated`: فقط **ثبت** می‌شود (`last_error`). نه شمارنده، نه کول‌داون.
+    - لاگین/بات‌چک: شمارنده + کول‌داونِ پلکانی (۳۰د → ۱س → ۲س …).
+
+    چون دسته‌های بی‌ضربه هم این‌جا ثبت می‌شوند، این تابع را می‌شود برای **هر**
+    شکستی صدا زد؛ همین است که پنل را از «همیشه سالم» بیرون می‌آورد.
     """
     if not name or redis is None:
         return {}
@@ -460,10 +543,11 @@ async def mark_fail(redis, name: str | None, cooldown: bool = True,
             pass
         return meta
 
-    if error_class == TRANSIENT:
-        # فقط ثبت می‌شود تا در پنل دیده شود. نه شمارنده، نه کول‌داون: اگر علت
-        # واقعاً سمتِ سایت/extractor باشد، کول‌داون‌دادن یعنی کلِ استخر را برای
-        # مشکلی که ربطی به اکانت‌ها ندارد از دور خارج کرده‌ایم.
+    if error_class and not burns_account(error_class):
+        # transient/unrelated: فقط ثبت می‌شود تا در پنل دیده شود. نه شمارنده، نه
+        # کول‌داون — اگر علت سمتِ سایت یا خودِ لینک باشد، کول‌داون‌دادن یعنی کلِ
+        # استخر را برای مشکلی که ربطی به اکانت‌ها ندارد از دور خارج کرده‌ایم.
+        # وضعیت با همین ثبت به «خطای اخیر» می‌رود (status_of)، پس نامرئی نمی‌ماند.
         await set_meta(redis, name, meta)
         return meta
 
@@ -484,10 +568,17 @@ async def mark_fail(redis, name: str | None, cooldown: bool = True,
 
 
 async def unfreeze(redis, name: str) -> None:
-    """ادمین رسیدگی کرد → از صفِ «نیازمندِ انسان» خارج شود."""
+    """ادمین رسیدگی کرد → از صفِ «نیازمندِ انسان» خارج شود.
+
+    خطای قبلی هم پاک می‌شود: وقتی ادمین صریحاً می‌گوید «درستش کردم»، نگه‌داشتنِ
+    «آخرین تلاش ناموفق» فقط گمراه‌کننده است — از این‌جا به بعد باید با نتیجهٔ
+    تلاشِ **بعدی** قضاوت شود، نه با خطای منقضی‌شده.
+    """
     meta = await get_meta(redis, name)
     meta["frozen"] = False
     meta["fail_streak"] = 0
+    meta["last_error"] = ""
+    meta["last_error_at"] = 0
     await set_meta(redis, name, meta)
     try:
         await redis.delete(_CK_CD + name)

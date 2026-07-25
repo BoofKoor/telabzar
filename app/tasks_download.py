@@ -580,6 +580,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
         if info is None:
             shutil.rmtree(workdir, ignore_errors=True)  # کوکیِ materialize‌شدهٔ نود
             await _metric(redis, platform, ok=False)
+            await ck.note_exit(redis, settings.node_id, platform, ok=False)
             if D.is_youtube_botcheck(msg, platform):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
             else:
@@ -785,6 +786,13 @@ async def run_download(ctx: dict, payload: dict) -> None:
                         log.info("anonymous attempt failed (%s); retrying with a cookie", cls)
                         continue
                     break
+                # هر شکستی روی اکانت **ثبت** می‌شود، حتی وقتی تقصیرِ اکانت نیست.
+                # `mark_fail` فقط برای دسته‌های کوکی‌محور شمارنده/کول‌داون می‌دهد؛ بقیه
+                # صرفاً `last_error` می‌گیرند. بدونِ این، خطای شناخته‌نشده هرگز به استخر
+                # نمی‌رسید و پنل تا ابد «سالم · خطا: ۰» نشان می‌داد.
+                if cookie_name and not _is_cookie_error(str(exc), platform):
+                    await ck.mark_fail(redis, cookie_name, cooldown=False,
+                                       error_class=ck.UNRELATED, message=str(exc))
                 if cookie_name and _is_cookie_error(str(exc), platform):
                     # واکنش به **دستهٔ** خطا: محدودیتِ نرخ ضربه نمی‌زند، چک‌پوینت فریز می‌کند
                     await ck.mark_fail(redis, cookie_name, error_class=cls, message=str(exc))
@@ -814,6 +822,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
             msg = str(dl_err) if dl_err else "download failed"
             low = msg.lower()
             await _metric(redis, platform, ok=False)
+            # شکستِ واقعیِ شبکه‌ای (نه ردِ سیاستی) → به حسابِ همین خروجی. اگر همهٔ
+            # اکانت‌ها روی یک خروجی بیفتند، مقصر IP است نه سشن‌ها.
+            await ck.note_exit(redis, settings.node_id, platform, ok=False)
             if isinstance(dl_err, D.DirectTooLarge):
                 # فایلِ مستقیم کیفیتِ دیگری ندارد که پیشنهاد شود → پیامِ سرراست.
                 # رو به **بالا** گرد می‌شود، وگرنه ۱٫۴MB با سقفِ ۱MB می‌شود «۱ از ۱ بیشتر است».
@@ -942,6 +953,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 pass
 
         await _metric(redis, platform, ok=True)
+        await ck.note_exit(redis, settings.node_id, platform, ok=True)
     finally:
         if redis is not None:
             try:
