@@ -88,14 +88,20 @@ def _cookie_platform(platform: str) -> str:
 async def _next_cookie(redis, platform: str, workdir: str | None,
                        tried: set[str]) -> tuple[str | None, str | None]:
     """(نامِ اکانت, مسیرِ فایل) برای تلاشِ بعدی — یا (None, None) اگر کوکیِ دیگری نماند.
-    استخر (اولویت/کول‌داون/چرخش) در `app/cookies.py` است؛ این‌جا فقط materialize می‌شود."""
-    name = await ck.pick(redis, _cookie_platform(platform), exclude=tried)
+
+    استخر (اولویت/کول‌داون/سهمیه/پینِ خروجی) در `app/cookies.py` است؛ این‌جا فقط
+    materialize می‌شود. `node_id` = خروجیِ فعلیِ این ورکر، تا اکانت همیشه از همان
+    IP بیرون برود که به آن پین شده.
+    """
+    name = await ck.pick(redis, _cookie_platform(platform), exclude=tried,
+                         node_id=settings.node_id or "")
     if not name:
         return None, None
     path = await ck.materialize(redis, name, workdir)
     if not path:            # محتوا در دسترس نبود → همین را رد کن و بعدی را بگیر
         tried.add(name)
         return await _next_cookie(redis, platform, workdir, tried)
+    await ck.note_use(redis, name)   # سطلِ ساعتی + مهرِ فاصلهٔ حداقلی
     return name, path
 
 
@@ -173,12 +179,20 @@ async def _metric(redis, platform: str, ok: bool) -> None:
 
 
 async def _opts(redis, platform: str, workdir: str | None = None,
-                cookie_path: str | None = None) -> dict:
+                cookie_path: str | None = None, identity: dict | None = None) -> dict:
     """گزینه‌های موتور. کوکی **صریح** پاس داده می‌شود (انتخابش با حلقهٔ تلاش در
-    `run_download` است تا بتواند روی خطا کوکیِ بعدی را امتحان کند)."""
+    `run_download` است تا بتواند روی خطا کوکیِ بعدی را امتحان کند).
+
+    `identity` = متادیتای همان اکانت. پروکسی و User-Agentِ اختصاصیِ اکانت (اگر ست
+    شده باشند) جای مقادیرِ عمومی را می‌گیرند: یک سشن باید همیشه از یک IP و با یک
+    UA دیده شود، وگرنه خودِ ناسازگاری سیگنالِ تشخیص می‌شود.
+    """
     pot_on = await settings_store.get_bool("dl_pot_enabled", settings.dl_pot_enabled)
+    ident = identity or {}
     return {
-        "proxy": await settings_store.get_str("proxy_url", settings.proxy_url) or None,
+        "proxy": (ident.get("proxy")
+                  or await settings_store.get_str("proxy_url", settings.proxy_url) or None),
+        "user_agent": ident.get("user_agent") or None,
         "pot_provider": (settings.pot_provider_url or None) if pot_on else None,
         "cookies": cookie_path,
         "max_mb": await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb),
@@ -638,7 +652,8 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 cookie_name, cookie_path = None, None
             else:
                 cookie_name, cookie_path = await _next_cookie(redis, platform, workdir, tried)
-            opts = await _opts(redis, platform, workdir, cookie_path)
+            ident = await ck.get_meta(redis, cookie_name) if cookie_name else None
+            opts = await _opts(redis, platform, workdir, cookie_path, identity=ident)
             try:
                 if engine == "gallerydl":
                     files, gallery_caption = await D.download_gallerydl(
