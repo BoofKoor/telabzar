@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 
 from arq.connections import RedisSettings
 
@@ -37,6 +39,26 @@ async def startup(ctx: dict) -> None:
     if settings.node_role:  # این پروسه یک نود است → heartbeat به رجیستریِ مستر بزن
         ctx["hb_task"] = asyncio.create_task(_node_heartbeat())
     log.info("Worker ready%s.", f" (node: {settings.node_role})" if settings.node_role else "")
+
+
+async def startup_dl(ctx: dict) -> None:
+    """startupِ ورکرِ دانلود + گزارشِ نسخهٔ موتورها برای صفحهٔ سلامت.
+
+    پنل روی مستر است و gallery-dl/yt-dlp ندارد، پس نمی‌تواند خودش نسخه را بگیرد؛
+    ولی وقتی اینستاگرام «پاسخِ نامعتبر» می‌دهد اولین سؤالِ ادمین همین است که موتور
+    عقب افتاده یا سشن مرده. نسخه فقط با rebuild عوض می‌شود، پس یک‌بار سرِ استارت کافی است.
+    """
+    await startup(ctx)
+    try:
+        from . import downloader as D
+        store = settings_store.get_store()
+        vers = await D.engine_versions()
+        who = settings.node_id or settings.node_role or "master"
+        await store.r.set(f"dlver:{who}", json.dumps(
+            {"who": who, "at": int(time.time()), **vers}), ex=30 * 86400)
+        log.info("engine versions (%s): %s", who, vers)
+    except Exception:  # noqa: BLE001 — تشخیص است، نباید استارتِ ورکر را بشکند
+        log.debug("engine version report failed", exc_info=True)
 
 
 async def startup_master(ctx: dict) -> None:
@@ -117,7 +139,7 @@ class DownloadWorkerSettings:
 
     functions = [run_download]
     queue_name = "arq:queue:dl"
-    on_startup = startup
+    on_startup = startup_dl
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 3          # سقفِ سختِ هم‌زمانی (علاوه بر گاردِ runtimeِ dl_concurrency)

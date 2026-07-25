@@ -51,6 +51,13 @@ _BAN_HINTS = ("login required", "rate-limit", "rate limit", "sign in", "checkpoi
 # حساب می‌شد → نه اکانتِ بعدی امتحان می‌شد و نه اکانتِ مرده علامت می‌خورد.
 _LOGIN_HINTS = ("login", "not logged", "sign in", "account", "checkpoint", "challenge",
                 "redirect to home page")
+# پاسخِ بی‌معنا (بدنهٔ خالی/HTML به‌جای JSON). اینستاگرام وقتی سشن یا IP را قبول
+# ندارد اغلب همین را می‌دهد، ولی همین خطا وقتی هم می‌آید که خودِ extractor عقب
+# افتاده باشد. پس ارزشِ **تلاش با اکانتِ بعدی** را دارد ولی نباید اکانت را بسوزاند
+# (رجوع به `cookies.TRANSIENT` که نه شمارنده بالا می‌برد نه کول‌داون می‌دهد).
+_TRANSIENT_HINTS = ("jsondecodeerror", "failed to parse json", "unable to parse json",
+                    "expecting value: line 1 column 1", "empty response",
+                    "unexpected error occurred")
 
 
 class DownloadTooLarge(Exception):
@@ -72,7 +79,8 @@ def _is_cookie_error(msg: str, platform: str | None = None) -> bool:
     low = (msg or "").lower()
     if D.is_youtube_botcheck(msg, platform):
         return True
-    return any(h in low for h in _BAN_HINTS) or any(h in low for h in _LOGIN_HINTS)
+    return (any(h in low for h in _BAN_HINTS) or any(h in low for h in _LOGIN_HINTS)
+            or any(h in low for h in _TRANSIENT_HINTS))
 
 
 # یوتیوب بدونِ لاگین ~۳۰۰ ویدیو در ساعت می‌دهد (با لاگین ~۲۰۰۰). پس چسباندنِ کوکی به
@@ -821,6 +829,12 @@ async def run_download(ctx: dict, payload: dict) -> None:
                             t(lang, "dl_spotify_setup") + f"\n<code>{escape(msg[:200])}</code>")
             elif D.is_youtube_botcheck(msg, platform):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
+            elif any(h in low for h in _TRANSIENT_HINTS):
+                # همهٔ اکانت‌ها همین را دادند → یا هیچ سشنی معتبر نیست، یا مشکل
+                # سمتِ سایت/موتور است. پیام هر دو را می‌گوید تا ادمین بداند کجا را
+                # نگاه کند، به‌جای تریس‌بکِ خامِ gallery-dl.
+                await _edit(bot, chat_id, status_mid,
+                            t(lang, "dl_bad_response", platform=plabel))
             elif any(h in low for h in _LOGIN_HINTS):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_need_cookies", platform=plabel))
             else:

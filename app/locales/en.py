@@ -223,6 +223,7 @@ MESSAGES: dict[str, str] = {
     "dl_need_cookies": "🔒 “{platform}” requires a logged-in account to download; an admin must add cookies.",
     "dl_too_large": "⚠️ Output ({mb}MB) exceeds the {cap}MB limit — pick a lower quality.",
     "dl_direct_too_large": "⚠️ This file is {mb}MB, over the {cap}MB limit — an admin can raise it.",
+    "dl_bad_response": "⚠️ “{platform}” returned an invalid response. Usually the session is no longer valid or the downloader needs updating — let an admin know.",
     "nsfw_blocked": "🔞 This content isn't allowed and was not processed.",
     "nsfw_checking": "🔎 Checking…",
     "nsfw_user_blocked": "🚫 Your access has been revoked for repeatedly sending disallowed content.",

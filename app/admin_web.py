@@ -349,6 +349,19 @@ _HEALTH_CARDS = """
   {% if health.hosts %}{% for h in health.hosts %}
     <div class=stat><b>{{ pfa.get(h.name, h.name) }}</b><div class=meter><i style="width:{{h.rate}}%;background:{{'#16a34a' if h.rate>=70 else '#d97706'}}"></i></div><span class=num>{{h.rate}}% · {{h.ok}}/{{h.ok+h.fail}}</span></div>
   {% endfor %}{% else %}<div class=empty>هنوز دانلودی امروز ثبت نشده.</div>{% endif %}
+</div></div>
+<div class=card><h3>🧩 نسخهٔ موتورهای دانلود</h3><div class=rows>
+  {% if health.engines %}{% for e in health.engines %}
+    {# کلِ این سلول یک رشتهٔ لاتینِ خالص است → .ltr (هم ایزوله هم direction:ltr).
+       با .mono تنها، ترتیبِ دو span در پاراگرافِ RTL برعکس می‌شد. #}
+    <div class=row><label>{{ e.who }}<small>گزارش‌شده سرِ استارتِ ورکر</small></label>
+      <span class="mono ltr">gallery-dl {{ e['gallery-dl'] or '—' }} &nbsp;·&nbsp;
+        yt-dlp {{ e['yt-dlp'] or '—' }}</span></div>
+  {% endfor %}
+  <div class=hint>وقتی یک پلتفرم «پاسخِ نامعتبر» می‌دهد، اول این‌جا را ببین. اگر موتور
+    قدیمی است روی مستر <span class=mono>telabzar update</span> بزن و روی نود
+    <span class=mono>node/update.sh</span> — وگرنه سشن باید عوض شود.</div>
+  {% else %}<div class=empty>هنوز ورکرِ دانلودی نسخه‌اش را گزارش نکرده (پس از ری‌استارتِ بعدی می‌آید).</div>{% endif %}
 </div></div>"""
 
 _SETTINGS = """{% extends 'base' %}{% block title %}تنظیمات{% endblock %}{% block heading %}تنظیمات{% endblock %}
@@ -1120,6 +1133,18 @@ async def _health(app: web.Application) -> dict:
                     h["pot"] = resp.status == 200  # 404/403 = خطا، نه «آنلاین»
         except Exception:  # noqa: BLE001
             h["pot"] = False
+    # نسخهٔ موتورها که هر ورکرِ دانلود سرِ استارت گزارش کرده. اولین سؤال وقتی یک
+    # پلتفرم «پاسخِ نامعتبر» می‌دهد: موتور عقب افتاده یا سشن مرده؟
+    h["engines"] = []
+    try:
+        async for key in r.scan_iter(match="dlver:*", count=100):
+            try:
+                h["engines"].append(json.loads(await r.get(key) or "{}"))
+            except (ValueError, TypeError):
+                pass
+        h["engines"].sort(key=lambda e: str(e.get("who") or ""))
+    except Exception:  # noqa: BLE001
+        h["engines"] = []
     # نرخِ per-host امروز (لیستِ مرتب برای رندر)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     hosts = []

@@ -1394,3 +1394,22 @@ async def download_gallerydl(url: str, workdir: str, opts: dict,
     if not files:
         raise RuntimeError("gallery download produced no files")
     return sorted(files), _gallery_caption(outdir)
+
+
+# ── نسخهٔ موتورها (تشخیصِ «سشن مرده» در برابر «موتور عقب افتاده») ──
+# وقتی اینستاگرام JSONDecodeError می‌دهد، دو علتِ کاملاً متفاوت ممکن است: سشن
+# دیگر معتبر نیست، یا gallery-dl با تغییرِ سایت عقب افتاده. پنل روی مستر است و
+# gallery-dl ندارد، پس خودِ ورکرِ دانلود نسخه‌ها را گزارش می‌کند.
+async def engine_versions() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for name, cmd in (("gallery-dl", [GALLERY_DL, "--version"]),
+                      ("yt-dlp", [YTDLP, "--version"])):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            raw, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+            out[name] = (raw or b"").decode(errors="replace").strip().splitlines()[0][:40]
+        except Exception as exc:  # noqa: BLE001 — تشخیص است، نه مسیرِ حیاتی
+            log.debug("version probe failed for %s: %s", name, exc)
+            out[name] = ""
+    return out
