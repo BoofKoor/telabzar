@@ -28,7 +28,7 @@ from aiohttp import web
 from cryptography.fernet import Fernet, InvalidToken
 from jinja2 import Environment, DictLoader, select_autoescape
 from markupsafe import Markup
-from sqlalchemy import func, select, text as sql_text
+from sqlalchemy import func, select, text as sql_text, true as sa_true
 
 from . import cookies as ck_pool
 from . import nodes as node_mod
@@ -39,7 +39,7 @@ from .db import Sessionmaker
 from .downloader import KNOWN_PLATFORMS, PLATFORM_LABELS
 from .i18n import CATALOG, t as _t
 from .keyboards import OPS_BY_KIND
-from .models import File, Job, Node, User
+from .models import DownloadCache, File, Job, Node, User
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
 
 log = logging.getLogger("telabzar.admin")
@@ -479,36 +479,160 @@ _USERS = """{% extends 'base' %}{% block title %}کاربران{% endblock %}{% 
 {% endblock %}"""
 
 _STATS = """{% extends 'base' %}{% block title %}آمار{% endblock %}{% block heading %}آمار{% endblock %}
+{% block style %}
+.sv{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px dashed #eef2f7}
+.sv:last-child{border-bottom:0}
+.sv b{font-size:12.5px;font-weight:600;min-width:96px}
+.sv .meter{flex:1}
+.sv .n{color:#64748b;font-size:12px;min-width:52px;text-align:left;direction:ltr;unicode-bidi:isolate}
+.ts{display:flex;align-items:flex-end;gap:3px;height:120px;padding:16px 18px 0}
+.ts .c{flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;min-width:0}
+.ts .c i{display:block;border-radius:3px 3px 0 0;min-height:2px}
+.ts .c .f{background:var(--teal2)}.ts .c .o{background:var(--green)}.ts .c .u{background:var(--amber)}
+.ts-x{display:flex;gap:3px;padding:6px 18px 14px;color:#94a3b8;font-size:10px}
+.ts-x span{flex:1;text-align:center;min-width:0;overflow:hidden;unicode-bidi:isolate}
+.lg{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#64748b;padding:0 18px 12px}
+.lg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-inline-end:5px}
+.errline{padding:9px 0;border-bottom:1px dashed #eef2f7;font-size:12px;display:flex;gap:10px}
+.errline:last-child{border-bottom:0}
+.errline code{flex:1;color:#b91c1c;word-break:break-word;font-size:11.5px}
+.kpi3{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px}
+@media(max-width:1000px){.kpi3{grid-template-columns:repeat(2,1fr)}}
+.kpi3 .b{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.kpi3 .b em{display:block;font-size:11.5px;color:#94a3b8;font-style:normal;margin-bottom:5px}
+.kpi3 .b strong{font-size:21px;font-weight:800;direction:ltr;unicode-bidi:isolate;display:block}
+.kpi3 .b span{font-size:11.5px;color:var(--green);font-weight:600}
+{% endblock %}
 {% block body %}
-<div class=kpis>
-  <div class=kpi2><b>{{s.users}}</b><span>کاربر {% if s.new7 %}<span class=up>+{{s.new7}} این هفته</span>{% endif %}</span></div>
-  <div class=kpi2><b>{{s.active7}}</b><span>فعال (۷ روز)</span></div>
-  <div class=kpi2><b>{{s.files}}</b><span>فایل</span></div>
-  <div class=kpi2><b><bdi>{{s.storage_h}}</bdi></b><span>فضای پردازش‌شده</span></div>
-  <div class=kpi2><b>{{s.dl_files}}</b><span>دانلود از لینک</span></div>
-  <div class=kpi2><b>{{s.ops}}</b><span>عملیات {% if s.success_rate is not none %}<span class=up>{{s.success_rate}}٪ موفق</span>{% endif %}</span></div>
+<div class=tabs style="padding:0 0 14px">
+  {% for key, label, _d in s.ranges %}
+  <a class="tab {% if key==s.range %}on{% endif %}" href="/stats?range={{key}}">{{label}}</a>
+  {% endfor %}
 </div>
+
+<div class=kpi3>
+  <div class=b><em>کاربران</em><strong>{{s.users}}</strong>
+    {% if s.users_new %}<span>+{{s.users_new}} در این بازه</span>{% endif %}</div>
+  <div class=b><em>کاربرِ فعال</em><strong>{{s.users_active}}</strong>
+    {% if s.users_blocked %}<span style=color:#dc2626>{{s.users_blocked}} بلاک</span>{% endif %}</div>
+  <div class=b><em>فایل</em><strong>{{s.files}}</strong>
+    <span>{{s.dl_files}} از لینک</span></div>
+  <div class=b><em>حجمِ پردازش‌شده</em><strong><bdi>{{s.storage_h}}</bdi></strong></div>
+  <div class=b><em>عملیات</em><strong>{{s.ops}}</strong>
+    {% if s.success_rate is not none %}<span>{{s.success_rate}}٪ موفق</span>{% endif %}</div>
+  <div class=b><em>میانگینِ زمانِ پردازش</em><strong><bdi>{{s.avg_op_h}}</bdi></strong>
+    {% if s.queued %}<span style=color:#d97706>{{s.queued}} در صف</span>{% endif %}</div>
+  <div class=b><em>مدتِ کلِ رسانه</em><strong><bdi>{{s.media_h}}</bdi></strong></div>
+  <div class=b><em>تحویلِ آنی از کش</em><strong>{{s.cache_hits}}</strong>
+    <span><bdi>{{s.cache_saved_h}}</bdi> صرفه‌جویی</span></div>
+</div>
+
+<div class=card>
+  <h3>📈 روند <span class=tag>{{s.series_days}} روزِ اخیر · اوجِ روزانه {{s.ts_max}}</span></h3>
+  <div class=lg><span><i style=background:var(--teal2)></i>فایل</span>
+    <span><i style=background:var(--green)></i>عملیات</span>
+    <span><i style=background:var(--amber)></i>کاربرِ جدید</span></div>
+  <div class=ts>
+    {% for d in s.ts %}
+    <div class=c title="{{d.day}} — فایل {{d.f}} · عملیات {{d.o}} · کاربر {{d.u}}">
+      {% if d.u %}<i class=u style="height:{{d.u_h}}px"></i>{% endif %}
+      {% if d.o %}<i class=o style="height:{{d.o_h}}px"></i>{% endif %}
+      {% if d.f %}<i class=f style="height:{{d.f_h}}px"></i>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class=ts-x>
+    {% set step = (s.ts|length // 6) + 1 %}
+    {% for d in s.ts %}<span>{% if loop.index0 % step == 0 %}{{d.day}}{% endif %}</span>{% endfor %}
+  </div>
+</div>
+
 <div class=grid2>
 <div class=col>
   <div class=card><h3>🗂 فایل‌ها بر اساسِ نوع</h3><div class=rows>
     {% if s.by_kind %}{% for r in s.by_kind %}
-    <div class=bar-row><b>{{ kindfa.get(r.k, r.k) }}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--teal2)"></i></div><span class=num>{{r.n}}</span></div>
-    {% endfor %}{% else %}<div class=empty>هنوز فایلی نیست.</div>{% endif %}
+    <div class=sv><b>{{r.k}}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--teal2)"></i></div><span class=n>{{r.n}}</span></div>
+    {% endfor %}{% else %}<div class=empty>در این بازه فایلی نیست.</div>{% endif %}
   </div></div>
-  <div class=card><h3>🔗 منبعِ فایل</h3><div class=rows>
-    <div class=bar-row><b>آپلودِ کاربر</b><div class=meter><i style="width:{{s.src_up_pct}}%;background:var(--teal)"></i></div><span class=num>{{s.src_up}}</span></div>
-    <div class=bar-row><b>دانلود از لینک</b><div class=meter><i style="width:{{s.src_dl_pct}}%;background:var(--amber)"></i></div><span class=num>{{s.dl_files}}</span></div>
+
+  <div class=card><h3>📥 پلتفرمِ دانلود <span class=tag>از این پس ثبت می‌شود</span></h3><div class=rows>
+    {% if s.by_platform %}{% for r in s.by_platform %}
+    <div class=sv><b>{{r.k}}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--teal)"></i></div><span class=n>{{r.n}}</span></div>
+    {% endfor %}{% else %}<div class=empty>هنوز دانلودی با پلتفرمِ ثبت‌شده نیست.</div>{% endif %}
   </div></div>
+
+  <div class=card><h3>📦 توزیعِ حجم</h3><div class=rows>
+    {% if s.by_size %}{% for r in s.by_size %}
+    <div class=sv><b>{{r.k}}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--teal2)"></i></div><span class=n>{{r.n}}</span></div>
+    {% endfor %}{% else %}<div class=empty>—</div>{% endif %}
+  </div></div>
+
+  <div class=card><h3>🎞 کیفیتِ ویدیو</h3><div class=rows>
+    {% if s.by_res %}{% for r in s.by_res %}
+    <div class=sv><b>{{r.k}}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--green)"></i></div><span class=n>{{r.n}}</span></div>
+    {% endfor %}{% else %}<div class=empty>ویدیویی با ابعادِ ثبت‌شده نیست.</div>{% endif %}
+  </div></div>
+
+  <div class=card><h3>👤 کاربرانِ برتر</h3>
+    {% if s.top_users %}
+    <div class=tbl-wrap><table class=tbl>
+      <thead><tr><th>شناسه</th><th>فایل</th><th>حجم</th></tr></thead><tbody>
+      {% for u in s.top_users %}
+      <tr><td class="num mono">{{u.tg}}</td><td class=num>{{u.files}}</td>
+        <td class=num><bdi>{{u.size}}</bdi></td></tr>
+      {% endfor %}</tbody></table></div>
+    {% else %}<div class=empty>—</div>{% endif %}
+  </div>
 </div>
+
 <div class=col>
   <div class=card><h3>⚙️ پرکاربردترین عملیات</h3><div class=rows>
     {% if s.by_op %}{% for r in s.by_op %}
-    <div class=bar-row><b>{{ opfa.get(r.k, r.k) }}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--green)"></i></div><span class=num>{{r.n}}</span></div>
-    {% endfor %}{% else %}<div class=empty>هنوز عملیاتی اجرا نشده.</div>{% endif %}
+    <div class=sv><b>{{r.k}}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--green)"></i></div><span class=n>{{r.n}}</span></div>
+    {% endfor %}{% else %}<div class=empty>عملیاتی اجرا نشده.</div>{% endif %}
   </div></div>
-  <div class=card><h3>📅 ثبت‌نامِ ۷ روزِ اخیر</h3>
-    <div class=hist>{% for d in s.signups %}<div class=b><em>{{d.n}}</em><i style="height:{{d.pct}}%"></i><span>{{d.day}}</span></div>{% endfor %}</div>
+
+  <div class=card><h3>⏱ کارایی هر عملیات <span class=tag>موفقیت · میانگین · p95</span></h3>
+    {% if s.op_perf %}
+    <div class=tbl-wrap><table class=tbl>
+      <thead><tr><th>عملیات</th><th>تعداد</th><th>موفق</th><th>میانگین</th><th>p95</th></tr></thead><tbody>
+      {% for r in s.op_perf %}
+      <tr><td>{{r.op}}</td><td class=num>{{r.n}}</td>
+        <td class=num style="color:{{'#dc2626' if r.rate is not none and r.rate < 80 else '#16a34a'}}">
+          {% if r.rate is not none %}{{r.rate}}٪{% else %}—{% endif %}</td>
+        <td class=num><bdi>{{r.avg}}</bdi></td><td class=num><bdi>{{r.p95}}</bdi></td></tr>
+      {% endfor %}</tbody></table></div>
+    {% else %}<div class=empty>هنوز عملیاتِ تمام‌شده‌ای نیست.</div>{% endif %}
   </div>
+
+  <div class=card><h3>⚠️ پرتکرارترین خطاها</h3><div class=pad>
+    {% if s.errors %}{% for e in s.errors %}
+    <div class=errline><span class=chip>{{e.n}}</span><code>{{e.msg}}</code></div>
+    {% endfor %}{% else %}<div class=empty>خطایی ثبت نشده. 🎉</div>{% endif %}
+  </div></div>
+
+  <div class=card><h3>🔗 منبعِ فایل</h3><div class=rows>
+    <div class=sv><b>آپلودِ کاربر</b><div class=meter><i style="width:{{s.src_up_pct}}%;background:var(--teal)"></i></div><span class=n>{{s.src_up}}</span></div>
+    <div class=sv><b>دانلود از لینک</b><div class=meter><i style="width:{{s.src_dl_pct}}%;background:var(--amber)"></i></div><span class=n>{{s.src_dl}}</span></div>
+  </div></div>
+
+  <div class=card><h3>🌐 زبانِ کاربران</h3><div class=rows>
+    {% for r in s.by_lang %}
+    <div class=sv><b>{{r.k}}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--teal2)"></i></div><span class=n>{{r.n}}</span></div>
+    {% endfor %}
+  </div></div>
+
+  <div class=card><h3>📄 پرتکرارترین فرمت‌ها</h3><div class=rows>
+    {% if s.by_ext %}{% for r in s.by_ext %}
+    <div class=sv><b class=mono>{{r.k}}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--teal)"></i></div><span class=n>{{r.n}}</span></div>
+    {% endfor %}{% else %}<div class=empty>—</div>{% endif %}
+  </div></div>
+
+  <div class=card><h3>⚡ کشِ دانلود</h3><div class=rows>
+    <div class=sv><b>ورودی‌ها</b><div class=meter><i style="width:100%;background:#e2e8f0"></i></div><span class=n>{{s.cache_rows}}</span></div>
+    <div class=sv><b>تحویلِ آنی</b><div class=meter><i style="width:100%;background:var(--green)"></i></div><span class=n>{{s.cache_hits}}</span></div>
+    <div class=sv><b>صرفه‌جویی</b><div class=meter><i style="width:100%;background:var(--teal2)"></i></div><span class=n><bdi>{{s.cache_saved_h}}</bdi></span></div>
+  </div></div>
 </div>
 </div>
 {% endblock %}"""
@@ -934,45 +1058,275 @@ def _human_size(n) -> str:
     return f"{n} B"
 
 
-async def _stats() -> dict:
-    now = datetime.now(timezone.utc)
-    week = now - timedelta(days=7)
-    s: dict = {}
-    async with Sessionmaker() as db:
-        s["users"] = await db.scalar(select(func.count(User.id))) or 0
-        s["active7"] = await db.scalar(select(func.count(User.id)).where(User.last_seen >= week)) or 0
-        s["new7"] = await db.scalar(select(func.count(User.id)).where(User.created_at >= week)) or 0
-        s["files"] = await db.scalar(select(func.count(File.id))) or 0
-        storage = await db.scalar(select(func.coalesce(func.sum(File.size), 0))) or 0
-        s["dl_files"] = await db.scalar(select(func.count(File.id)).where(File.source == "dl")) or 0
-        s["ops"] = await db.scalar(select(func.count(Job.id))) or 0
-        kind_rows = (await db.execute(select(File.kind, func.count(File.id))
-                     .group_by(File.kind).order_by(func.count(File.id).desc()))).all()
-        op_rows = (await db.execute(select(Job.op, func.count(Job.id))
-                   .group_by(Job.op).order_by(func.count(Job.id).desc()).limit(8))).all()
-        status_rows = {st: c for st, c in (await db.execute(
-            select(Job.status, func.count(Job.id)).group_by(Job.status))).all()}
-        signup_ts = (await db.execute(
-            select(User.created_at).where(User.created_at >= week))).scalars().all()
-    s["storage_h"] = _human_size(storage)
-    s["src_dl"] = s["dl_files"]
-    s["src_up"] = max(0, s["files"] - s["dl_files"])
-    s["src_up_pct"] = round(s["src_up"] / s["files"] * 100) if s["files"] else 0
-    s["src_dl_pct"] = round(s["src_dl"] / s["files"] * 100) if s["files"] else 0
-    kmax = max((c for _, c in kind_rows), default=1) or 1
-    s["by_kind"] = [{"k": k, "n": c, "pct": round(c / kmax * 100)} for k, c in kind_rows]
-    omax = max((c for _, c in op_rows), default=1) or 1
-    s["by_op"] = [{"k": k, "n": c, "pct": round(c / omax * 100)} for k, c in op_rows]
-    done, failed = status_rows.get("done", 0), status_rows.get("failed", 0)
-    s["success_rate"] = round(done / (done + failed) * 100) if (done + failed) else None
-    keys = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
-    buckets = {k: 0 for k in keys}
-    for ts in signup_ts:
+# ── آمار ───────────────────────────────────────────────────────
+# بازه‌های صفحهٔ آمار: (کلید, برچسب, تعدادِ روز | None=کل)
+_RANGES = (("24h", "۲۴ ساعت", 1), ("7d", "۷ روز", 7), ("30d", "۳۰ روز", 30), ("all", "کل", None))
+_RANGE_DAYS = {k: d for k, _l, d in _RANGES}
+_STATS_TTL = 60          # کشِ کوتاهِ Redis؛ صفحه ~۲۰ کوئریِ تجمیعی دارد
+_DUR_SAMPLE = 2000       # سقفِ نمونه برای p95 (percentile_cont فقط Postgres است)
+
+_SIZE_BUCKETS = ((5, "< ۵MB"), (50, "۵–۵۰MB"), (200, "۵۰–۲۰۰MB"),
+                 (1024, "۲۰۰MB–۱GB"), (None, "> ۱GB"))
+_RES_BUCKETS = ((2160, "4K"), (1440, "2K"), (1080, "1080p"), (720, "720p"),
+                (480, "480p"), (0, "کمتر"))
+
+
+def _fmt_hours(seconds: float | int | None) -> str:
+    """ثانیه → «۱۲ ساعت و ۳۴ دقیقه» (یا دقیقه/ثانیه اگر کوتاه بود)."""
+    s = int(seconds or 0)
+    if s <= 0:
+        return "۰"
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m"
+    return f"{m}m {sec}s" if m else f"{sec}s"
+
+
+def _fmt_secs(seconds: float | None) -> str:
+    """مدتِ پردازش برای جدولِ عملیات."""
+    if not seconds:
+        return "—"
+    return f"{seconds:.1f}s" if seconds < 60 else f"{seconds / 60:.1f}m"
+
+
+def _bars(rows: list[tuple], labeler=None) -> list[dict]:
+    """(کلید, تعداد) → ردیفِ نوار با درصدِ نسبت به بیشینه."""
+    mx = max((c for _k, c in rows), default=1) or 1
+    return [{"k": (labeler(k) if labeler else k), "n": c, "pct": round(c / mx * 100)}
+            for k, c in rows]
+
+
+_TS_H = 96   # بلندیِ نمودارِ روند (px)
+
+
+def _day_keys(days: int, now: datetime) -> list[str]:
+    return [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
+
+
+def _bucket(timestamps, keys: list[str]) -> dict[str, int]:
+    """باکت‌بندیِ روزانه در پایتون — قابلِ‌حمل بینِ Postgres و SQLite (برخلافِ date_trunc)."""
+    b = dict.fromkeys(keys, 0)
+    for ts in timestamps:
         k = str(ts)[:10]
-        if k in buckets:
-            buckets[k] += 1
-    smax = max(buckets.values(), default=1) or 1
-    s["signups"] = [{"day": k[5:], "n": buckets[k], "pct": round(buckets[k] / smax * 100)} for k in keys]
+        if k in b:
+            b[k] += 1
+    return b
+
+
+def _stacked_series(series: dict[str, list], days: int, now: datetime) -> list[dict]:
+    """نمودارِ میله‌ایِ **انباشته** با مقیاسِ مشترک.
+
+    هر سری اگر جدا نرمال شود، روزی با ۱ کاربر و روزی با ۳۰ فایل هر دو صددرصد
+    می‌شوند و نمودار دروغ می‌گوید؛ پس ارتفاع بر اساسِ **مجموعِ بیشینهٔ روزها** است.
+    """
+    keys = _day_keys(days, now)
+    buckets = {name: _bucket(ts, keys) for name, ts in series.items()}
+    totals = [sum(b[k] for b in buckets.values()) for k in keys]
+    mx = max(totals, default=0) or 1
+    out = []
+    for i, k in enumerate(keys):
+        row = {"day": k[5:], "total": totals[i]}
+        for name, b in buckets.items():
+            n = b[k]
+            row[name] = n
+            row[name + "_h"] = round(n / mx * _TS_H) if n else 0
+        out.append(row)
+    return out
+
+
+def _pct(part: int, whole: int) -> int:
+    return round(part / whole * 100) if whole else 0
+
+
+async def _stats(rng: str = "7d") -> dict:  # noqa: PLR0915 — یک تابعِ گردآوریِ خطی
+    """آمارِ صفحهٔ /stats برای بازهٔ داده‌شده. کشِ ۶۰ ثانیه‌ای در Redis."""
+    now = datetime.now(timezone.utc)
+    days = _RANGE_DAYS.get(rng, 7)
+    since = now - timedelta(days=days) if days else None
+    s: dict = {"range": rng, "ranges": _RANGES, "days": days}
+
+    def in_range(col):
+        """شرطِ بازه (یا همیشه‌درست برای «کل») — تا کوئری‌ها یک‌شکل بمانند."""
+        return col >= since if since is not None else sa_true()
+
+    async with Sessionmaker() as db:
+        # ── کاربران ──
+        s["users"] = await db.scalar(select(func.count(User.id))) or 0
+        s["users_new"] = await db.scalar(
+            select(func.count(User.id)).where(in_range(User.created_at))) or 0
+        s["users_active"] = await db.scalar(
+            select(func.count(User.id)).where(in_range(User.last_seen))) or 0
+        s["users_blocked"] = await db.scalar(
+            select(func.count(User.id)).where(User.is_blocked.is_(True))) or 0
+        lang_rows = (await db.execute(select(func.coalesce(User.lang, "—"), func.count(User.id))
+                     .group_by(User.lang).order_by(func.count(User.id).desc()))).all()
+
+        # ── فایل‌ها ──
+        s["files"] = await db.scalar(select(func.count(File.id)).where(in_range(File.created_at))) or 0
+        s["files_all"] = await db.scalar(select(func.count(File.id))) or 0
+        storage = await db.scalar(select(func.coalesce(func.sum(File.size), 0))
+                                  .where(in_range(File.created_at))) or 0
+        s["dl_files"] = await db.scalar(select(func.count(File.id))
+                                        .where(File.source == "dl", in_range(File.created_at))) or 0
+        media_secs = await db.scalar(select(func.coalesce(func.sum(File.duration), 0))
+                                     .where(in_range(File.created_at))) or 0
+        kind_rows = (await db.execute(
+            select(File.kind, func.count(File.id)).where(in_range(File.created_at))
+            .group_by(File.kind).order_by(func.count(File.id).desc()))).all()
+        plat_rows = (await db.execute(
+            select(File.platform, func.count(File.id))
+            .where(File.platform.is_not(None), in_range(File.created_at))
+            .group_by(File.platform).order_by(func.count(File.id).desc()))).all()
+        # حجم/ابعاد/نام برای توزیع‌ها — یک اسکنِ محدود، باکت‌بندی در پایتون
+        dist_rows = (await db.execute(
+            select(File.size, File.height, File.width, File.name, File.kind)
+            .where(in_range(File.created_at)).limit(20000))).all()
+
+        # ── عملیات ──
+        s["ops"] = await db.scalar(select(func.count(Job.id)).where(in_range(Job.created_at))) or 0
+        st_rows = {st: c for st, c in (await db.execute(
+            select(Job.status, func.count(Job.id)).where(in_range(Job.created_at))
+            .group_by(Job.status))).all()}
+        op_rows = (await db.execute(
+            select(Job.op, func.count(Job.id)).where(in_range(Job.created_at))
+            .group_by(Job.op).order_by(func.count(Job.id).desc()).limit(10))).all()
+        # نرخِ موفقیت + زمانِ پردازشِ هر op (finished_at−created_at؛ داده‌ای که تا امروز بلااستفاده بود)
+        per_op = (await db.execute(
+            select(Job.op, Job.status, Job.created_at, Job.finished_at)
+            .where(in_range(Job.created_at), Job.finished_at.is_not(None))
+            .order_by(Job.id.desc()).limit(_DUR_SAMPLE))).all()
+        err_rows = (await db.execute(
+            select(Job.op, Job.error).where(Job.status == "failed", Job.error.is_not(None),
+                                            in_range(Job.created_at))
+            .order_by(Job.id.desc()).limit(500))).all()
+
+        # ── سریِ زمانی ──
+        span = min(days, 30) if days else 30
+        span = max(span, 2)          # «۲۴ ساعت» هم دو ستون بگیرد (دیروز/امروز)
+        t_since = now - timedelta(days=span)
+        file_ts = (await db.execute(select(File.created_at)
+                   .where(File.created_at >= t_since))).scalars().all()
+        job_ts = (await db.execute(select(Job.created_at)
+                  .where(Job.created_at >= t_since))).scalars().all()
+        user_ts = (await db.execute(select(User.created_at)
+                   .where(User.created_at >= t_since))).scalars().all()
+
+        # ── کاربرانِ برتر ──
+        top_rows = (await db.execute(
+            select(User.tg_user_id, func.count(File.id), func.coalesce(func.sum(File.size), 0))
+            .join(File, File.owner_id == User.id).where(in_range(File.created_at))
+            .group_by(User.id, User.tg_user_id)
+            .order_by(func.count(File.id).desc()).limit(10))).all()
+
+        # ── کشِ دانلود ──
+        s["cache_rows"] = await db.scalar(select(func.count(DownloadCache.key))) or 0
+        s["cache_hits"] = await db.scalar(
+            select(func.coalesce(func.sum(DownloadCache.hits), 0))) or 0
+        cache_saved = await db.scalar(select(func.coalesce(
+            func.sum(DownloadCache.size * DownloadCache.hits), 0))) or 0
+
+    # ── مشتقات ──
+    s["storage_h"] = _human_size(storage)
+    s["media_h"] = _fmt_hours(media_secs)
+    s["src_dl"], s["src_up"] = s["dl_files"], max(0, s["files"] - s["dl_files"])
+    s["src_up_pct"], s["src_dl_pct"] = _pct(s["src_up"], s["files"]), _pct(s["src_dl"], s["files"])
+    s["by_kind"] = _bars(kind_rows, lambda k: _KIND_FA.get(k, k))
+    s["by_op"] = _bars(op_rows, lambda k: _OP_FA.get(k, k))
+    s["by_lang"] = _bars(lang_rows, lambda k: {"fa": "فارسی", "en": "English"}.get(k, k))
+    s["by_platform"] = _bars(plat_rows, lambda k: _PLATFORM_FA.get(k, k or "—"))
+    s["queued"] = st_rows.get("queued", 0) + st_rows.get("running", 0)
+    s["cancelled"] = st_rows.get("cancelled", 0)
+    done, failed = st_rows.get("done", 0), st_rows.get("failed", 0)
+    s["done"], s["failed"] = done, failed
+    s["success_rate"] = _pct(done, done + failed) if (done + failed) else None
+    s["cache_saved_h"] = _human_size(cache_saved)
+
+    # توزیعِ حجم / کیفیت / فرمت
+    size_b = {label: 0 for _mb, label in _SIZE_BUCKETS}
+    res_b = {label: 0 for _h, label in _RES_BUCKETS}
+    ext_c: dict[str, int] = {}
+    for size, height, _w, name, kind in dist_rows:
+        mb = (size or 0) / 1024 / 1024
+        for cap, label in _SIZE_BUCKETS:
+            if cap is None or mb < cap:
+                size_b[label] += 1
+                break
+        if kind == "video" and height:
+            for cap, label in _RES_BUCKETS:
+                if height >= cap:
+                    res_b[label] += 1
+                    break
+        ext = (os.path.splitext(name or "")[1] or "").lstrip(".").lower()
+        if 1 <= len(ext) <= 5:
+            ext_c[ext] = ext_c.get(ext, 0) + 1
+    s["by_size"] = _bars([(k, v) for k, v in size_b.items() if v])
+    s["by_res"] = _bars([(k, v) for k, v in res_b.items() if v])
+    s["by_ext"] = _bars(sorted(ext_c.items(), key=lambda kv: -kv[1])[:8])
+
+    # نرخِ موفقیت + میانگین/‏p95ِ زمانِ هر op
+    agg: dict[str, dict] = {}
+    for op, status, created, finished in per_op:
+        a = agg.setdefault(op, {"ok": 0, "bad": 0, "durs": []})
+        if status == "done":
+            a["ok"] += 1
+        elif status == "failed":
+            a["bad"] += 1
+        try:
+            d = (finished - created).total_seconds()
+            if 0 <= d < 86400:
+                a["durs"].append(d)
+        except (TypeError, AttributeError):
+            pass
+    rows = []
+    for op, a in agg.items():
+        tot = a["ok"] + a["bad"]
+        durs = sorted(a["durs"])
+        p95 = durs[min(len(durs) - 1, int(len(durs) * 0.95))] if durs else None
+        rows.append({"op": _OP_FA.get(op, op), "n": tot or len(durs),
+                     "rate": _pct(a["ok"], tot) if tot else None,
+                     "bad": a["bad"],
+                     "avg": _fmt_secs(sum(durs) / len(durs) if durs else None),
+                     "p95": _fmt_secs(p95)})
+    s["op_perf"] = sorted(rows, key=lambda r: -r["n"])[:10]
+    all_durs = sorted(d for a in agg.values() for d in a["durs"])
+    s["avg_op_h"] = _fmt_secs(sum(all_durs) / len(all_durs) if all_durs else None)
+
+    # پرتکرارترین خطاها (نرمال‌شده تا شمارش معنا بدهد)
+    errs: dict[str, int] = {}
+    for op, err in err_rows:
+        msg = " ".join((err or "").split())[:110]
+        if msg:
+            key = f"{_OP_FA.get(op, op)} · {msg}"
+            errs[key] = errs.get(key, 0) + 1
+    s["errors"] = [{"msg": k, "n": v} for k, v in sorted(errs.items(), key=lambda kv: -kv[1])[:8]]
+
+    # سریِ زمانی — سه سری روی یک نمودارِ انباشته با مقیاسِ مشترک
+    s["series_days"] = span
+    s["ts"] = _stacked_series({"f": file_ts, "o": job_ts, "u": user_ts}, span, now)
+    s["ts_max"] = max((r["total"] for r in s["ts"]), default=0)
+
+    s["top_users"] = [{"tg": tg, "files": n, "size": _human_size(sz)} for tg, n, sz in top_rows]
+    return s
+
+
+async def _stats_cached(app, rng: str) -> dict:
+    """آمار با کشِ کوتاهِ Redis — رفرشِ پیاپیِ صفحه نباید به دیتابیس فشار بیاورد."""
+    redis = app.get("redis")
+    key = f"statscache:{rng}"
+    if redis is not None:
+        try:
+            raw = await redis.get(key)
+            if raw:
+                return json.loads(raw)
+        except Exception:  # noqa: BLE001
+            pass
+    s = await _stats(rng)
+    if redis is not None:
+        try:
+            await redis.set(key, json.dumps(s, default=str), ex=_STATS_TTL)
+        except Exception:  # noqa: BLE001
+            pass
     return s
 
 
@@ -1183,8 +1537,12 @@ async def users_block(request: web.Request) -> web.Response:
 async def stats_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
+    rng = request.query.get("range", "7d")
+    if rng not in _RANGE_DAYS:
+        rng = "7d"
     return _render("stats", admin_id=_session_admin(request), active="stats",
-                   pill_ok=await _pill_ok(request.app), s=await _stats(),
+                   pill_ok=await _pill_ok(request.app),
+                   s=await _stats_cached(request.app, rng),
                    kindfa=_KIND_FA, opfa=_OP_FA)
 
 

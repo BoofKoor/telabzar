@@ -318,7 +318,7 @@ def _post_text(info: dict, gallery_caption: str | None) -> str | None:
 
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
                  kind: str, info: dict, lang: str, thumb_path: str | None = None,
-                 post_caption: str | None = None) -> None:
+                 post_caption: str | None = None, platform: str | None = None) -> None:
     """فایلِ دانلودی را وارد pipeline می‌کند (الگوی spawn) با source='dl'."""
     path, info, thumb_path = await _media_meta(path, kind, info, thumb_path)
     name = os.path.basename(path)   # remux ممکن است پسوند را به mp4 عوض کرده باشد
@@ -334,7 +334,7 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
             size=os.path.getsize(path) if os.path.exists(path) else None,
             width=info.get("width"), height=info.get("height"),
             duration=int(info["duration"]) if info.get("duration") else None,
-            changelog=[], source="dl", post_caption=post_caption,
+            changelog=[], source="dl", post_caption=post_caption, platform=platform,
         )
         s.add(f)
         await s.commit()
@@ -352,7 +352,8 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
 
 async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int, p: str,
                           name: str, kind: str, info: dict, lang: str, thumb_path: str | None,
-                          url: str, selector: str, post_caption: str | None = None) -> None:
+                          url: str, selector: str, post_caption: str | None = None,
+                          platform: str | None = None) -> None:
     """تک‌فایل را **درجا** روی پیامِ لنگرگاه تحویل می‌دهد (عکسِ منو → ویدیو) و
     file_id را برای دفعهٔ بعد کش می‌کند. اگر لنگرگاه متنی بود، update_card خودش
     کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند."""
@@ -370,7 +371,7 @@ async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int
             size=os.path.getsize(p) if os.path.exists(p) else None,
             width=info.get("width"), height=info.get("height"),
             duration=int(info["duration"]) if info.get("duration") else None,
-            changelog=[], source="dl", post_caption=post_caption,
+            changelog=[], source="dl", post_caption=post_caption, platform=platform,
         )
         s.add(f)
         await s.commit()
@@ -730,14 +731,16 @@ async def run_download(ctx: dict, payload: dict) -> None:
             p, info, thumb = paths[0]
             await _deliver_single(bot, chat_id, status_mid, owner_id, p, os.path.basename(p),
                                   _kind_from_info(info, p), info, lang, thumb, url, selector,
-                                  post_caption=_post_text(info, gallery_caption))
+                                  post_caption=_post_text(info, gallery_caption),
+                                  platform=platform)
         else:
             # تک‌عکسیِ گالری یا حالتِ نادرِ دیگر → کارتِ جدا برای هرکدام + حذفِ لنگرگاه
             for p, info, thumb in paths:
                 # ابعاد/مدت/کاور را خودِ _spawn از فایل کامل می‌کند (_media_meta)
                 await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
                              _kind_from_info(info, p), info, lang, thumb_path=thumb,
-                             post_caption=_post_text(info, gallery_caption))
+                             post_caption=_post_text(info, gallery_caption),
+                             platform=platform)
             try:
                 await bot.delete_message(chat_id, status_mid)  # کارت‌ها جایگزینش شدند
             except Exception:  # noqa: BLE001

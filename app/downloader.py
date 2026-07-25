@@ -1155,11 +1155,19 @@ def _gallery_caption(workdir: str) -> str | None:
 
 async def download_gallerydl(url: str, workdir: str, opts: dict,
                              progress=None, cancel=None) -> tuple[list[str], str | None]:
-    """دانلودِ گالری/کاروسل با gallery-dl → (فهرستِ فایل‌ها, کپشنِ پست بدونِ هشتگ)."""
+    """دانلودِ گالری/کاروسل با gallery-dl → (فهرستِ فایل‌ها, کپشنِ پست بدونِ هشتگ).
+
+    خروجی در زیرشاخهٔ اختصاصیِ `gl/` نوشته و **فقط از همان‌جا** جمع می‌شود. چرا: روی
+    نودِ دانلود، `cookies.materialize()` کوکی را داخلِ `workdir/ck/` می‌نویسد و پیمایشِ
+    کلِ workdir آن را به‌عنوان یک فایلِ دانلودشده برمی‌داشت → یک ریلزِ **تکی** دو فایل
+    به‌نظر می‌رسید و به شاخهٔ «آلبوم» می‌رفت (بدونِ کارت و بدونِ کپشنِ پست).
+    """
     # کوکی را در temp (بیرونِ workdir) کپی کن: هم /cookies فقط‌خواندنی است، هم اگر داخلِ
     # workdir بگذاریم، جمع‌کنندهٔ فایل‌ها اشتباهی آن را به‌عنوان رسانه برمی‌داشت.
     ck = _writable_cookie(opts.get("cookies"))
-    cmd = [GALLERY_DL, "-D", workdir, "--write-metadata"]  # سایدکارِ .json برای کپشن
+    outdir = os.path.join(workdir, "gl")
+    os.makedirs(outdir, exist_ok=True)
+    cmd = [GALLERY_DL, "-D", outdir, "--write-metadata"]  # سایدکارِ .json برای کپشن
     if opts.get("proxy"):
         cmd += ["--proxy", opts["proxy"]]
     cookie_arg = ck or opts.get("cookies")
@@ -1171,10 +1179,10 @@ async def download_gallerydl(url: str, workdir: str, opts: dict,
     finally:
         _cleanup_cookie(ck)
     files = []
-    for root, _d, names in os.walk(workdir):
+    for root, _d, names in os.walk(outdir):
         for n in names:
             if not n.endswith((".json", ".part")):  # .json = سایدکارِ متادیتا (رسانه نیست)
                 files.append(os.path.join(root, n))
     if not files:
         raise RuntimeError("gallery download produced no files")
-    return sorted(files), _gallery_caption(workdir)
+    return sorted(files), _gallery_caption(outdir)

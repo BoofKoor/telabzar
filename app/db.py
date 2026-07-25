@@ -23,6 +23,16 @@ _MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS cover_id VARCHAR(256)",
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS source VARCHAR(16)",
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS post_caption TEXT",
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS platform VARCHAR(24)",
+    "ALTER TABLE download_cache ADD COLUMN IF NOT EXISTS post_caption TEXT",
+    "ALTER TABLE download_cache ADD COLUMN IF NOT EXISTS platform VARCHAR(24)",
+    "ALTER TABLE download_cache ADD COLUMN IF NOT EXISTS hits INTEGER DEFAULT 0",
+    # ایندکس‌های آمار: بدونِ این‌ها GROUP BY روی بازهٔ ۳۰ روزه با رشدِ داده کند می‌شود
+    "CREATE INDEX IF NOT EXISTS ix_files_created_at ON files (created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_files_platform ON files (platform)",
+    "CREATE INDEX IF NOT EXISTS ix_jobs_created_at ON jobs (created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs (status)",
+    "CREATE INDEX IF NOT EXISTS ix_users_created_at ON users (created_at)",
 ]
 
 
