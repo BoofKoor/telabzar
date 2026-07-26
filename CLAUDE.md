@@ -345,7 +345,14 @@ usable accounts drop below `cookie_alert_min`.
   the *proxy* host, not the destination, so the veto protects nothing there and only breaks the proxy
   hop — a `PROXY_URL` of `http://squid:3128` (a docker service name → `172.x`) counted as "internal"
   and every download died with `ClientConnectorDNSError`. A proxy given as a bare IP was unaffected,
-  which is exactly what makes this the kind of regression a unit test doesn't find. **Nothing else in
+  which is exactly what makes this the kind of regression a unit test doesn't find.
+  **The socks branch keeps the resolver, and the reason is `_http_proxy`, not aiohttp.** aiohttp does
+  **not** ignore a socks proxy and fall back to a direct connection — it treats `socks5://h:1080` as an
+  HTTP proxy address and tries to CONNECT to that host:port, which fails. `_http_proxy` therefore drops
+  any non-http(s) proxy and we pass `proxy=None`, so the `direct` engine really does connect directly
+  and the resolver is exactly right there. The pre-existing side effect worth knowing: with a
+  socks-only `PROXY_URL` the `direct` engine bypasses the proxy and exits from the master's own IP;
+  only yt-dlp/gallery-dl (which get `--proxy`) use it. **Nothing else in
   the codebase goes through these checks:** `is_safe_url*` has exactly two call sites (the link front
   door and `_follow`), and every internal address — `gateway_node.py`→`NODE_GATEWAY_URL`, the panel's
   pot-provider ping and bot-API DM, `download_cobalt`→`COBALT_URL`, aiogram→`LOCAL_API_BASE`, Redis and
@@ -490,6 +497,15 @@ usable accounts drop below `cookie_alert_min`.
 ## Open Questions
 - **Roles:** the plan hypothesized `owner`/`reseller` tiers; **code has none** — only admin (env) vs user, plus `is_blocked`, and `User.role` is unused. Is a multi-tier/reseller hierarchy intended-but-unbuilt (should this file track it as a gap), or is the two-tier model final?
 - ~~**Tests:**~~ **resolved 2026-07-26** — `tests/` + `requirements-dev.txt` + `pytest.ini` are committed (see §6). Coverage today is the security/correctness regressions of the phase-one bug audit, not the whole app; grow it fix-by-fix.
+- **Phase-3 backlog — Spotify names the wrong cause when the age gate blocks everything.**
+  `--match-filter age_limit<?18` reaches Spotify because `download_spotify` passes the same `opts` to
+  `download_ytdlp` per track. A blocked track raises `AgeRestricted`, is swallowed by that loop's
+  `except Exception: … continue`, and is silently dropped from the playlist — correct behaviour for a
+  mixed playlist. But when **every** track is blocked the loop ends with
+  `RuntimeError("spotify: no YouTube match — …")`, so the user is told the matcher failed when in fact
+  the filter rejected the content. Fix: track `AgeRestricted` separately in that loop and surface
+  `nsfw_blocked` when it accounts for every dropped track. Deliberately deferred from phase 1 — it is
+  a message bug, not a security one.
 - **`is_safe_url_resolved` rides the default `asyncio.to_thread` executor** (shared, `min(32, cpu+4)`
   threads). Each link intake parks one thread for up to 2 s on DNS. At today's traffic this is
   invisible and the 60 s cache absorbs repeats, but it is the saturation point if link volume grows —

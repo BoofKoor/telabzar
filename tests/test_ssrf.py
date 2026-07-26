@@ -242,14 +242,31 @@ async def test_safe_resolver_is_attached_when_there_is_no_proxy():
         await conn.close()
 
 
-async def test_socks_proxy_still_gets_the_safe_resolver():
-    """aiohttp پروکسیِ socks را نمی‌فهمد (`_http_proxy` دورش می‌ریزد)، پس اتصال
-    مستقیم است و رزولور باید سرِ جایش بماند."""
-    conn = D._direct_connector({"proxy": "socks5h://exit:1080"})
+@pytest.mark.parametrize("proxy", ["socks5://127.0.0.1:1080", "socks5h://exit:1080",
+                                   "socks4://exit:1080"])
+async def test_socks_proxy_still_gets_the_safe_resolver(proxy):
+    """با پروکسیِ socks، `_http_proxy` آن را دور می‌ریزد و ما `proxy=None` پاس
+    می‌دهیم → اتصالِ واقعاً مستقیم → رزولور باید سرِ جایش بماند.
+
+    (aiohttp خودش به مستقیم برنمی‌گردد؛ socks را مثلِ آدرسِ یک پروکسیِ HTTP
+    می‌گیرد و شکست می‌خورد. تستِ زیر همین را تثبیت می‌کند تا استدلال روی فرضِ
+    غلط ننشیند.)
+    """
+    assert D._http_proxy(proxy) is None
+    conn = D._direct_connector({"proxy": proxy})
     try:
         assert type(conn._resolver).__name__ == "SafeResolver"
     finally:
         await conn.close()
+
+
+async def test_aiohttp_does_not_fall_back_to_direct_for_socks():
+    """چرا `_http_proxy` لازم است: aiohttp پروکسیِ socks را «نادیده» نمی‌گیرد،
+    به همان host:port تلاشِ CONNECT می‌کند و می‌شکند."""
+    async with aiohttp.ClientSession() as s:
+        with pytest.raises(aiohttp.ClientError):
+            await s.get("http://example.com/", proxy="socks5://127.0.0.1:1",
+                        timeout=aiohttp.ClientTimeout(total=4))
 
 
 async def test_connector_resolver_vetoes_at_connect_time(server):
