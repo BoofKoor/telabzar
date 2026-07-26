@@ -290,7 +290,8 @@ def _safe_resolver():
     **نکته‌ای که باید بماند:** وقتی `proxy=` ست باشد، aiohttp نامِ *پروکسی* را حل
     می‌کند نه مقصد را — مقصد را پروکسی حل می‌کند و ما اصلاً نمی‌بینیمش. این آگاهانه
     پذیرفته است: پروکسیِ خروجیِ ادمین بیرونِ شبکهٔ داخلیِ مستر است، پس مسیرِ حمله
-    به شبکهٔ داخلی از آن‌جا باز نمی‌شود.
+    به شبکهٔ داخلی از آن‌جا باز نمی‌شود. به همین دلیل `_direct_connector` وقتی
+    پروکسی در کار است این رزولور را **اصلاً وصل نمی‌کند** — ببین آن‌جا.
     """
     import aiohttp
 
@@ -302,6 +303,24 @@ def _safe_resolver():
             return hosts
 
     return SafeResolver()
+
+
+def _direct_connector(opts: dict):
+    """کانکتورِ سشنِ موتورِ `direct`.
+
+    بدونِ پروکسی: رزولورِ وتوکننده وصل می‌شود (بستنِ پنجرهٔ TOCTOU).
+
+    با پروکسیِ http(s): **بدونِ** آن رزولور. چون aiohttp در حالتِ پروکسی نامِ
+    *پروکسی* را حل می‌کند نه مقصد را، رزولور هیچ حفاظتی از مقصد نمی‌دهد و فقط
+    می‌تواند خودِ پروکسی را بشکند — یک `PROXY_URL` مثلِ `http://squid:3128`
+    (نامِ سرویسِ داکر) به IPِ ۱۷۲٫x حل می‌شود و «داخلی» شمرده می‌شد. مقصد در این
+    حالت با درِ ورودیِ `is_safe_url_resolved` گیت می‌خورد، که خودش با پروکسی
+    fail-open است — همان‌جا هم توضیح داده شده.
+    """
+    import aiohttp
+    if _http_proxy(opts.get("proxy")):
+        return aiohttp.TCPConnector()
+    return aiohttp.TCPConnector(resolver=_safe_resolver())
 
 
 def _writable_cookie(cookie_path: str | None) -> str | None:
@@ -996,8 +1015,7 @@ async def probe_direct(url: str, opts: dict | None = None) -> dict | None:
     try:
         timeout = aiohttp.ClientTimeout(total=15)   # HEAD است؛ بیش از این یعنی سرور نمی‌دهد
         async with aiohttp.ClientSession(headers=_direct_headers(opts), timeout=timeout,
-                                         connector=aiohttp.TCPConnector(
-                                             resolver=_safe_resolver())) as sess:
+                                         connector=_direct_connector(opts)) as sess:
             resp = await _follow(sess, "HEAD", url, _http_proxy(opts.get("proxy")))
             try:
                 if resp.status >= 400:
@@ -1036,8 +1054,7 @@ async def download_direct(url: str, workdir: str, opts: dict | None = None,
     os.makedirs(workdir, exist_ok=True)
     timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=120)
     async with aiohttp.ClientSession(headers=_direct_headers(opts), timeout=timeout,
-                                     connector=aiohttp.TCPConnector(
-                                         resolver=_safe_resolver())) as sess:
+                                     connector=_direct_connector(opts)) as sess:
         resp = await _follow(sess, "GET", url, _http_proxy(opts.get("proxy")))
         try:
             if resp.status >= 400:

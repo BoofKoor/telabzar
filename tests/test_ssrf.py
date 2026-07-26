@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import socket
 
 import aiohttp
@@ -193,6 +194,62 @@ async def test_redirect_hop_to_numeric_loopback_is_blocked(server, monkeypatch):
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=_Fixed())) as s:
         with pytest.raises(RuntimeError, match="blocked url"):
             await D._follow(s, "GET", f"http://front.example:{server}/redirect", None)
+
+
+async def test_private_proxy_is_not_vetoed(server, monkeypatch):
+    """`PROXY_URL` روی شبکهٔ خصوصی نباید قربانیِ رزولورِ ضدِ SSRF شود.
+
+    یک پروکسیِ خودمیزبان معمولاً با نامِ سرویسِ داکر می‌آید (`http://squid:3128`)
+    که به ۱۷۲٫x حل می‌شود. رزولور در حالتِ پروکسی هیچ حفاظتی از **مقصد** نمی‌دهد
+    (مقصد را پروکسی حل می‌کند)، پس فقط می‌توانست همین پرش را بشکند.
+    """
+    async def _proxied(_req):
+        return web.Response(text="via-proxy")
+
+    app = web.Application()
+    app.router.add_route("*", "/{tail:.*}", _proxied)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    pport = site._server.sockets[0].getsockname()[1]
+    try:
+        opts = {"proxy": f"http://myproxy.internal:{pport}"}
+        assert isinstance(D._direct_connector(opts), aiohttp.TCPConnector)
+
+        loop = asyncio.get_running_loop()
+        real = loop.getaddrinfo
+
+        async def _lga(host, port, **kw):
+            if host == "myproxy.internal":
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+            return await real(host, port, **kw)
+
+        monkeypatch.setattr(loop, "getaddrinfo", _lga)
+        async with aiohttp.ClientSession(connector=D._direct_connector(opts)) as s:
+            async with s.get("http://example.com/x", proxy=opts["proxy"],
+                             timeout=aiohttp.ClientTimeout(total=5)) as r:
+                assert r.status == 200 and await r.text() == "via-proxy"
+    finally:
+        await runner.cleanup()
+
+
+async def test_safe_resolver_is_attached_when_there_is_no_proxy():
+    conn = D._direct_connector({})
+    try:
+        assert type(conn._resolver).__name__ == "SafeResolver"
+    finally:
+        await conn.close()
+
+
+async def test_socks_proxy_still_gets_the_safe_resolver():
+    """aiohttp پروکسیِ socks را نمی‌فهمد (`_http_proxy` دورش می‌ریزد)، پس اتصال
+    مستقیم است و رزولور باید سرِ جایش بماند."""
+    conn = D._direct_connector({"proxy": "socks5h://exit:1080"})
+    try:
+        assert type(conn._resolver).__name__ == "SafeResolver"
+    finally:
+        await conn.close()
 
 
 async def test_connector_resolver_vetoes_at_connect_time(server):
