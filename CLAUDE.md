@@ -497,6 +497,26 @@ usable accounts drop below `cookie_alert_min`.
 ## Open Questions
 - **Roles:** the plan hypothesized `owner`/`reseller` tiers; **code has none** — only admin (env) vs user, plus `is_blocked`, and `User.role` is unused. Is a multi-tier/reseller hierarchy intended-but-unbuilt (should this file track it as a gap), or is the two-tier model final?
 - ~~**Tests:**~~ **resolved 2026-07-26** — `tests/` + `requirements-dev.txt` + `pytest.ini` are committed (see §6). Coverage today is the security/correctness regressions of the phase-one bug audit, not the whole app; grow it fix-by-fix.
+- **Phase-3 backlog — a socks `PROXY_URL` does not apply to the `direct` engine, and the docs say
+  otherwise.** `docs/ADMIN_PANEL.md:74` recommends `socks5h://…` for `proxy_url`, so anyone following
+  the documentation believes every download leaves through their clean exit. It does not:
+  `downloader._http_proxy()` passes only `http(s)://` proxies to aiohttp and drops everything else, so
+  the `direct` engine (plain download links — GitHub releases, APKs, PDFs) connects **directly and
+  exits from the master's own IP**. Only yt-dlp and gallery-dl, which receive `--proxy`, honour it.
+  This is a **docs-vs-code contradiction**, not a footnote — and it blocks the near-term plan of using
+  a mobile/4G proxy as the exit, because that exit would silently not cover direct downloads.
+  The likely fix is `aiohttp_socks.ProxyConnector`, and it was checked against 0.11.0 so phase 3 does
+  not start from zero. Two blockers, both verified by running it:
+  (a) **it is incompatible with our resolver, silently.** `aiohttp_socks/connector.py:107` does
+  `kwargs['resolver'] = NoResolver()`, overwriting whatever you pass — an instrumented resolver handed
+  to `ProxyConnector` was never called for the destination. So the anti-TOCTOU veto **disappears with
+  no error and no warning**; the SSRF defence for socks downloads has to come from somewhere else
+  (front door only, or resolve the destination ourselves and hand the vetted IP to the proxy).
+  (b) **it rejects the `socks5h://` scheme our own docs recommend** —
+  `ValueError: Invalid scheme component: socks5h`. The URL has to be mapped to `socks5://` plus
+  `rdns=True`, which is what `socks5h` means anyway.
+  Decide first whether `direct` downloads should go through the proxy at all; if yes, the resolver
+  guarantee must be replaced, not assumed.
 - **Phase-3 backlog — Spotify names the wrong cause when the age gate blocks everything.**
   `--match-filter age_limit<?18` reaches Spotify because `download_spotify` passes the same `opts` to
   `download_ytdlp` per track. A blocked track raises `AgeRestricted`, is swallowed by that loop's

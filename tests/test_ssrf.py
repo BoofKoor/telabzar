@@ -269,6 +269,57 @@ async def test_aiohttp_does_not_fall_back_to_direct_for_socks():
                         timeout=aiohttp.ClientTimeout(total=4))
 
 
+def test_both_direct_engine_sessions_use_the_guarded_connector():
+    """هر دو سشنِ موتورِ `direct` باید از `_direct_connector` بیایند.
+
+    اگر `probe_direct` (که **قبل** از `download_direct` اجرا می‌شود) سشنِ ساده
+    بگیرد، یک چکِ محافظت‌نشده جلوی چکِ محافظت‌شده می‌نشیند.
+    """
+    import inspect
+    src = inspect.getsource(D)
+    sessions = [ln for ln in src.splitlines() if "aiohttp.ClientSession(" in ln
+                or (ln.strip().startswith("connector=") and "_direct" in ln)]
+    for fn in (D.probe_direct, D.download_direct):
+        body = inspect.getsource(fn)
+        assert "connector=_direct_connector(opts)" in body, \
+            f"{fn.__name__} باید کانکتورِ محافظت‌شده بگیرد"
+    assert sessions, "تست باید واقعاً سشن‌ها را پیدا کرده باشد"
+
+
+@pytest.fixture
+def dns_points_at_loopback(monkeypatch):
+    """A-recordِ جعلی در **همان لایه‌ای** که aiohttp از آن می‌خواند.
+
+    وصله روی `socket.getaddrinfo` کافی نیست: رزولورِ aiohttp از مسیرِ دیگری
+    می‌رود، پس نام واقعاً NXDOMAIN می‌ماند و تست به دلیلِ **غلط** سبز می‌شود —
+    یعنی با کانکتورِ ساده هم پاس می‌شود و دیگر چیزی را اثبات نمی‌کند.
+    """
+    async def _resolve(self, host, port=0, family=socket.AF_INET):
+        return [{"hostname": host, "host": "127.0.0.1", "port": port,
+                 "family": socket.AF_INET, "proto": 6, "flags": 0}]
+
+    monkeypatch.setattr(aiohttp.DefaultResolver, "resolve", _resolve)
+
+
+async def test_probe_direct_is_vetoed_for_a_name_resolving_to_loopback(
+        server, dns_points_at_loopback):
+    """`probe_direct` هم سرِ **اتصال** وتو می‌شود، نه فقط با چکِ نحوی.
+
+    هاست یک **نام** است پس `is_safe_url` ردش نمی‌کند؛ حرفِ آخر با رزولورِ
+    کانکتور است. با کانکتورِ ساده این HEAD موفق می‌شد و dict برمی‌گرداند.
+    """
+    url = f"http://sneaky.example:{server}/blob"
+    assert D.is_safe_url(url) is True, "چکِ نحوی نباید نام را رد کند"
+    async with aiohttp.ClientSession() as plain:      # کنترل: بدونِ رزولورِ ما می‌رسد
+        async with await _follow_plain(plain, url) as resp:
+            assert resp.status == 200 and await resp.read() == SECRET
+    assert await D.probe_direct(url) is None, "با رزولورِ محافظ باید وتو شود"
+
+
+async def _follow_plain(sess, url):
+    return sess.get(url)
+
+
 async def test_connector_resolver_vetoes_at_connect_time(server):
     """لایهٔ ضدِ TOCTOU: حتی اگر چکِ نحوی دور زده شود، خودِ اتصال نمی‌گیرد."""
     async with aiohttp.ClientSession(
