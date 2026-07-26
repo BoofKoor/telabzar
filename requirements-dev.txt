@@ -1,0 +1,8 @@
+# وابستگی‌های تست (نه در هیچ ایمیجِ اجرایی). اجرا: pip install -r requirements-dev.txt && pytest
+-r requirements.txt
+pytest>=8,<10
+pytest-asyncio>=0.24,<2
+aiohttp>=3.9,<4
+fakeredis>=2.20,<3
+# `app.processing`/`app.tasks` سرِ import به PIL نیاز دارند (از requirements-worker)
+Pillow>=10,<12

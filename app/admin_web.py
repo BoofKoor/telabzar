@@ -31,6 +31,7 @@ from markupsafe import Markup
 from sqlalchemy import func, select, text as sql_text, true as sa_true
 
 from . import cookies as ck_pool
+from . import dl_active
 from . import nodes as node_mod
 from . import settings_store
 from . import textstore
@@ -1152,7 +1153,9 @@ async def _health(app: web.Application) -> dict:
         h["q_dl"] = (await r.zcard("arq:queue:dl")) + (await r.zcard("arq:queue:dl:master"))
     except Exception:  # noqa: BLE001
         h["q_main"] = h["q_proc"] = h["q_dl"] = 0
-    h["dl_active"] = await _int("dl:active")
+    # شمارندهٔ خودترمیمِ دانلودِ زنده (ZSET با هرسِ ورودیِ کهنه) — نه `INCR dl:active`
+    # که روی مرگِ کانتینر گیر می‌کرد و پنل عددِ گیرکرده را «الان چند دانلود» می‌خواند.
+    h["dl_active"] = await dl_active.count(r)
     try:
         du = shutil.disk_usage(settings.work_dir)
         h["disk_total"] = round(du.total / 1024 ** 3)

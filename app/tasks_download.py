@@ -29,6 +29,7 @@ from aiogram.types import (
 from aiogram.utils.media_group import MediaGroupBuilder
 
 from . import cookies as ck
+from . import dl_active
 from . import dl_cache
 from . import downloader as D
 from . import processing as P
@@ -321,6 +322,10 @@ async def _opts(redis, platform: str, workdir: str | None = None,
         "pot_provider": (settings.pot_provider_url or None) if pot_on else None,
         "cookies": cookie_path,
         "max_mb": await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb),
+        # گیتِ سنیِ yt-dlp روی همان فراخوانیِ دانلود (لایهٔ ۲، قبل از هر بایتِ رسانه).
+        # ۰ = خاموش. عمداً همین‌جا و نه در `run_download`: تنها سازندهٔ opts این است.
+        "max_age_limit": 18 if await settings_store.get_bool(
+            "safety_enabled", settings.safety_enabled) else 0,
         "sponsorblock": await settings_store.get_str("dl_sponsorblock", settings.dl_sponsorblock) or None,
         "subs": await settings_store.get_bool("dl_subs", settings.dl_subs),
         "cobalt_key": settings.cobalt_api_key or None,
@@ -740,10 +745,15 @@ async def run_download(ctx: dict, payload: dict) -> None:
 
     # ── فازِ fetch: دانلود + spawn ──
     cap = await settings_store.get_int("dl_concurrency", settings.dl_concurrency)
-    active = 0
+    # عضوِ ZSET باید **per-job** یکتا باشد، نه `ref`: همان `ref` بینِ فازِ probe و
+    # fetch مشترک است و `on_dl_pick` می‌تواند از یک منو چند کیفیت را پشتِ‌هم بفرستد،
+    # پس دو جابِ هم‌زمان با یک ref همدیگر را بازنویسی/حذف می‌کردند.
+    active_member = f"{ref}:{secrets.token_urlsafe(6)}"
+    active, beat = 0, None
     if redis is not None:
         try:
-            active = await redis.incr("dl:active")
+            active = await dl_active.enter(redis, active_member)
+            beat = asyncio.create_task(dl_active.keepalive(redis, active_member))
         except Exception:  # noqa: BLE001
             active = 0
     try:
@@ -865,8 +875,8 @@ async def run_download(ctx: dict, payload: dict) -> None:
                     try:
                         path, info, thumb = await D.download_ytdlp(url, workdir, selector, opts,
                                                                    progress=_progress, cancel=_cancelled)
-                    except P.ProcessingCancelled:
-                        raise
+                    except (P.ProcessingCancelled, D.AgeRestricted):
+                        raise      # نه retryِ بدونِ pot، نه fallbackِ کوبالت
                     except Exception as ytdlp_exc:  # noqa: BLE001
                         # پلاگینِ pot-provider گاهی خودِ yt-dlp را می‌اندازد (تریس‌بکِ پایتون، نه خطای
                         # تمیز — مثلاً ناسازگاریِ نسخهٔ پلاگین با سرورِ pot). یک‌بار بدونِ pot دوباره
@@ -907,6 +917,16 @@ async def run_download(ctx: dict, payload: dict) -> None:
             except P.ProcessingCancelled:
                 await _stop_ticker()
                 await _edit(bot, chat_id, status_mid, t(lang, "cancelled"))
+                return
+            except D.AgeRestricted:
+                # لایهٔ ۲ روی همان فراخوانیِ دانلود شلیک کرد — قبل از کشیدنِ رسانه.
+                # چرخشِ اکانت بی‌معنی است (اکانتِ بعدی همین را می‌گیرد) و اکانتِ
+                # فعلی هم مقصر نیست، پس هیچ ضربه‌ای ثبت نمی‌شود.
+                await _stop_ticker()
+                pol = await safety.load_policy()
+                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
+                                 payload.get("tg_user_id") or 0, "age_limit:18", url)
+                await _metric(redis, platform, ok=False)
                 return
             except Exception as exc:  # noqa: BLE001
                 dl_err = exc
@@ -985,6 +1005,12 @@ async def run_download(ctx: dict, payload: dict) -> None:
             elif any(h in low for h in _LOGIN_HINTS):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_need_cookies", platform=plabel))
             else:
+                # کانالِ باقی‌ماندهٔ SSRF، **آگاهانه پذیرفته**: این‌جا ۲۸۰ کاراکترِ اولِ
+                # stderrِ موتور به کاربر نشان داده می‌شود، پس یک لینکِ داخلی که به
+                # yt-dlp رسیده می‌تواند تکه‌ای از پاسخِ سرویسِ داخلی را در متنِ خطا
+                # برگرداند. سکوت به‌جایش یعنی هیچ دانلودِ شکست‌خورده‌ای قابلِ عیب‌یابی
+                # نباشد؛ درِ ورودی (`is_safe_url_resolved`) و رزولورِ موتورِ `direct`
+                # مسیرِ اصلی را می‌بندند و این تکهٔ ۲۸۰ کاراکتری هزینهٔ پذیرفته‌شده است.
                 await _edit(bot, chat_id, status_mid,
                             t(lang, "dl_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
@@ -1091,9 +1117,15 @@ async def run_download(ctx: dict, payload: dict) -> None:
         await _metric(redis, platform, ok=True)
         await ck.note_exit(redis, settings.node_id, platform, ok=True)
     finally:
-        if redis is not None:
+        if beat is not None:
+            beat.cancel()
             try:
-                await redis.decr("dl:active")
+                await beat
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        if redis is not None:
+            await dl_active.leave(redis, active_member)
+            try:
                 await redis.delete(f"cancel:dl:{ref}")
             except Exception:  # noqa: BLE001
                 pass

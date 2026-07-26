@@ -32,7 +32,7 @@ from .config import settings
 from .db import Sessionmaker
 from .filetypes import human_size
 from .i18n import t
-from .keyboards import cancel_job_kb
+from .keyboards import AUDIO_SPEEDS, cancel_job_kb
 from .models import File, Job
 from .security import ScanUnavailable, scan_file
 
@@ -422,7 +422,13 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         return {"path": out, "filename": f"{stem}.mp3", "label": t(lang, "cl_normalize"), "kind": "audio"}
 
     if op == "speed":
-        rate = float(args.get("rate", 1.0)) or 1.0
+        # `rate` از callbackِ کاربر می‌آید (رشتهٔ آزاد)، پس فقط ضریب‌هایی که خودِ
+        # ربات پیشنهاد داده پذیرفته می‌شوند. بدونِ این، `rate="-1"` یا `"1e999"`
+        # حلقهٔ همگامِ `_atempo_chain` را واگرا می‌کرد و کلِ ورکر را می‌خواباند.
+        raw = str(args.get("rate", "1"))
+        if raw not in AUDIO_SPEEDS:
+            raise ValueError(f"unsupported speed rate: {raw[:20]}")
+        rate = float(raw)
         out = os.path.join(workdir, f"{stem}-x{args.get('rate', '1')}.mp3")
         await P.speed_audio(inpath, out, rate, progress=progress, duration=dur, cancel=cancel)
         return {"path": out, "filename": os.path.basename(out),

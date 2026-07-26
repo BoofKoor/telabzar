@@ -881,6 +881,9 @@ async def op_speed_pick(cq: CallbackQuery, callback_data: Spd, session: AsyncSes
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
+    if file.kind != "audio":     # منو فقط برای صوت باز می‌شود؛ callbackِ ساخته‌شده نه
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
     if await _too_large(file.size):
         await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
         return

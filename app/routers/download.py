@@ -21,7 +21,7 @@ from .. import dl_cache, nodes, safety, settings_store
 from ..callbacks import Dl
 from ..config import settings
 from ..downloader import (
-    AUDIO_PLATFORMS, describe_link, engine_for, find_url, is_safe_url, platform_of,
+    AUDIO_PLATFORMS, describe_link, engine_for, find_url, is_safe_url_resolved, platform_of,
 )
 from ..i18n import t
 from ..models import User
@@ -136,7 +136,11 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     url = find_url(message.text)
     if not url:
         return
-    if not is_safe_url(url):
+    # SSRF: علاوه بر چکِ نحوی، نام واقعاً resolve می‌شود — وگرنه یک دامنه با
+    # A-recordِ ۱۶۹٫۲۵۴٫۱۶۹٫۲۵۴ از فیلتر رد می‌شد و موتورِ `direct` بدنهٔ سرویسِ
+    # داخلی را به‌عنوان فایل تحویلِ کاربر می‌داد.
+    proxy = await settings_store.get_str("proxy_url", settings.proxy_url)
+    if not await is_safe_url_resolved(url, proxy=proxy):
         await message.reply(t(lang, "dl_bad_link"))
         return
     # فیلترِ بزرگسال، لایهٔ ۱ — **قبل از هر بایت**. ربات فایل را دوباره آپلود
