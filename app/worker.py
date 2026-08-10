@@ -109,6 +109,29 @@ async def shutdown(ctx: dict) -> None:
         await bot.session.close()
 
 
+def _flatten_settings(cls: type) -> type:
+    """صفاتِ ارث‌بری‌شده را در `__dict__`ِ **خودِ** کلاس کپی می‌کند.
+
+    arq برای ساختِ ورکر `get_kwargs` را صدا می‌زند و آن‌جا فقط
+    `settings_cls.__dict__` را می‌خواند (`arq/worker.py:889` در نسخهٔ ۰.۲۸) —
+    و `__dict__` صفاتِ **ارث‌بری‌شده را ندارد**. پس یک
+    `class X(WorkerSettings)`ِ ساده هیچ‌کدام از صفاتِ پدر را به arq نمی‌رساند:
+    `functions` می‌افتد و ورکر با «at least one function or cron_job must be
+    registered» (`arq/worker.py:236`) در حلقهٔ کرش می‌افتد، و — بی‌صداتر و
+    بدتر — `redis_settings` هم می‌افتد، یعنی حتی اگر `functions` را دستی وصله
+    کنی ورکر به `localhost:6379` وصل می‌شود نه به Redisِ ما.
+
+    پس **هر** کلاسِ تنظیماتِ ARQ که از کلاسِ دیگری ارث می‌برد باید این دکوراتور
+    را داشته باشد. مقادیرِ خودِ کلاس برنده‌اند (کپی فقط برای نامی انجام می‌شود
+    که در `__dict__`ِ خودش نیست). `tests/test_worker_settings.py` این قاعده را
+    برای هر کلاسی که در این ماژول تعریف شود تضمین می‌کند.
+    """
+    for name in dir(cls):
+        if not name.startswith("_") and name not in cls.__dict__:
+            setattr(cls, name, getattr(cls, name))
+    return cls
+
+
 class WorkerSettings:
     functions = [run_op, run_screen]
     on_startup = startup_master
@@ -119,6 +142,7 @@ class WorkerSettings:
     keep_result = 3600
 
 
+@_flatten_settings
 class ProcessingWorkerSettings(WorkerSettings):
     """ورکرِ پردازش روی صفِ اختصاصی `arq:queue:proc` (فاز N2 / نودِ پردازش).
 
@@ -147,6 +171,7 @@ class DownloadWorkerSettings:
     keep_result = 600
 
 
+@_flatten_settings
 class MasterDownloadWorkerSettings(DownloadWorkerSettings):
     """ورکرِ دانلودِ **مستر** روی صفِ جدا `arq:queue:dl:master`.
 

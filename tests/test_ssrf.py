@@ -9,8 +9,11 @@
 """
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import socket
+import textwrap
 
 import aiohttp
 import pytest
@@ -269,21 +272,97 @@ async def test_aiohttp_does_not_fall_back_to_direct_for_socks():
                         timeout=aiohttp.ClientTimeout(total=4))
 
 
-def test_both_direct_engine_sessions_use_the_guarded_connector():
-    """هر دو سشنِ موتورِ `direct` باید از `_direct_connector` بیایند.
+def _callee(node: ast.AST) -> str:
+    """نامِ چیزی که صدا زده می‌شود: `f(...)` → `f`، `a.b(...)` → `a.b`."""
+    f = node.func if isinstance(node, ast.Call) else node
+    if isinstance(f, ast.Name):
+        return f.id
+    if isinstance(f, ast.Attribute):
+        return f"{_callee(f.value)}.{f.attr}" if isinstance(
+            f.value, (ast.Name, ast.Attribute)) else f.attr
+    return ""
+
+
+def _direct_engine_sessions() -> list[tuple[str, bool]]:
+    """(نامِ تابع, آیا `connector=_direct_connector(...)` دارد) برای موتورِ `direct`.
+
+    کشف **خودکار** است تا فهرست کهنه نشود: تابعی جزوِ موتورِ direct است اگر
+    نامش `direct` داشته باشد **یا** `_follow` را صدا بزند (تنها راهِ درخواستِ
+    این موتور). با AST خوانده می‌شود نه تطبیقِ رشته، چون آرگومانِ `connector`
+    در سورس روی خطِ بعدیِ `ClientSession(` است.
+    """
+    tree = ast.parse(inspect.getsource(D))
+    found: list[tuple[str, bool]] = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
+        if "direct" not in fn.name and not any(
+                _callee(c) == "_follow" for c in calls):
+            continue
+        for call in calls:
+            if _callee(call) != "aiohttp.ClientSession":
+                continue
+            found.append((fn.name, any(
+                kw.arg == "connector" and isinstance(kw.value, ast.Call)
+                and _callee(kw.value) == "_direct_connector"
+                for kw in call.keywords)))
+    return found
+
+
+def test_every_direct_engine_session_uses_the_guarded_connector():
+    """هر سشنِ موتورِ `direct` باید از `_direct_connector` بیاید.
 
     اگر `probe_direct` (که **قبل** از `download_direct` اجرا می‌شود) سشنِ ساده
-    بگیرد، یک چکِ محافظت‌نشده جلوی چکِ محافظت‌شده می‌نشیند.
+    بگیرد، یک چکِ محافظت‌نشده جلوی چکِ محافظت‌شده می‌نشیند. فهرستِ توابع عمداً
+    هاردکد نیست: سشنِ سومی که فردا اضافه شود هم باید همین‌جا گیر بیفتد.
     """
-    import inspect
-    src = inspect.getsource(D)
-    sessions = [ln for ln in src.splitlines() if "aiohttp.ClientSession(" in ln
-                or (ln.strip().startswith("connector=") and "_direct" in ln)]
-    for fn in (D.probe_direct, D.download_direct):
-        body = inspect.getsource(fn)
-        assert "connector=_direct_connector(opts)" in body, \
-            f"{fn.__name__} باید کانکتورِ محافظت‌شده بگیرد"
-    assert sessions, "تست باید واقعاً سشن‌ها را پیدا کرده باشد"
+    sessions = _direct_engine_sessions()
+    assert {n for n, _ in sessions} >= {"probe_direct", "download_direct"}, \
+        f"کشف، سشن‌های شناخته‌شده را پیدا نکرد: {sessions}"
+    bad = [n for n, guarded in sessions if not guarded]
+    assert not bad, f"این سشن‌ها کانکتورِ محافظت‌شده ندارند: {bad}"
+
+
+def test_the_session_discovery_is_not_vacuous():
+    """کنترل: باگ را روی یک سورسِ ساختگی بساز و مطمئن شو کشف می‌گیردش.
+
+    بدونِ این، اگر روزی `_callee`/کشف بشکند، تستِ بالا با فهرستِ خالی سبز
+    می‌ماند و دیگر چیزی را اثبات نمی‌کند.
+    """
+    broken = textwrap.dedent("""
+        async def probe_direct(url, opts=None):
+            async with aiohttp.ClientSession(headers=h, timeout=t) as sess:
+                resp = await _follow(sess, "HEAD", url, None)
+
+        async def stream_it(url, opts=None):
+            async with aiohttp.ClientSession(connector=_direct_connector(opts)) as s:
+                resp = await _follow(s, "GET", url, None)
+
+        async def unrelated(url):
+            async with aiohttp.ClientSession() as s:
+                return await s.get(url)
+    """)
+    tree = ast.parse(broken)
+    found = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
+        if "direct" not in fn.name and not any(_callee(c) == "_follow" for c in calls):
+            continue
+        for call in calls:
+            if _callee(call) != "aiohttp.ClientSession":
+                continue
+            found.append((fn.name, any(
+                kw.arg == "connector" and isinstance(kw.value, ast.Call)
+                and _callee(kw.value) == "_direct_connector"
+                for kw in call.keywords)))
+
+    assert ("probe_direct", False) in found, "سشنِ محافظت‌نشده باید گیر بیفتد"
+    # `stream_it` نامِ direct ندارد؛ فقط چون `_follow` را صدا می‌زند کشف می‌شود.
+    assert ("stream_it", True) in found, "کشف نباید به نامِ تابع محدود بماند"
+    assert "unrelated" not in [n for n, _ in found], "سشنِ بی‌ربط نباید شمرده شود"
 
 
 @pytest.fixture
