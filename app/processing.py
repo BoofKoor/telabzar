@@ -143,6 +143,22 @@ async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: f
                 proc.kill()
                 await proc.wait()
                 raise ProcessingTimeout("processing timed out") from None
+    except BaseException:
+        # هر خروجِ غیرعادی — به‌ویژه `CancelledError` از `job_timeout`ِ ARQ یا
+        # خاموشیِ ورکر — وگرنه ffmpeg **یتیم** می‌ماند و تا آخر CPU می‌سوزاند.
+        # `finally` تنها ناظر را می‌بست، نه خودِ فرایند را؛ بازتولید شد: بعد از
+        # `task.cancel()` یک پروسهٔ ffmpeg زنده باقی می‌ماند.
+        #
+        # عمداً `await proc.wait()` نمی‌زنیم: در مسیرِ لغو، خودِ await می‌تواند
+        # دوباره `CancelledError` بگیرد و رفع را بی‌اثر کند. SIGKILL فرایند را
+        # می‌کُشد و child watcherِ asyncio درویش می‌کند — که همان چیزی است که
+        # اهمیت دارد (پروسهٔ زنده، نه zombieِ لحظه‌ای).
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except (ProcessLookupError, OSError):   # از قبل مرده
+                pass
+        raise
     finally:
         if watcher is not None:
             watcher.cancel()
