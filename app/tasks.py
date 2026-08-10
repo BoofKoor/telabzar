@@ -299,7 +299,7 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
             raise RuntimeError("no metadata to write")
         ext = os.path.splitext(file.name or "audio.mp3")[1] or ".mp3"
         out = os.path.join(workdir, f"{stem}{ext}")
-        await P.write_audio_metadata(inpath, out, tags, cover_path=cover_path)
+        await P.write_audio_metadata(inpath, out, tags, cover_path=cover_path, cancel=cancel)
         return {"path": out, "filename": f"{stem}{ext}", "label": t(lang, "cl_meta_edit"),
                 "kind": "audio", "new_meta": tags}
 
@@ -378,7 +378,7 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
 
     if op == "mute":
         out = os.path.join(workdir, f"{stem}-mute.mp4")
-        await P.mute_video(inpath, out)
+        await P.mute_video(inpath, out, cancel=cancel)
         return {"path": out, "filename": f"{stem}.mp4", "label": t(lang, "cl_mute")}
 
     if op == "trim":

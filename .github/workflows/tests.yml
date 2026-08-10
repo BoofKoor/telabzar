@@ -36,10 +36,24 @@ jobs:
       - name: install dev requirements
         run: pip install -r requirements-dev.txt
 
-      # ffmpeg عمداً نصب **نمی‌شود**. تستِ نیازمندِ ffmpeg با `@pytest.mark.ffmpeg`
-      # علامت می‌خورد و `conftest.pytest_runtest_setup` در نبودش skip می‌کند — ولی
-      # امروز هیچ تستی این مارکر را ندارد، پس این قلاب فعلاً از چیزی محافظت نمی‌کند.
-      # تا وقتی فاز ۲ب تست‌های مسیرِ رسانه را کامیت نکند، نصبِ ffmpeg این‌جا فقط
-      # زمانِ build می‌خورد و هیچ ادعای پوششی را صادق نمی‌کند.
+      # ffmpeg از فاز ۲ب لازم است: تست‌های `@pytest.mark.ffmpeg` مسیرِ رسانه را
+      # با باینریِ واقعی می‌سنجند (معناشناسیِ `-ss/-to`، لغو، تایم‌اوت) و با ماک
+      # فقط ادعای تست‌اند. ایمیجِ `ubuntu-latest` خودش ffmpeg **ندارد** — در
+      # فهرستِ نرم‌افزارهای رسمیِ runner-images نیست — پس صریح نصب می‌شود.
+      - name: install ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      # به READMEی رانر تکیه نمی‌کنیم: خودِ اجرا باید حضورِ ffmpeg را ثابت کند،
+      # وگرنه تست‌های نشان‌دار بی‌صدا skip می‌شوند و سبزیِ CI بی‌معنا می‌شود.
+      - name: prove ffmpeg is present
+        run: ffmpeg -version && ffprobe -version
+
+      # نگهبانِ «مارکر دوباره بی‌اثر نشود» عمداً **گامِ CI نیست**: با صفر تستِ
+      # نشان‌دار، `pytest -m ffmpeg` همه را deselect می‌کند و با کدِ **صفر** خارج
+      # می‌شود (کدِ ۵ فقط برای «هیچ تستی جمع نشد» است، نه deselect). پس آن گام
+      # هیچ‌چیز را تضمین نمی‌کرد؛ نگهبان حالا خودش یک تست است
+      # (`test_phase2b.test_the_ffmpeg_marker_is_not_dead_weight`) که محلی هم می‌دود.
       - name: pytest
         run: pytest -q
