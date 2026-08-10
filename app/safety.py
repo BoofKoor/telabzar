@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 from urllib.parse import unquote, urlparse
 
 log = logging.getLogger("telabzar.safety")
@@ -175,20 +176,35 @@ _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".heic", ".heif
 
 _detector = None
 _detector_failed = False
+_detector_lock = threading.Lock()
 
 
 def _get_detector():
-    """مدل یک‌بار برای کلِ پروسه بار می‌شود (بارگذاری گران است، اجرا ارزان)."""
+    """مدل یک‌بار برای کلِ پروسه بار می‌شود (بارگذاری گران است، اجرا ارزان).
+
+    قفل لازم است چون این تابع از **thread** صدا زده می‌شود: `_detect_sync` داخلِ
+    `asyncio.to_thread` اجرا می‌شود و ورکر `max_jobs=4` دارد، پس روی ورکرِ
+    تازه‌ری‌استارت‌شده چهار جابِ هم‌زمان می‌توانستند هم‌زمان چهار `NudeDetector`
+    بسازند — سه‌تایشان بلافاصله زباله می‌شدند، ولی هزینهٔ بارگذاری و جهشِ حافظه
+    (هر نمونه ~۸۱ مگابایت، اندازه‌گیریِ ۲۰۲۶-۰۸-۱۰) واقعی بود. دقیقاً همان
+    لحظه‌ای رخ می‌دهد که بیشترین احتمال را دارد: بعد از هر `telabzar update`.
+
+    الگوی double-checked: چکِ اولِ بدونِ قفل مسیرِ داغ را ارزان نگه می‌دارد
+    (پس از بارگذاری هیچ جابی قفل نمی‌گیرد) و چکِ دومِ داخلِ قفل مسابقه را می‌بندد.
+    """
     global _detector, _detector_failed
     if _detector is not None or _detector_failed:
         return _detector
-    try:
-        from nudenet import NudeDetector
-        _detector = NudeDetector()
-        log.info("nudenet detector loaded")
-    except Exception as exc:  # noqa: BLE001
-        _detector_failed = True     # نبودِ مدل نباید هر فایل را کند/خطا کند
-        log.warning("nudenet unavailable (%s) — pixel layer disabled", str(exc)[:160])
+    with _detector_lock:
+        if _detector is not None or _detector_failed:   # کسی جلوتر بارش کرد
+            return _detector
+        try:
+            from nudenet import NudeDetector
+            _detector = NudeDetector()
+            log.info("nudenet detector loaded")
+        except Exception as exc:  # noqa: BLE001
+            _detector_failed = True     # نبودِ مدل نباید هر فایل را کند/خطا کند
+            log.warning("nudenet unavailable (%s) — pixel layer disabled", str(exc)[:160])
     return _detector
 
 
