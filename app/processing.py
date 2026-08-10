@@ -946,12 +946,18 @@ async def archive_extract(path: str, outdir: str, max_files: int, max_bytes: int
     os.makedirs(exdir, exist_ok=True)
     await _run([SEVENZ, "x", path, f"-o{exdir}", "-y", "-bd", "-bb0"], timeout=300)
 
+    # مرزِ مسیر، نه پیشوندِ رشته‌ای: `startswith(real_ex)` برای `<outdir>/exfil`
+    # هم صادق است چون پیشوندِ `<outdir>/ex` را دارد. با افزودنِ جداکننده مرز واقعی
+    # سنجیده می‌شود. (استخراج قبلاً انجام شده، پس این فیلترِ فهرستِ خروجی است نه
+    # جلوگیری از نوشتن — امروز `7z x` خودش `../`، symlink و مسیرِ مطلق را خنثی
+    # می‌کند و `tests/test_archive_extract.py` همان رفتار را پین کرده است.)
     real_ex = os.path.realpath(exdir)
+    inside = real_ex + os.sep
     files: list[str] = []
     for root, _dirs, names in os.walk(exdir):
         for n in names:
             p = os.path.join(root, n)
-            if not os.path.realpath(p).startswith(real_ex):  # zip-slip guard
+            if not os.path.realpath(p).startswith(inside):  # zip-slip guard
                 continue
             files.append(p)
             if len(files) > max_files:

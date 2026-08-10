@@ -16,12 +16,9 @@ from arq import ArqRedis
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import os
-
 from .. import cookies as ck
 from .. import settings_store
 from ..callbacks import Ck
-from ..config import settings
 from ..settings_store import ENUM_VALUES, RUNTIME_KEYS
 
 router = Router(name="admin")
@@ -195,10 +192,7 @@ async def cookie_action(cq: CallbackQuery, callback_data: Ck, is_admin: bool,
         await cq.answer("کنار گذاشته شد.")
     else:                                    # del
         await ck.del_meta(arq_pool, name)
-        try:
-            os.remove(os.path.join(settings.cookies_dir, name))
-        except OSError:
-            pass
+        ck.remove_cookie_file(name)      # همان گاردهای مسیرِ پنل، از یک تابعِ مشترک
         await ck._unmirror_cookie(arq_pool, name)
         await cq.answer("حذف شد.")
     try:

@@ -1545,7 +1545,6 @@ async def _users_list(page: int, q: str) -> dict:
 
 
 # ── کوکی‌ها ─────────────────────────────────────────────────────
-_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _cookies_dir_ok() -> bool:
@@ -1562,14 +1561,12 @@ def _guess_platform(name: str) -> str:
 
 
 def _safe_cookie_name(name: str) -> str | None:
-    """نامِ فایل را به یک basenameِ امنِ .txt تبدیل می‌کند (بدونِ traversal)."""
-    base = os.path.basename((name or "").strip())
-    base = _SAFE_NAME.sub("_", base).strip("._")
-    if not base:
-        return None
-    if not base.lower().endswith(".txt"):
-        base += ".txt"
-    return base
+    """نامِ فایل را به یک basenameِ امنِ .txt تبدیل می‌کند (بدونِ traversal).
+
+    پیاده‌سازی در `cookies.safe_name` است تا پنل و هندلرِ تلگرامیِ ادمین **یک**
+    قاعده داشته باشند؛ این نام فقط برای فراخوان‌های موجودِ همین فایل مانده.
+    """
+    return ck_pool.safe_name(name)
 
 
 # ── هندلرها ─────────────────────────────────────────────────────
@@ -2074,7 +2071,12 @@ async def node_peers(request: web.Request) -> web.Response:
     """پیکربندیِ [Peer]های WG از رویِ جدولِ Node (منبعِ حقیقت). هاست‌سایدِ `wg-sync`
     این را می‌گیرد و به [Interface]ِ ثابتِ مستر می‌چسباند + `wg syncconf`. با NODE_SECRET
     (یا BOT_TOKEN) گِیت می‌شود — روی WG/لوکال صدا زده می‌شود، نه عمومی."""
-    key = request.query.get("key") or request.headers.get("X-Node-Key") or ""
+    # فقط هدر. قبلاً `?key=` هم پذیرفته می‌شد، ولی رازی که در query string برود
+    # در لاگِ دسترسی و هر پروکسیِ میانی ثبت می‌شود؛ هدر این ردپا را نمی‌گذارد.
+    # تنها کلاینتِ این endpoint هاست‌سایدِ `node/wg-sync.sh` است که با همین کامیت
+    # به هدر سوییچ کرد — سمتِ سرور را تنها ببندی، دفعهٔ بعد که نودی اضافه شود
+    # peerها بی‌صدا نمی‌آیند و نود آفلاین می‌ماند.
+    key = request.headers.get("X-Node-Key") or ""
     secret = settings.node_secret or settings.bot_token or ""
     if not secret or not hmac.compare_digest(key, secret):
         return web.Response(text="# forbidden\n", status=403)
@@ -2332,15 +2334,10 @@ async def cookies_delete(request: web.Request) -> web.Response:
         raise web.HTTPFound("/login")
     form = await request.post()
     name = _safe_cookie_name(form.get("name") or "")
-    if name and settings.cookies_dir:
-        path = os.path.join(settings.cookies_dir, name)
-        if os.path.isfile(path) and os.path.dirname(os.path.abspath(path)) == os.path.abspath(settings.cookies_dir):
-            try:
-                os.remove(path)
-            except Exception:  # noqa: BLE001
-                pass
-            await _unmirror_cookie(request.app["redis"], name)  # از آینهٔ نودها هم بردار
-            await ck_pool.del_meta(request.app["redis"], name)  # متادیتا + کول‌داون
+    if name:
+        ck_pool.remove_cookie_file(name)                   # همان تابعِ مشترکِ مسیرِ ربات
+        await _unmirror_cookie(request.app["redis"], name)  # از آینهٔ نودها هم بردار
+        await ck_pool.del_meta(request.app["redis"], name)  # متادیتا + کول‌داون
     raise web.HTTPFound("/cookies?ok=del")
 
 

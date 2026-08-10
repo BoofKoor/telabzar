@@ -16,6 +16,7 @@ import glob
 import json
 import logging
 import os
+import re
 import time
 from typing import NamedTuple
 
@@ -735,6 +736,52 @@ def _check_required(text: str, platform: str) -> str:
         return ""
     return (f"کوکیِ «{need[0]}» در متن پیدا نشد — مطمئن شو از اکانتِ لاگین‌شده "
             f"و برای دامنهٔ درست کپی کرده‌ای.")
+
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_name(name: str) -> str | None:
+    """نامِ فایل را به یک basenameِ امنِ `.txt` تبدیل می‌کند (بدونِ traversal)."""
+    base = os.path.basename((name or "").strip())
+    base = _SAFE_NAME.sub("_", base).strip("._")
+    if not base:
+        return None
+    if not base.lower().endswith(".txt"):
+        base += ".txt"
+    return base
+
+
+def cookie_path(name: str) -> str | None:
+    """مسیرِ فایلِ کوکی داخلِ `cookies_dir` — یا `None` اگر از پوشه بیرون بزند.
+
+    این‌جا (نه در پنل) زندگی می‌کند چون **هر دو** مسیرِ حذف به آن نیاز دارند: پنل
+    و هندلرِ تلگرامیِ ادمین. پنل هر دو گارد را داشت و دوقلوی رباتی‌اش هیچ‌کدام را،
+    و چون دو نسخهٔ دست‌نویس بودند خیلی راحت از هم واگرا شدند. `routers/admin.py`
+    هم نمی‌تواند از `admin_web` import کند — ایمیجِ ربات jinja2/cryptography ندارد.
+
+    دو لایه عمدی است: `safe_name()` نام را بی‌ضرر می‌کند، و مقایسهٔ مسیرِ مطلق
+    تضمین می‌کند نتیجه واقعاً داخلِ همان پوشه است حتی اگر روزی نام‌سازی عوض شود.
+    """
+    if not settings.cookies_dir:
+        return None
+    base = safe_name(name)
+    if not base:
+        return None
+    root = os.path.abspath(settings.cookies_dir)
+    path = os.path.abspath(os.path.join(root, base))
+    return path if os.path.dirname(path) == root else None
+
+
+def remove_cookie_file(name: str) -> None:
+    """فایلِ کوکی را امن حذف کن (بی‌صدا اگر نبود یا نام نامعتبر بود)."""
+    path = cookie_path(name)
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
 
 async def _save_cookie(redis, name: str, text: str) -> str:
     """نوشتن روی دیسکِ مستر + آینهٔ Redis. پیامِ خطا یا رشتهٔ خالی."""
