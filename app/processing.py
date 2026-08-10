@@ -10,10 +10,14 @@ import zipfile
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 from .config import settings
-from .exceptions import ProcessingCancelled  # re-export (P.ProcessingCancelled)
+from .exceptions import ProcessingCancelled, ProcessingTimeout  # re-export (P.ProcessingCancelled)
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
+
+# فاصلهٔ پرسشِ «لغو شد؟» در `_run`. کوتاه‌تر یعنی واکنشِ سریع‌تر به دکمهٔ لغو،
+# بلندتر یعنی فشارِ کمترِ Redis؛ ۲ ثانیه برای یک دکمه به‌قدرِ کافی زنده است.
+_CANCEL_POLL = 2.0
 
 
 # سرعت/کیفیتِ فشرده‌سازی (از پنل) → پریستِ ffmpeg. کندتر = فایلِ کوچک‌تر ولی زمانِ بیشتر.
@@ -71,8 +75,14 @@ _WM_POS = {
 async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: float | None = None,
                cancel=None) -> None:
     """اجرای ffmpeg. اگر progress و duration بدهی، از ‎-progress درصد را می‌خواند
-    و progress(percent) را صدا می‌زند. اگر cancel بدهی، هر چند ثانیه چکش می‌کند و
-    در صورتِ True فرایند را می‌کُشد (ProcessingCancelled)."""
+    و progress(percent) را صدا می‌زند.
+
+    **cancel مستقل از progress کار می‌کند.** قبلاً چکِ لغو داخلِ خوانندهٔ
+    `-progress` بود، پس هر فراخوانی که progress/duration نمی‌داد — مثلِ حلقهٔ
+    نرمال‌سازیِ `concat_videos` که طولانی‌ترین بخشِ کار است — دکمهٔ لغو را
+    بی‌اثر می‌کرد. حالا یک ناظرِ جدا هر `_CANCEL_POLL` ثانیه می‌پرسد و در هر دو
+    شاخه اجرا می‌شود؛ در `finally` هم کنسل می‌شود تا از خودِ جاب عمر نکند.
+    """
     use_prog = progress is not None and bool(duration)
     if use_prog:
         cmd = [cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]]
@@ -81,53 +91,64 @@ async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: f
         stdout=asyncio.subprocess.PIPE if use_prog else asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
+    cancelled = False
 
-    if use_prog:
-        err_chunks: list[bytes] = []
-        cancelled = False
+    async def _watch_cancel() -> None:
+        """هر چند ثانیه لغو را می‌پرسد و در صورتِ True فرایند را می‌کُشد."""
+        nonlocal cancelled
+        while True:
+            await asyncio.sleep(_CANCEL_POLL)
+            try:
+                if await cancel():
+                    cancelled = True
+                    proc.kill()
+                    return
+            except Exception:  # noqa: BLE001 — خطای چک نباید کار را بشکند
+                pass
 
-        async def _drain_stderr() -> None:
-            async for raw in proc.stderr:  # type: ignore[union-attr]
-                err_chunks.append(raw)
+    watcher = asyncio.create_task(_watch_cancel()) if cancel is not None else None
+    try:
+        if use_prog:
+            err_chunks: list[bytes] = []
 
-        async def _read_progress() -> None:
-            nonlocal cancelled
-            async for raw in proc.stdout:  # type: ignore[union-attr]
-                line = raw.decode("utf-8", "ignore").strip()
-                if line.startswith("out_time_us="):
-                    val = line[12:]
-                    if val.isdigit():
-                        pct = min(99.0, int(val) / 1e6 / duration * 100)
-                        try:
-                            await progress(pct)
-                        except Exception:  # noqa: BLE001
-                            pass
-                if cancel is not None and line.startswith("progress="):
-                    try:
-                        if await cancel():
-                            cancelled = True
-                            proc.kill()
-                            return
-                    except Exception:  # noqa: BLE001
-                        pass
+            async def _drain_stderr() -> None:
+                async for raw in proc.stderr:  # type: ignore[union-attr]
+                    err_chunks.append(raw)
 
-        try:
-            await asyncio.wait_for(asyncio.gather(_read_progress(), _drain_stderr()), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
+            async def _read_progress() -> None:
+                async for raw in proc.stdout:  # type: ignore[union-attr]
+                    line = raw.decode("utf-8", "ignore").strip()
+                    if line.startswith("out_time_us="):
+                        val = line[12:]
+                        if val.isdigit():
+                            pct = min(99.0, int(val) / 1e6 / duration * 100)
+                            try:
+                                await progress(pct)
+                            except Exception:  # noqa: BLE001
+                                pass
+
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(_read_progress(), _drain_stderr()), timeout=timeout)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise ProcessingTimeout("processing timed out") from None
             await proc.wait()
-            raise RuntimeError("processing timed out") from None
-        await proc.wait()
-        if cancelled:
-            raise ProcessingCancelled()
-        err = b"".join(err_chunks)
-    else:
-        try:
-            _, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise RuntimeError("processing timed out") from None
+            err = b"".join(err_chunks)
+        else:
+            try:
+                _, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise ProcessingTimeout("processing timed out") from None
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+
+    if cancelled:
+        raise ProcessingCancelled()
 
     if proc.returncode != 0:
         lines = [ln for ln in (err or b"").decode("utf-8", "ignore").splitlines() if ln.strip()]
@@ -458,6 +479,8 @@ async def compress_video(inp: str, out: str, height: int | None = None, kbps: in
         await _run(build(enc), progress=progress, duration=duration, cancel=cancel)
     except ProcessingCancelled:
         raise
+    except ProcessingTimeout:
+        raise      # وقت کم آمد، نه اینکه انکودر خراب باشد → اجرای دومِ کامل ممنوع
     except RuntimeError:
         # انکودِ سخت‌افزاری شکست خورد (GPU نیست/اشتباه پیکربندی شده) → با x264 دوباره
         if enc != "x264":
@@ -526,6 +549,8 @@ async def compress_video_tiny(inp: str, out: str, duration: float | None = None,
                    progress=progress, duration=duration, cancel=cancel)
     except ProcessingCancelled:
         raise
+    except ProcessingTimeout:
+        raise      # همان دلیلِ compress_video: تایم‌اوت fallback نمی‌گیرد
     except RuntimeError:
         if enc == "nvenc":  # GPU نبود/اشتباه → با x264 (نرم‌افزاری) دوباره
             await _run(build_x264(), progress=progress, duration=duration, cancel=cancel)
@@ -680,9 +705,14 @@ async def watermark_video(inp: str, out: str, wm: str, position: str, scale_w: i
         raise RuntimeError("watermark produced no output")
 
 
-async def mute_video(inp: str, out: str) -> None:
-    """صدا را حذف می‌کند (بدونِ رمزگذاریِ دوباره)."""
-    await _run([FFMPEG, "-y", "-i", inp, "-c", "copy", "-an", "-movflags", "+faststart", out])
+async def mute_video(inp: str, out: str, cancel=None) -> None:
+    """صدا را حذف می‌کند (بدونِ رمزگذاریِ دوباره).
+
+    `-c copy` است پس معمولاً سریع، ولی روی فایلِ نزدیک به سقفِ ۲ گیگ همچنان
+    ثانیه‌ها طول می‌کشد — و بدونِ پاس‌دادنِ `cancel` دکمهٔ لغو بی‌اثر بود.
+    """
+    await _run([FFMPEG, "-y", "-i", inp, "-c", "copy", "-an", "-movflags", "+faststart", out],
+               cancel=cancel)
     if not os.path.exists(out):
         raise RuntimeError("mute produced no output")
 
@@ -741,9 +771,22 @@ async def concat_videos(paths: list[str], out: str, width: int | None = None, he
 
 async def trim_video(inp: str, out: str, start: float, end: float,
                      progress=None, cancel=None) -> None:
-    """برشِ دقیق [start, end] با رمزگذاریِ دوباره."""
+    """برشِ دقیق [start, end] با رمزگذاریِ دوباره.
+
+    `-ss`/`-to` **قبل از** `-i` می‌آیند (سیکِ ورودی)، مثلِ `trim_audio`. با سیکِ
+    خروجی (بعد از `-i`) ffmpeg همهٔ فریم‌های پیش از `start` را دیکود و دور
+    می‌ریزد، پس هزینه با فاصلهٔ برش از ابتدای فایل بالا می‌رود: روی یک منبعِ
+    ۱۸۰ ثانیه‌ای، برشِ [۱۷۰،۱۷۴] ‏۱٫۴۷ ثانیه می‌گرفت و با این فرم ۰٫۳۰ ثانیه.
+    دقت از دست نمی‌رود — ffmpeg مدرن از کی‌فریمِ پیش از `start` دیکود می‌کند و
+    فریم‌های اضافه را دور می‌ریزد؛ فریمِ اولِ خروجی در هر دو فرم بیت‌به‌بیت یکی است.
+
+    **هر دو باید قبل از `-i` باشند، نه فقط `-ss`.** اگر `-to` بعد از `-i` بماند
+    گزینهٔ *خروجی* می‌شود و چون سیکِ ورودی تایم‌استمپ‌ها را صفر می‌کند، `-to end`
+    یعنی «تا ثانیهٔ end از خروجی» نه «تا ثانیهٔ end از منبع» — برشِ [۳،۷] به‌جای
+    ۴ ثانیه، ۷ ثانیه می‌دهد.
+    """
     await _run([
-        FFMPEG, "-y", "-i", inp, "-ss", f"{start}", "-to", f"{end}",
+        FFMPEG, "-y", "-ss", f"{start}", "-to", f"{end}", "-i", inp,
         "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
         "-c:a", "aac", "-movflags", "+faststart", out,
     ], progress=progress, duration=max(0.1, end - start), cancel=cancel)
@@ -814,7 +857,7 @@ async def make_zip_many(members: list[tuple[str, str]], out: str) -> None:
 
 # ── نوشتنِ متادیتای صوت + کاور (ffmpeg؛ بدونِ رمزگذاریِ دوباره) ──
 async def write_audio_metadata(inp: str, out: str, tags: dict[str, str],
-                               cover_path: str | None = None) -> None:
+                               cover_path: str | None = None, cancel=None) -> None:
     args = [FFMPEG, "-y", "-i", inp]
     if cover_path:
         # صوت از ورودیِ ۰، کاورِ جدید از ورودیِ ۱ (کاورِ قبلی دراپ می‌شود)
@@ -828,7 +871,7 @@ async def write_audio_metadata(inp: str, out: str, tags: dict[str, str],
     for key, val in tags.items():
         args += ["-metadata", f"{key}={val}"]
     args.append(out)
-    await _run(args)
+    await _run(args, cancel=cancel)
     if not os.path.exists(out):
         raise RuntimeError("metadata write produced no output")
 
