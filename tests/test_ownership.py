@@ -115,6 +115,52 @@ def test_every_ops_call_site_passes_a_user():
     assert not bad, f"این خط‌ها بدونِ user صدا می‌زنند: {bad}"
 
 
+async def test_the_middleware_supplies_the_key_the_handlers_declare(session):
+    """پلی که تست‌های بالا نمی‌توانند بزنند: تزریقِ `user` به هندلرها.
+
+    گاردِ crud با DBِ واقعی سنجیده شده، ولی اگر aiogram پارامترِ `user` را پر
+    نکند همهٔ هندلرها `None` می‌فرستند و — با گاردِ fail-closed — **برای همه**
+    رد می‌شود. یعنی «گاردی که همه را رد کند» می‌تواند یک لایه بالاتر از crud
+    اتفاق بیفتد. aiogram بر اساسِ **نام** تزریق می‌کند، پس این تست همان نام را
+    از دو طرف قفل می‌کند: میدل‌ور واقعاً `data["user"]` را با یک `User` پر کند.
+    """
+    from aiogram.types import User as TgUser
+
+    from app.middlewares import DataMiddleware
+
+    seen: dict = {}
+
+    async def handler(_event, data):
+        seen.update(data)
+        return "ok"
+
+    mw = DataMiddleware(lambda: _NullCtx(session))
+    data = {"event_from_user": TgUser(id=4242, is_bot=False, first_name="A")}
+    assert await mw(handler, object(), data) == "ok"
+
+    assert "user" in seen, "میدل‌ور کلیدِ `user` را نمی‌دهد — هندلرها None می‌گیرند"
+    assert isinstance(seen["user"], User), f"نوعِ اشتباه: {type(seen['user'])}"
+    # و همان کاربر باید فایلِ خودش را بگیرد (نه فقط «چیزی تزریق شد»)
+    f = File(ref="MwTest01", owner_id=seen["user"].id, file_unique_id="u9",
+             file_id="f9", name="x.mp4", kind="video", size=1)
+    session.add(f)
+    await session.flush()
+    assert await crud.get_file_by_ref(session, "MwTest01", seen["user"]) is not None
+
+
+class _NullCtx:
+    """sessionmakerِ قلابی که نشستِ تست را برمی‌گرداند و نمی‌بنددش."""
+
+    def __init__(self, session):
+        self._s = session
+
+    async def __aenter__(self):
+        return self._s
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
 def test_the_guard_cannot_be_made_optional_by_accident():
     """`user` نباید مقدارِ پیش‌فرض بگیرد.
 
