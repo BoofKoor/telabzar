@@ -72,6 +72,38 @@ _WM_POS = {
 }
 
 
+async def stop_task(task) -> None:
+    """تسکِ کمکی (ticker و مانندش) را ببند، **بدونِ بلعیدنِ لغوِ خودِ جاب**.
+
+    `await task` بعد از `task.cancel()` می‌تواند به دو دلیلِ کاملاً متفاوت
+    `CancelledError` بدهد و کد نمی‌تواند از روی خودِ استثنا تشخیصشان دهد:
+    (۱) همان تسکی که خودمان لغو کردیم — باید بلعیده شود؛
+    (۲) **خودِ جاب** در همان لحظه لغو شده (`job_timeout`ِ ARQ یا خاموشیِ ورکر) —
+    باید بالا برود.
+
+    فرمِ قبلی هر دو را می‌بلعید. در حالتِ رایج بی‌ضرر بود، چون لغو معمولاً وسطِ
+    خودِ کار می‌افتد و `finally` فقط از کنارش رد می‌شود؛ ولی اگر لغو **دقیقاً حین
+    انتظار برای ticker** برسد گم می‌شد و جاب بعد از دستورِ توقف ادامه می‌داد. آن
+    پنجره واقعی است چون ticker هر چند ثانیه یک فراخوانیِ HTTPِ تلگرام می‌زند، و
+    سرِ خاموشیِ ورکر همهٔ جاب‌ها هم‌زمان داخلِ همان پنجره‌اند.
+
+    تشخیص با `Task.cancelling()` است (پایتون ۳.۱۱+): اگر تسکِ جاری خودش درخواستِ
+    لغوِ معلق دارد، لغو مالِ ما نیست. `gather(..., return_exceptions=True)` و
+    «cancel بدونِ await» هر دو امتحان و رد شدند — هر دو هم می‌بلعند.
+    """
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling() > 0:
+            raise                    # لغو مالِ خودِ جاب است، نه ticker
+    except Exception:  # noqa: BLE001 — تسکِ کمکیِ خراب نباید جاب را بشکند
+        pass
+
+
 async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: float | None = None,
                cancel=None) -> None:
     """اجرای ffmpeg. اگر progress و duration بدهی، از ‎-progress درصد را می‌خواند

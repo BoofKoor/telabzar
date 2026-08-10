@@ -587,11 +587,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 res = await _do_op(bot, job.op, job.args or {}, file, inpath, workdir, lang,
                                    progress=_on_progress, cancel=_should_cancel)
             finally:
-                ticker.cancel()
-                try:
-                    await ticker
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                    pass
+                await P.stop_task(ticker)   # لغوِ خودِ جاب را نمی‌بلعد
         except P.ProcessingCancelled:
             log.info("job %s cancelled by user", job_id)
             job.status = "cancelled"
