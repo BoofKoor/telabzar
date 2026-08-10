@@ -69,6 +69,7 @@ processing (`processing.py`, `downloader.py`) → delivery (`cards.py`, or `gate
 | `app/filetypes.py` | `detect()` message→`FileInfo`; kind = image/video/audio/document/pdf/archive/app |
 | `app/i18n.py` + `app/locales/{fa,en}.py` | `t(lang, key, **kw)` + message tables (keys must stay in parity) |
 | `app/cookies.py` | استخرِ اکانتِ کوکی + **ورودیِ پیست** (`_normalize_cookie_text`/`_check_required`/`_save_cookie` — از پنل به این‌جا منتقل شدند تا رباتْ هم بتواند کوکی بپذیرد)؛ `classify_error()`/`needs_human()`، وضعیتِ `frozen` + `unfreeze()`/`needs_attention()`: محتوا روی دیسکِ مستر + آینهٔ Redis (نود)، متادیتا در Redis (`ckmeta:`), وضعیت (`healthy/suspect/invalid/cooldown/disabled`), `pick()` (اولویت + LRU + exclude برای چرخش), `materialize()`, `mark_ok/mark_fail` (کول‌داونِ پلکانی), `healthy_count`؛ **سهمیه** — `Limits`/`default_limits()`/`load_limits()` (عکسِ فوریِ مقادیرِ پنل) + ریاضیِ همگامِ `hourly_cap`/`warmup_factor`/`budget_of` |
+| `app/dl_active.py` | شمارشِ **خودترمیمِ** دانلودهای هم‌زمان: ZSETِ `dl:active:z` با مهرِ زمانِ سرورِ Redis + `enter`/`leave`/`keepalive`/`count`. عمداً بی‌وابستگیِ سنگین، چون هم ورکرِ دانلود و هم پروسهٔ پنل از آن می‌خوانند |
 | `app/dl_cache.py` | کشِ تحویلِ آنی: `_cache_url()` (نرمال‌سازیِ URL) + `cache_key`/`_legacy_key`، `put_cached` (**هر نوع فایل**)، `put_album_cached`/`collect_album_items` (کاروسل)، `deliver_from_cache` → bool (False = file_idِ باطل، ردیف پاک شد) |
 | `app/crud.py`, `app/exceptions.py` | DB helpers; `ProcessingCancelled` |
 
@@ -178,8 +179,15 @@ requires rebuilding **`download-worker`** (`docker compose build download-worker
 
 **Master node infra (auto):** `install.sh` offers it at the end, or run `telabzar nodes-enable` (= `sudo node/master-setup.sh`) any time. It sets up WireGuard on the host + installs a `telabzar-wg-sync` systemd timer that reconciles WG peers from the `Node` table (declarative, self-healing — the panel just writes `Node` rows; the host timer applies them via `/node/peers`), and applies **`docker-compose.nodes.yml`** (overlay that publishes redis/postgres/local-bot-api/pot/gateway on `${WG_MASTER_IP}` — WG-only, not the public IP). The `telabzar` CLI auto-adds the overlay (`-f docker-compose.yml -f docker-compose.nodes.yml`) whenever `.nodes-enabled` exists, so `telabzar update` keeps the WG exposure. Standalone (no overlay) is unchanged — everything runs on the master.
 
-**Tests / lint / CI:** none committed — no `tests/` dir, no CI workflow, no lint config in the repo.
-Verification is currently done with ad-hoc scratchpad scripts outside the repo (see Open Questions).
+**Tests:** `tests/` (pytest, committed) + `requirements-dev.txt` + `pytest.ini`. Run with
+`pip install -r requirements-dev.txt && pytest`. `asyncio_mode = auto`, so `async def test_…` needs no
+decorator. Conventions: **real over mock** — a real aiohttp server, a real `yt-dlp` stub script on `PATH`,
+real subprocesses, `fakeredis` (real ZSET/TIME semantics). Only DNS records are faked, because an attacker's
+A-record is not reproducible in a test. A test that needs ffmpeg/ffprobe is marked `@pytest.mark.ffmpeg`
+and **skipped** when they are absent (`conftest.pytest_runtest_setup`). `conftest.py` sets `BOT_TOKEN` at
+module level — `config.Settings` requires it *at import time*, so a fixture would be too late. Every fix
+should land with a test that fails on the pre-fix source. **No lint config or CI workflow yet** (see Open
+Questions).
 
 ## 7. Known Gotchas
 - **Local Bot API server**: files are on its disk; `bot.get_file(file_id)` can trigger a full download from Telegram DC on first call (slow) — workers/gateway use long `request_timeout` (600 s). Upload ceiling ≈ `MAX_FILE_MB` (2000); larger files can't be carded/served.
@@ -310,6 +318,97 @@ usable accounts drop below `cookie_alert_min`.
   Runtime keys: `dl_direct_enabled`, `dl_direct_max_mb` (500; `dl_max_size_mb` still caps it, since
   the Telegram upload ceiling is not negotiable). Direct downloads never touch a cookie and never
   penalise the pool. Gated by `dl_allow_unknown` like any unknown host.
+- **A hostname that isn't an IP literal is not automatically safe.** `is_safe_url` used to run
+  `ipaddress.ip_address(host)` and treat `ValueError` as "so it's a hostname → allow". But
+  `2130706433`, `0x7f000001`, `127.1` and `017700000001` **all** raise `ValueError` and **all**
+  connect to `127.0.0.1` — `ipaddress` only accepts dotted-quad, while `getaddrinfo` (which is what
+  the connection actually uses) understands every `inet_aton` form. So literal detection now goes
+  through `socket.getaddrinfo(host, None, flags=AI_NUMERICHOST)`: libc semantics, no DNS, and it
+  returns `gaierror` exactly when the host really is a name. Beyond the notation trap there were two
+  more holes: `::ffff:127.0.0.1` has `is_loopback == False` (only `is_private` catches it, so unwrap
+  `ipv4_mapped` explicitly), and `is_multicast`/`is_unspecified`/CGNAT `100.64.0.0/10` were not
+  checked at all. **Names are a separate layer:** `is_safe_url_resolved()` (async, threaded
+  `getaddrinfo`, 60 s cache, 2 s timeout) is what the link front door calls — without it, `evil.example`
+  with an A-record of `169.254.169.254` sailed through. DNS failure is **conditional, not fail-open**:
+  with `proxy_url` set the *proxy* resolves the name and our local view is irrelevant → allow; with no
+  proxy (our default) the request leaves this machine, so a failed lookup has no excuse → reject + log.
+  **`PROXY_URL` is empty in production (verified 2026-07-26 on the master) — egress is direct**, which
+  is also the compose default and what `install.sh` leaves behind (it never prompts for it). That is
+  the strict configuration: the veto resolver is attached and DNS failure is fail-closed, so there is
+  no gap. The conditional fail-open matters only if `proxy_url` is ever pointed at an **internal**
+  http(s) proxy — one that can reach postgres/redis/`admin:8080`/`10.51.0.1:8080`. If that day comes,
+  the fail-open has to be inverted (DNS failure → reject) with an explicit allow-list for the hosts we
+  define ourselves; re-read this bullet before changing `proxy_url`. Docker service names are not the
+  hole: inside the containers Docker's own DNS resolves `admin`/`postgres` to `172.x`, so the resolve
+  layer already rejects them. The gap would be names our container cannot resolve but the proxy can.
+- **A check followed by a connect is a TOCTOU window; make the connect itself do the checking.** The
+  syntactic check runs per redirect hop in `_follow`, but DNS rebinding can hand a different address to
+  the actual connection. The `direct` engine's sessions therefore use
+  `TCPConnector(resolver=_safe_resolver())` — aiohttp vetoes the address it is about to connect to, so
+  every hop is covered with no window. This works only for what we connect to ourselves: **yt-dlp is a
+  subprocess** and cannot be given a resolver, so there the front door is the whole defence. One
+  residual channel is accepted on purpose and marked in the code: the `dl_failed` message shows
+  `msg[:280]` of the engine's stderr, so an internal URL that reached yt-dlp could echo a fragment
+  back — silence there would make every failed download undiagnosable.
+  **The resolver must not be attached when a proxy is in use** (`_direct_connector`): aiohttp resolves
+  the *proxy* host, not the destination, so the veto protects nothing there and only breaks the proxy
+  hop — a `PROXY_URL` of `http://squid:3128` (a docker service name → `172.x`) counted as "internal"
+  and every download died with `ClientConnectorDNSError`. A proxy given as a bare IP was unaffected,
+  which is exactly what makes this the kind of regression a unit test doesn't find.
+  **The socks branch keeps the resolver, and the reason is `_http_proxy`, not aiohttp.** aiohttp does
+  **not** ignore a socks proxy and fall back to a direct connection — it treats `socks5://h:1080` as an
+  HTTP proxy address and tries to CONNECT to that host:port, which fails. `_http_proxy` therefore drops
+  any non-http(s) proxy and we pass `proxy=None`, so the `direct` engine really does connect directly
+  and the resolver is exactly right there. The pre-existing side effect worth knowing: with a
+  socks-only `PROXY_URL` the `direct` engine bypasses the proxy and exits from the master's own IP;
+  only yt-dlp/gallery-dl (which get `--proxy`) use it. **Nothing else in
+  the codebase goes through these checks:** `is_safe_url*` has exactly two call sites (the link front
+  door and `_follow`), and every internal address — `gateway_node.py`→`NODE_GATEWAY_URL`, the panel's
+  pot-provider ping and bot-API DM, `download_cobalt`→`COBALT_URL`, aiogram→`LOCAL_API_BASE`, Redis and
+  Postgres — uses its own plain session or driver. `node/wg-sync.sh` reaches `/node/peers` with `curl`
+  from the host and never touches Python. Verify this inventory before widening where the checks run.
+- **`INCR` + `DECR`-in-`finally` is not a concurrency limiter.** `finally` does not run on OOM/kill, and
+  `dl:active` had no TTL, so three ungraceful deaths permanently pinned the counter above
+  `dl_concurrency` and **every** later download answered "busy" forever — self-inflicted, invisible, and
+  only fixable by deleting the key by hand. `app/dl_active.py` replaces it with a ZSET scored by
+  **Redis server time** (`TIME`, not the local clock — master and download node are two machines), a
+  `keepalive` task that refreshes the live job's score for the whole job (upload phase included), and a
+  prune-then-`ZCARD` count, so an orphaned entry evaporates after `ACTIVE_TTL`. Two traps: the member
+  must be **per-job unique**, not `ref` — `ref` is shared between the probe and fetch phases and
+  `on_dl_pick` can fire several quality picks from one menu, so two live jobs would overwrite and then
+  delete each other's slot; and the keepalive task must be cancelled in `finally` or it outlives the job.
+  The module deliberately has no heavy imports because **the admin panel reads it too** and the panel
+  image has no Pillow — importing `tasks_download` there would crash the process.
+- **A user-supplied number reaches ffmpeg; validate it where the loop is.** `Spd.rate` is a free-form
+  `str` in the callback, and `_atempo_chain` looped `while r < 0.5: r /= 0.5` — which never terminates
+  for a negative rate and never for `inf` either. The killer detail is that `_atempo_chain` is **sync
+  and runs before any `await`**, so ARQ's asyncio `job_timeout` can never fire: one crafted callback
+  froze the entire worker process (or the **processing node**, since `speed` is in `OFFLOAD_OPS`) and
+  grew a list until OOM. Two guards, deliberately at different levels: `_do_op` accepts only rates the
+  bot itself offers (`keyboards.AUDIO_SPEEDS`), and `_atempo_chain` itself rejects non-finite values and
+  anything outside `SPEED_MIN..SPEED_MAX`. `op_speed_pick` also got the `kind != "audio"` guard its
+  sibling `op_speed` already had — the *systematic* absence of ownership/validation guards in
+  `routers/ops.py` is a separate, still-open problem.
+- **`normalize_probe` is a filter, and the safety layer reads what it drops.** It returned only
+  `{title, duration, kind, thumbnail, options}`, so `safety.check_meta()` on the probe result saw no
+  `age_limit`, `description`, `tags`, `categories`, `uploader` or `channel` — the `age_limit >= 18`
+  test, the cheapest and strongest signal we have, **never fired before a download**. (After the
+  download it did work, because the fetch path passes yt-dlp's raw `.info.json`.) Those fields are now
+  carried through, size-capped. For the quick path — which is the default (`dl_default_ux=quick`) and
+  never probes — the gate rides on the download call itself via `--match-filter`, so it costs **zero**
+  extra round trips and zero extra cookie-pool spend. **The comparison must be `age_limit<?18`, not
+  `age_limit<18`:** in yt-dlp a plain numeric comparison on an **absent** field is False, and most
+  extractors never set `age_limit`, so the strict form would have rejected almost every video. yt-dlp's
+  rejection lands as `does not pass filter` in stdout and, depending on version, with either exit code,
+  so `download_ytdlp` checks both the stdout tail and the raised error before turning it into
+  `AgeRestricted` — which `run_download` handles *before* the cookie-rotation branch, since no other
+  account would fare differently and none deserves a strike.
+  **`--match-filter` reaches Spotify too, and there it is silent.** `download_spotify` matches each
+  track to YouTube and calls `download_ytdlp` with the *same* `opts`, so an age-restricted track raises
+  `AgeRestricted`, is swallowed by that loop's `except Exception: … continue`, and is **dropped from
+  the playlist with no message** — the rest is delivered normally. That is the filter working as
+  intended, but if *every* track is blocked the user sees `spotify: no YouTube match`, which names the
+  wrong cause. Left as-is deliberately; fixing the message is a follow-up, not a security matter.
 - **React to the *class* of a cookie error, not a single counter.** `cookies.classify_error()` maps an
   engine error to `rate_limit` / `checkpoint` / `login_required` / `bot_check` / `unrelated`, and
   `mark_fail(error_class=…)` reacts differently: a **rate limit costs the account nothing** (it means
@@ -406,10 +505,48 @@ usable accounts drop below `cookie_alert_min`.
 
 ## Open Questions
 - **Roles:** the plan hypothesized `owner`/`reseller` tiers; **code has none** — only admin (env) vs user, plus `is_blocked`, and `User.role` is unused. Is a multi-tier/reseller hierarchy intended-but-unbuilt (should this file track it as a gap), or is the two-tier model final?
-- **Tests/lint:** no committed test suite, CI, or lint config. Set up `tests/` + a linter (ruff) + CI as a follow-up, or keep verification ad-hoc?
+- ~~**Tests:**~~ **resolved 2026-07-26** — `tests/` + `requirements-dev.txt` + `pytest.ini` are committed (see §6). Coverage today is the security/correctness regressions of the phase-one bug audit, not the whole app; grow it fix-by-fix.
+- **Phase-3 backlog — a socks `PROXY_URL` does not apply to the `direct` engine, and the docs say
+  otherwise.** `docs/ADMIN_PANEL.md:74` recommends `socks5h://…` for `proxy_url`, so anyone following
+  the documentation believes every download leaves through their clean exit. It does not:
+  `downloader._http_proxy()` passes only `http(s)://` proxies to aiohttp and drops everything else, so
+  the `direct` engine (plain download links — GitHub releases, APKs, PDFs) connects **directly and
+  exits from the master's own IP**. Only yt-dlp and gallery-dl, which receive `--proxy`, honour it.
+  This is a **docs-vs-code contradiction**, not a footnote — and it blocks the near-term plan of using
+  a mobile/4G proxy as the exit, because that exit would silently not cover direct downloads.
+  The likely fix is `aiohttp_socks.ProxyConnector`, and it was checked against 0.11.0 so phase 3 does
+  not start from zero. Two blockers, both verified by running it:
+  (a) **it is incompatible with our resolver, silently.** `aiohttp_socks/connector.py:107` does
+  `kwargs['resolver'] = NoResolver()`, overwriting whatever you pass — an instrumented resolver handed
+  to `ProxyConnector` was never called for the destination. So the anti-TOCTOU veto **disappears with
+  no error and no warning**; the SSRF defence for socks downloads has to come from somewhere else
+  (front door only, or resolve the destination ourselves and hand the vetted IP to the proxy).
+  (b) **it rejects the `socks5h://` scheme our own docs recommend** —
+  `ValueError: Invalid scheme component: socks5h`. The URL has to be mapped to `socks5://` plus
+  `rdns=True`, which is what `socks5h` means anyway.
+  Decide first whether `direct` downloads should go through the proxy at all; if yes, the resolver
+  guarantee must be replaced, not assumed.
+- **Phase-3 backlog — Spotify names the wrong cause when the age gate blocks everything.**
+  `--match-filter age_limit<?18` reaches Spotify because `download_spotify` passes the same `opts` to
+  `download_ytdlp` per track. A blocked track raises `AgeRestricted`, is swallowed by that loop's
+  `except Exception: … continue`, and is silently dropped from the playlist — correct behaviour for a
+  mixed playlist. But when **every** track is blocked the loop ends with
+  `RuntimeError("spotify: no YouTube match — …")`, so the user is told the matcher failed when in fact
+  the filter rejected the content. Fix: track `AgeRestricted` separately in that loop and surface
+  `nsfw_blocked` when it accounts for every dropped track. Deliberately deferred from phase 1 — it is
+  a message bug, not a security one.
+- **`is_safe_url_resolved` rides the default `asyncio.to_thread` executor** (shared, `min(32, cpu+4)`
+  threads). Each link intake parks one thread for up to 2 s on DNS. At today's traffic this is
+  invisible and the 60 s cache absorbs repeats, but it is the saturation point if link volume grows —
+  a dedicated small executor, or an async resolver, is the fix when that day comes. Recorded, not acted on.
+- **Lint / CI:** still none. A linter (ruff) and a CI workflow that runs `pytest` on push are the obvious next step — but nothing runs the suite automatically yet, so a regression only surfaces if someone runs it locally. Add CI, or keep it manual?
 - **Contribution/git conventions** (branch naming, commit trailers) are session-injected, not repo facts — document them here or leave out?
+- **Systematic input/ownership validation in `routers/ops.py`:** no handler checks `file.owner_id == user.id`, and `op_cancel_job` takes a **sequential integer** job id. The `speed` handler got a one-line `kind` guard as part of the atempo fix, but the general gap is untouched and needs one central guard rather than ~30 scattered checks.
 
 ## Changelog
+- 2026-07-26 — تأییدِ روی سرور، پیش از merge فازِ ۱. **`PROXY_URL` روی مستر خالی است** (egressِ مستقیم) — یعنی سخت‌گیرترین ردیفِ جدولِ تصمیم: رزولورِ وتوکننده وصل است و شکستِ DNS fail-closed، پس شکافی وجود ندارد و برعکس‌کردنِ fail-open لازم نشد. این مقدار در gotchaها ثبت شد تا دفعهٔ بعد از صفر بررسی نشود؛ هر تغییری در `proxy_url` (به‌ویژه به یک پروکسیِ **داخلی**) باید همان بولت را دوباره بخواند. **اسموکِ دستیِ چهار لینکِ واقعی روی مستر سالم بود** (یوتیوب، ریلزِ اینستاگرام، لینکِ مستقیمِ گیت‌هاب، و یک shortener با ریدایرکت) — پس درِ ورودیِ تازه رگرسیونی روی مسیرِ عادیِ دانلود نساخت. **دو تستِ محافظ برای `probe_direct`** هم اضافه شد (چون قبل از `download_direct` اجرا می‌شود و سشنِ سادهٔ آن‌جا یعنی یک چکِ محافظت‌نشده جلوی چکِ محافظت‌شده): یکی سورسِ هر دو تابع را می‌خواند، دیگری رفتاری است. **نسخهٔ اولِ تستِ رفتاری vacuous بود و همین‌جا گرفته شد** — وصله روی `socket.getaddrinfo` به رزولورِ aiohttp نمی‌رسد، پس نام NXDOMAIN می‌ماند و تست به دلیلِ غلط سبز می‌شد (با کانکتورِ ساده هم پاس می‌شد)؛ حالا روی `aiohttp.DefaultResolver.resolve` وصله می‌خورد و یک کنترل دارد که مسیرِ باز را اثبات کند. **یافتهٔ socks به فهرستِ فاز ۳ رفت** (نه پاورقی): `docs/ADMIN_PANEL.md:74` خودش `socks5h://` را توصیه می‌کند ولی `_http_proxy` فقط http(s) را به aiohttp می‌دهد، پس موتورِ `direct` از IPِ خودِ مستر بیرون می‌رود — که مانعِ برنامهٔ پروکسیِ موبایل/۴G است. `aiohttp_socks 0.11.0` سنجیده شد: در `connector.py:107` رزولور را با `NoResolver()` **بازنویسی** می‌کند (وتوی ما بی‌صدا ناپدید می‌شود) و اسکیمِ `socks5h` را هم اصلاً نمی‌پذیرد.
+- 2026-07-26 — بازبینیِ پیش از merge برای فازِ ۱، و **یک رگرسیونِ واقعی که همان بازبینی گرفت**. سؤال این بود: حالا که IPِ خصوصی رد می‌شود، آیا مسیرِ داخلیِ خودمان (لایهٔ نود روی `10.51.0.0/24`) از این فیلترها رد می‌شود؟ فهرست‌برداری شد و جواب برای همه «نه» بود — `is_safe_url*` فقط دو فراخوان دارد (درِ ورودیِ لینک و `_follow`) و `gateway_node`/پنل/`download_cobalt`/aiogram/Redis/Postgres هرکدام سشن یا درایورِ خودشان را دارند، و `node/wg-sync.sh` با `curl` از روی هاست به `/node/peers` می‌زند و اصلاً به پایتون نمی‌رسد. **ولی یک مسیر واقعاً می‌شکست:** رزولورِ ضدِ TOCTOU روی کانکتور، هاستِ **پروکسی** را هم وتو می‌کرد. aiohttp در حالتِ پروکسی نامِ پروکسی را حل می‌کند نه مقصد را، پس آن رزولور آن‌جا هیچ حفاظتی نمی‌داد و فقط می‌توانست خودِ پروکسی را بشکند: `PROXY_URL=http://squid:3128` (نامِ سرویسِ داکر → ۱۷۲٫x) «داخلی» شمرده می‌شد و هر دانلود با `ClientConnectorDNSError` می‌مرد. با پروکسیِ **IPِ لفظی** اتفاق نمی‌افتاد، که همین باعث می‌شد تستِ واحد پیدایش نکند. `_direct_connector(opts)` حالا وقتی پروکسیِ http(s) در کار است رزولور را وصل نمی‌کند (پروکسیِ socks که aiohttp نمی‌فهمدش و اتصال مستقیم است، رزولور را نگه می‌دارد). سه تستِ تازه: پروکسیِ نام‌دارِ روی IPِ خصوصی + وصل‌بودنِ رزولور بدونِ پروکسی + مسیرِ socks. **مسیرِ ردِ گیتِ سنی هم تا آخرِ خط تست شد** (نه فقط تا `download_ytdlp`): `run_download`ِ واقعی با yt-dlpِ جعلی که مثلِ خودِ yt-dlp با کدِ **صفر** و بدونِ فایل خارج می‌شود → کاربر `nsfw_blocked` می‌گیرد نه `dl_failed` و نه «produced no file»، اسلاتِ هم‌زمانی آزاد می‌شود، و هیچ اکانتِ کوکی‌ای ضربه نمی‌خورد. **`--match-filter` روی اسپاتیفای هم اعمال می‌شود** — ترکِ دارای محدودیتِ سنی بی‌صدا از پلی‌لیست حذف می‌شود (در gotchaها ثبت شد؛ اگر *همهٔ* ترک‌ها رد شوند پیامِ `no YouTube match` علت را اشتباه نام می‌برد، که عمداً برای بعد ماند). **اسموکِ لینکِ واقعی:** خروجیِ HTTPِ این محیط با سیاستِ پروکسی مسدود است (`403 CONNECT`)، پس دانلودِ واقعی اجراشدنی نبود؛ ولی DNS کار می‌کند و درِ ورودی — تنها چیزی که عوض شده — روی ۱۰ هاستِ واقعی سنجیده شد (یوتیوب، `youtu.be`، ریلزِ اینستاگرام، ریلیزِ گیت‌هاب، CDNِ گیت‌هاب، `bit.ly`، `t.co`، X، تیک‌تاک، آپارات): همه از هر دو لایه رد شدند و `platform_of`/`engine_for` دست‌نخورده ماند. نکتهٔ ارزشمندش `t.co` بود که روی `172.66.0.227` می‌نشیند — یک چکِ سرانگشتیِ «۱۷۲٫x یعنی خصوصی» آن را می‌شکست، ولی `172.16.0.0/12` شاملش نیست. دانلودِ واقعیِ چهار لینک روی مستر قبل از merge لازم است (فهرستش به کاربر داده شد). یادداشتِ بی‌اقدام: `is_safe_url_resolved` روی executorِ پیش‌فرضِ `to_thread` است و در مقیاسِ بالا نقطهٔ اشباع دارد.
+- 2026-07-26 — **فازِ ۱ِ ممیزیِ باگ: چهار موردِ بحرانی** + اولین `tests/`ِ کامیت‌شدهٔ ریپو. **(۱-۱) SSRF.** `is_safe_url` روی `ValueError`ِ `ipaddress.ip_address` نتیجه می‌گرفت «پس نامِ دامنه است → مجاز»، ولی `2130706433` و `0x7f000001` و `127.1` و `017700000001` **همه** ValueError می‌دهند و **همه** به `127.0.0.1` وصل می‌شوند — `ipaddress` فقط dotted-quad را می‌پذیرد در حالی که `getaddrinfo` (که خودِ اتصال از آن استفاده می‌کند) هر شکلِ `inet_aton` را می‌فهمد. تشخیصِ لفظی حالا با `AI_NUMERICHOST` است: معناشناسیِ libc، بدونِ DNS. دو سوراخِ دیگر هم بسته شد: `::ffff:127.0.0.1` که `is_loopback` برایش False است (باز کردنِ `ipv4_mapped`)، و `is_multicast`/`is_unspecified`/CGNATِ `100.64.0.0/10` که اصلاً چک نمی‌شدند. **و مهم‌تر از همه:** هیچ resolveی انجام نمی‌شد، پس `evil.example` با A-recordِ `169.254.169.254` از فیلتر رد می‌شد — `is_safe_url_resolved()` (ناهمگام، `getaddrinfo` در thread، کشِ ۶۰ ثانیه، مهلتِ ۲ ثانیه) حالا درِ ورودیِ لینک است. شکستِ DNS **مشروط** است نه fail-open: با `proxy_url` نام را پروکسی حل می‌کند → اجازه؛ بدونِ پروکسی (پیش‌فرضِ ما) درخواست از همین ماشین می‌رود پس شکستِ DNS بهانه‌ای ندارد → رد + لاگ. پنجرهٔ TOCTOU (DNS rebinding) هم برای موتورِ `direct` با `TCPConnector(resolver=_safe_resolver())` بسته شد: aiohttp همان آدرسی را وتو می‌کند که واقعاً به آن وصل می‌شود، پس هر پرشِ ریدایرکت خودکار پوشش دارد. yt-dlp زیرفرایند است و رزولور نمی‌گیرد؛ آن‌جا درِ ورودی کلِ دفاع است. یک کانالِ باقی‌مانده **آگاهانه پذیرفته و در کد علامت‌گذاری شد**: پیامِ `dl_failed` مقدارِ `msg[:280]`ِ stderrِ موتور را نشان می‌دهد. **(۱-۲) شمارندهٔ هم‌زمانی.** `INCR dl:active` با `DECR` در `finally` — که روی OOM/kill اجرا نمی‌شود و کلید TTL نداشت، پس سه مرگِ ناگهانی شمارنده را برای همیشه بالای `dl_concurrency` می‌برد و **هر** دانلودِ بعدی «شلوغ است» می‌گرفت. ماژولِ تازهٔ `app/dl_active.py` جایش را می‌گیرد: ZSET با مهرِ زمانِ **سرورِ Redis** (نه ساعتِ محلی — مستر و نود دو ماشین‌اند)، تسکِ keepalive برای کلِ طولِ جاب (شاملِ آپلود) که در `finally` کنسل می‌شود، و شمارشِ «اول هرس بعد ZCARD». دو تلهٔ ظریف: عضوِ ZSET باید **per-job یکتا** باشد نه `ref` (که بینِ probe/fetch مشترک است و `on_dl_pick` می‌تواند چند کیفیت از یک منو بفرستد → دو جاب همدیگر را بازنویسی/حذف می‌کردند)؛ و ماژول عمداً وابستگیِ سنگین ندارد چون **پنل هم از آن می‌خواند** و ایمیجِ پنل Pillow ندارد (importِ `tasks_download` آن‌جا پروسه را می‌شکست). **(۱-۳) حلقهٔ بی‌نهایتِ `_atempo_chain`.** `Spd.rate` رشتهٔ آزادِ callback است و `while r < 0.5: r /= 0.5` روی نرخِ منفی و روی `inf` هرگز تمام نمی‌شود. نکتهٔ کشنده: تابع **همگام** است و قبل از هر `await` اجرا می‌شود، پس `job_timeout`ِ asyncioی ARQ نمی‌تواند شلیک کند — یک callbackِ ساخته‌شده کلِ پروسهٔ ورکر (یا **نودِ پردازش**، چون `speed` در `OFFLOAD_OPS` است) را می‌خواباند و لیست را تا OOM بزرگ می‌کرد. دو گارد در دو سطح: `_do_op` فقط ضریب‌هایی را می‌پذیرد که خودِ ربات پیشنهاد داده (`keyboards.AUDIO_SPEEDS`)، و `_atempo_chain` مقدارِ غیرمتناهی و بیرونِ `SPEED_MIN..SPEED_MAX` را رد می‌کند. `op_speed_pick` هم گاردِ `kind != "audio"` را گرفت که خواهرش `op_speed` از قبل داشت؛ **فقدانِ سیستماتیکِ اعتبارسنجی/مالکیت در `ops.py` عمداً دست‌نخورده ماند** و به فازِ ۲ سپرده شد. **(۱-۴) لایهٔ ۲ فیلترِ بزرگسال.** `normalize_probe` فقط `{title, duration, kind, thumbnail, options}` می‌داد، پس `check_meta` روی نتیجهٔ probe نه `age_limit` می‌دید نه `description`/`tags`/`categories`/`uploader`/`channel` — یعنی قوی‌ترین و ارزان‌ترین سیگنالِ ما **هرگز قبل از دانلود** شلیک نمی‌کرد. (بعد از دانلود کار می‌کرد، چون مسیرِ fetch همان `.info.json`ِ خامِ yt-dlp را می‌دهد.) حالا این فیلدها با سقفِ اندازه حمل می‌شوند. برای مسیرِ **quick** — که پیش‌فرض است و اصلاً probe نمی‌کند — گیت روی خودِ فراخوانیِ دانلود سوار شد با `--match-filter`: صفر رفت‌وبرگشتِ اضافه و صفر مصرفِ اضافه از سهمیهٔ اکانتِ کوکی (گران‌ترین منبعِ ما؛ گزینهٔ «یک `-J`ِ جداگانه قبل از هر دانلود» به همین دلیل رد شد). **مقایسه باید `age_limit<?18` باشد نه `age_limit<18`:** در yt-dlp مقایسهٔ عددیِ ساده روی فیلدِ **غایب** False می‌دهد و اکثرِ extractorها `age_limit` ست نمی‌کنند، پس فرمِ سخت‌گیرانه تقریباً هر ویدیویی را رد می‌کرد. ردِ yt-dlp به‌صورتِ `does not pass filter` در stdout می‌آید و بسته به نسخه با هر دو کدِ خروجی، پس هر دو مسیر بررسی می‌شود و به `AgeRestricted` تبدیل می‌شود که `run_download` **قبل از** شاخهٔ چرخشِ کوکی می‌گیردش (اکانتِ دیگر نتیجهٔ متفاوتی نمی‌دهد و هیچ‌کدام مستحقِ ضربه نیست). **تست‌ها — اولین `tests/`ِ ریپو (۱۰۰ تست، `requirements-dev.txt` + `pytest.ini`):** واقعی نه ماک — سرورِ واقعیِ aiohttp که نقشِ سرویسِ داخلی را بازی می‌کند و قبل از رفع واقعاً بدنه‌اش تحویل می‌شد، `yt-dlp`ِ جعلیِ **اجرایی** روی PATH که رفتارِ واقعیِ `--match-filter` را تقلید می‌کند، `fakeredis` با ZSET/TIMEِ واقعی، و اجرای `_atempo_chain` در زیرفرایندِ مهلت‌دار تا نبودِ گارد به‌جای هنگ‌کردنِ suite یک failِ تمیز بدهد. تنها چیزی که جعل می‌شود رکوردِ DNS است، چون A-recordِ مهاجم در تست ساختنی نیست. اثباتِ pre-fix گرفته شد: ۲۱ تستِ SSRF، ۱۲ تستِ سرعت (پنج‌تا با تایم‌اوتِ حلقهٔ بی‌نهایت) و ۵ تستِ فیلتر روی سورسِ قبل از رفع fail می‌شوند. تستِ نیازمندِ ffmpeg با `@pytest.mark.ffmpeg` علامت می‌خورد و در نبودش skip می‌شود. **باگی که خودِ تست‌ها گرفتند:** درجِ `AgeRestricted` کنارِ `DirectTooLarge` سازندهٔ آن را دزدیده بود و پیامِ «حجم زیاد است» را می‌شکست — یک تستِ محافظ برایش اضافه شد. **اعمال:** `telabzar update` روی مستر **و** `node/update.sh` روی **هر دو** نوع نود — `downloader`/`tasks_download`/`dl_active` روی نودِ دانلود و `processing`/`tasks` روی نودِ پردازش اجرا می‌شوند.
 - 2026-07-25 — «۲ کوکیِ خراب + ۱ سالم → بارِ اول ارور، بارِ دوم دانلود» + «کوکی‌ها سالم‌اند ولی می‌گوید کوکی ست کن». هر دو از **یک** عادتِ غلط می‌آمدند: تصمیم‌گیری از روی **رشتهٔ خطا**. **(A) چرخش:** `tried.add` و `continue` داخلِ شرطِ `_is_cookie_error` بودند، پس هر خطایی که در فهرستِ کلیدواژه‌ها نبود کلِ درخواست را با **یک** تلاش تمام می‌کرد — با اینکه اکانت‌های دست‌نخورده کنارش بودند. (بارِ دوم کار می‌کرد چون اکانتِ افتاده `UNPROVEN` شده و رتبه‌اش پایین آمده بود.) حالا پیش‌فرض می‌چرخد و فقط خطاهای **محتوایی** (`_CONTENT_HINTS`: ۴۰۴/خصوصی/حذف‌شده) متوقفش می‌کنند؛ سقفِ `dl_max_cookie_tries` جلوی راه‌رفتنِ کلِ استخر روی یک لینکِ خراب را می‌گیرد؛ نگهبانِ تکراریِ `pick()` حذف شد (که `node_id` را هم پاس نمی‌داد و با `_next_cookie` اختلاف داشت). **(B) تقصیر:** وقتی اینستاگرام یک **IP** را رد می‌کند همان `redirect to login page`ی را می‌دهد که برای سشنِ مرده — پس با یک پیام نمی‌شود قضاوت کرد، ولی با **الگو** می‌شود. `_resolve_blame` در پایانِ درخواست تصمیم می‌گیرد: موفق شد → اکانت‌های افتاده واقعاً خراب‌اند؛ شکست خورد و ≥۲ اکانتِ متفاوت امتحان شد → **مقصر خروجی است** → هیچ ضربه‌ای به هیچ اکانتی، خروجی کول‌داون می‌گیرد، `_dl_queue` از آن عبور می‌کند، و پیامِ کاربر به‌جای «کوکی ست کن» می‌شود «مشکل از خروجیِ شبکه است». **چرا مهم بود:** `burns_account(login_required)` صادق است، پس یک IPِ مسدود به هر تلاش یک ضربه به یک اکانتِ **سالم** می‌زد و با `ck_invalid_at=3` سشن‌های سالم را «باطل» می‌کرد — یعنی سیستم خودش ادمین را وادار می‌کرد سشن‌های سالم را دوباره استخراج کند. **دو نکتهٔ ریز:** `note_use` دیگر سطلِ ساعتی را پر نمی‌کند (با `note_spend` بعد از نتیجه)، وگرنه یک خروجیِ مسدود سهمیهٔ کلِ استخر را می‌خورد؛ و `pick` هم‌رتبه‌ها را چرخشی برمی‌دارد وگرنه روی استخرِ تازه مرتب‌سازی به **نام** می‌افتد و همیشه یک اکانتِ ثابت اولین قربانی است (`_CK_ROT` برای همین بود و استفاده نمی‌شد). تست: سناریوی دقیقِ کاربر (۲ خراب + ۱ سالم → همان بارِ اول موفق، هر سه امتحان شدند)، شکستِ همگانی → صفر ضربه + کول‌داونِ خروجی + پیامِ درست + DMِ «کوکی‌ها را عوض نکن»، ۴۰۴ با **یک** تلاش و بدونِ سوزاندنِ استخر، سقفِ تلاش، چرخشی‌بودنِ ترتیبِ اولیه، و عبورِ مسیریابی از خروجیِ کول‌داون‌شده (فقط برای همان پلتفرم). **اعمال:** `telabzar update` + `node/update.sh`.
 - 2026-07-25 — «پنل سالم نشان می‌دهد ولی هیچ دانلودی کار نمی‌کند» — ریشه پیدا و بسته شد. **علت:** وضعیتِ اکانت فقط از `fail_streak` ساخته می‌شد و `mark_fail` **تنها** وقتی صدا زده می‌شد که خطا «کوکی‌محور» شناخته شود (`tasks_download.py`، شرطِ `_is_cookie_error`). خطای ناشناخته هیچ‌وقت به استخر نمی‌رسید، و دسته‌های بی‌ضربه (`transient`) هم عمداً شمارنده بالا نمی‌برند — پس بج برای همیشه سبز می‌ماند. پنل دروغ نمی‌گفت؛ داشت می‌گفت «چیزی ثبت نشده»، که ادمین آن را «سالم است» می‌خواند. **رفع:** (۱) هر شکستی روی اکانت ثبت می‌شود، (۲) وضعیتِ تازهٔ `UNPROVEN` («آخرین تلاش ناموفق») وقتی آخرین رویداد خطا بوده نه موفقیت — اکانت همچنان قابلِ استفاده است و فقط بعد از اکانت‌های واقعاً موفق انتخاب می‌شود، (۳) متنِ `last_error` روی ردیفِ اکانت نمایش داده می‌شود (تا امروز ذخیره می‌شد و هیچ‌جا دیده نمی‌شد). **و مسئلهٔ اصلی‌تر:** آمارِ per-account اصلاً نمی‌تواند بگوید «سشن مرده یا IP مسدود؟» — وقتی همهٔ اکانت‌ها می‌افتند مقصر معمولاً خروجی است. `note_exit`/`exit_stats` موفقیت/شکست را به تفکیکِ **خروجی** می‌شمارند و کارتِ «🌐 خروجی‌ها» وقتی یک خروجی صفر موفقیت و ≥۳ شکست دارد صریح می‌نویسد «IPِ این خروجی مسدود است، نه کوکی‌ها — تعویضِ سشن کمکی نمی‌کند». فقط شکستِ واقعیِ شبکه‌ای شمرده می‌شود نه ردِ سیاستی (حجم/مدت/فیلتر)، وگرنه سیگنال آلوده می‌شد. **هشدارِ ناهمخوانیِ آینه** هم اضافه شد (تعدادِ فایلِ دیسک در برابرِ Redis) + دکمهٔ همگام‌سازی، چون نودِ دانلود فقط آینهٔ Redis را می‌بیند و نبودنِ یک کوکی در آن بی‌سروصدا بود. **دو تلهٔ حین کار که تست‌ها گرفتند:** `healthy_count` (که هشدارِ «کوکیِ سالم کم است» را می‌زند) باید `UNPROVEN` را هم بشمارد وگرنه یک شکستِ بی‌تقصیر هشدارِ الکی می‌فرستد؛ و `unfreeze` باید `last_error` را پاک کند وگرنه پس از «رسیدگی شد» اکانت با خطای منقضی سبز نمی‌شود. **آنچه بررسی و رد شد:** «شاید فقط `sessionid` کافی نیست» — سورسِ gallery-dl 1.32.8 خوانده شد: `cookies_names = ("sessionid",)` و `csrftoken` را خودش می‌سازد، پس اعتبارسنجیِ ما درست است.
 - 2026-07-25 — رفعِ خطای `JSONDecodeError`ِ اینستاگرام + تشخیصِ «سشن مرده یا موتورِ عقب‌افتاده؟». gallery-dl وقتی بدنهٔ پاسخ خالی/غیرJSON باشد `An unexpected error occurred: JSONDecodeError - Expecting value: line 1 column 1` می‌دهد؛ اینستاگرام وقتی سشن یا IP را بی‌سروصدا رد می‌کند همین را برمی‌گرداند — **ولی** دقیقاً همین خطا وقتی هم می‌آید که خودِ extractor با تغییرِ سایت عقب افتاده باشد. همین ابهام کلِ نحوهٔ برخورد را تعیین می‌کند: دستهٔ تازهٔ `cookies.TRANSIENT` باعث می‌شود `_is_cookie_error` **به اکانتِ بعدی بچرخد** (چون حالتِ رایج همان سشنِ مرده است) ولی `mark_fail` **نه شمارنده بالا ببرد نه کول‌داون بدهد** — فقط `last_error` را برای پنل ثبت می‌کند. اگر کول‌داون می‌دادیم، یک مشکلِ سمتِ سایت کلِ استخر را از سرویس خارج می‌کرد. قبل از این، هیچ‌کدام از این پیام‌ها با `_BAN_HINTS`/`_LOGIN_HINTS` جور نمی‌شد، پس نه چرخشی بود و نه پیامِ معناداری: کاربر تریس‌بکِ خامِ gallery-dl می‌گرفت در حالی که شاید اکانتِ سالمِ بعدی جواب می‌داد. حالا پیامِ `dl_bad_response` هر دو احتمال را می‌گوید. **و چون ادمین با چشم نمی‌تواند این دو را تفکیک کند:** هر ورکرِ دانلود سرِ استارت نسخهٔ `gallery-dl`/`yt-dlp` خودش را در Redis می‌نویسد (`worker.startup_dl` → `dlver:<who>`) و صفحهٔ سلامت نشانشان می‌دهد — موتورِ قدیمی یعنی `telabzar update` (و روی نود `node/update.sh`)، موتورِ به‌روز یعنی سشن باید عوض شود. دو باگِ bidi سرِ همین کارت پیدا و رفع شد: جفتِ نسخه در پاراگرافِ RTL برعکس چیده می‌شد (`.mono` ایزوله می‌کند ولی `direction` را ست نمی‌کند → کلِ سلولِ لاتینِ خالص باید `.ltr` بگیرد) و پرانتزِ دورِ متنِ ترکیبی در راهنما آواره می‌شد. تست: پیامِ **دقیقِ** گزارش‌شدهٔ کاربر، پنج شکلِ خویشاوندِ آن، دست‌نخوردن‌ِ دسته‌های قبلی (چک‌پوینت/محدودیتِ نرخ/۴۰۴ که نباید بچرخد)، سالم‌ماندنِ اکانت پس از ۵ خطا، چرخشِ واقعی روی هر سه اکانت در `run_download` و سالم‌ماندنِ کلِ استخر پس از آن.

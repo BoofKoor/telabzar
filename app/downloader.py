@@ -21,7 +21,9 @@ import mimetypes
 import os
 import re
 import shutil
+import socket
 import tempfile
+import time
 import unicodedata
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -44,6 +46,10 @@ AUDIO_PLATFORMS = {"soundcloud", "bandcamp", "spotify"}
 _MATCH_PLATFORMS = {"spotify"}
 # میزبان‌های داخلی که هرگز نباید دانلود شوند (دفاعِ پایهٔ SSRF)
 _BLOCK_HOSTS = {"localhost", "metadata.google.internal", "169.254.169.254"}
+_DNS_TTL = 60.0            # ثانیه — عمرِ کشِ resolve (درِ ورودی مسیرِ داغِ ربات است)
+_DNS_TIMEOUT = 2.0         # ثانیه — بیش از این یعنی DNS جواب نمی‌دهد
+_DNS_CACHE_MAX = 512
+_dns_cache: dict[str, tuple[float, bool]] = {}   # host → (انقضا, مجاز؟)
 
 # برچسبِ فارسیِ پلتفرم‌ها — منبعِ واحد (پنل، متریک، پیام‌ها از این می‌خوانند).
 PLATFORM_LABELS = {
@@ -178,8 +184,48 @@ def engine_for(url: str, platform: str | None = None) -> str:
     return "gallerydl" if p in _GALLERY_PLATFORMS else "ytdlp"
 
 
+# محدوده‌هایی که `ipaddress` خصوصی نمی‌داند ولی عمومی هم نیستند.
+# ‎100.64.0.0/10 = CGNATِ اپراتورها (RFC 6598) — تجهیزاتِ شبکه آن‌جا زندگی می‌کنند.
+_EXTRA_INTERNAL_NETS = (ipaddress.ip_network("100.64.0.0/10"),)
+
+
+def _addr_is_internal(addr: str) -> bool:
+    """آیا این IP به شبکهٔ داخلی/خودِ ماشین می‌رسد؟"""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return True                 # نفهمیدیم چیست → محافظه‌کارانه رد
+    v4 = getattr(ip, "ipv4_mapped", None)
+    if v4 is not None:
+        ip = v4                     # ::ffff:127.0.0.1 → is_loopback برایش False است
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved \
+            or ip.is_multicast or ip.is_unspecified:
+        return True
+    return any(ip.version == n.version and ip in n for n in _EXTRA_INTERNAL_NETS)
+
+
+def _literal_addrs(host: str) -> list[str] | None:
+    """اگر `host` خودش IPِ لفظی است آدرس‌هایش را بده، وگرنه None (یعنی نامِ دامنه).
+
+    عمداً `AI_NUMERICHOST` و نه `ipaddress.ip_address`: معناشناسیِ libc همان است که
+    خودِ اتصال به کار می‌برد و شکل‌های `127.1` / `2130706433` / `0x7f000001` /
+    `017700000001` را هم می‌فهمد — دقیقاً همان‌هایی که `ip_address()` با ValueError
+    رد می‌کرد و کد آن را «پس نامِ دامنه است → مجاز» می‌خواند.
+    """
+    try:
+        info = socket.getaddrinfo(host, None, flags=socket.AI_NUMERICHOST)
+    except (socket.gaierror, UnicodeError, OSError):
+        return None
+    return [i[4][0] for i in info]
+
+
 def is_safe_url(url: str) -> bool:
-    """دفاعِ پایهٔ SSRF: فقط http(s)، ردِ لوپ‌بک/خصوصی/داخلی."""
+    """دفاعِ **نحویِ** SSRF (بدونِ DNS): فقط http(s)، ردِ لوپ‌بک/خصوصی/داخلی.
+
+    ارزان و همگام است، پس هرجا (از جمله per-hopِ ریدایرکت) می‌شود صدایش زد. برای
+    هاستی که **نام** است نه IPِ لفظی، این تابع چیزی نمی‌داند — `is_safe_url_resolved`
+    را ببین.
+    """
     try:
         p = urlparse(url)
     except Exception:  # noqa: BLE001
@@ -189,13 +235,102 @@ def is_safe_url(url: str) -> bool:
     host = p.hostname.lower()
     if host in _BLOCK_HOSTS:
         return False
+    addrs = _literal_addrs(host)
+    if addrs is not None:
+        return not any(_addr_is_internal(a) for a in addrs)
+    return True     # نامِ میزبان است — قضاوتش کارِ is_safe_url_resolved
+
+
+async def is_safe_url_resolved(url: str, proxy: str | None = None) -> bool:
+    """`is_safe_url` + resolveِ واقعیِ نام. درِ ورودیِ لینک این را صدا می‌زند.
+
+    بدونِ این، `evil.example` با A-recordِ ۱۶۹٫۲۵۴٫۱۶۹٫۲۵۴ از فیلترِ نحوی رد می‌شد.
+    `getaddrinfo` در thread می‌رود تا حلقهٔ رویدادِ ربات بند نیاید، و نتیجه
+    `_DNS_TTL` ثانیه کش می‌شود (لینکِ تکراری دوباره DNS نمی‌زند).
+
+    **شکستِ DNS مشروط است، نه همیشه‌مجاز:** اگر پروکسیِ خروجی ست باشد نام را *پروکسی*
+    حل می‌کند و دیدِ محلیِ ما بی‌ربط است → اجازه. اگر پروکسی نداریم (پیش‌فرضِ ما)
+    درخواست از همین ماشین می‌رود، پس شکستِ DNS اینجا دلیلِ موجهی ندارد → رد + لاگ.
+    """
+    if not is_safe_url(url):
+        return False
+    host = (urlparse(url).hostname or "").lower()
+    if _literal_addrs(host) is not None:
+        return True                 # لفظی بود و is_safe_url همان‌جا تأییدش کرد
+    now = time.monotonic()
+    hit = _dns_cache.get(host)
+    if hit is not None and hit[0] > now:
+        return hit[1]
     try:
-        ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return False
-    except ValueError:
-        pass  # نامِ میزبان است نه IP — مجاز
-    return True
+        info = await asyncio.wait_for(
+            asyncio.to_thread(socket.getaddrinfo, host, None, 0, socket.SOCK_STREAM),
+            timeout=_DNS_TIMEOUT)
+        ok = not any(_addr_is_internal(i[4][0]) for i in info)
+        if not ok:
+            log.warning("blocked url: %s resolves to an internal address", host[:90])
+    except (socket.gaierror, asyncio.TimeoutError, OSError, UnicodeError) as exc:
+        ok = bool(proxy)
+        if not ok:
+            log.warning("blocked url: dns lookup failed for %s (%s) and no proxy is set",
+                        host[:90], exc)
+    if len(_dns_cache) >= _DNS_CACHE_MAX:
+        _dns_cache.clear()          # کشِ کوچک و بی‌اهمیت — پاکسازیِ ساده کافی است
+    _dns_cache[host] = (now + _DNS_TTL, ok)
+    return ok
+
+
+def _safe_resolver():
+    """رزولورِ aiohttp که آدرسِ داخلی را سرِ **اتصال** رد می‌کند.
+
+    چرا رزولور و نه یک چکِ جدا: بینِ «چک کردیم» تا «وصل شدیم» پنجرهٔ TOCTOU هست
+    (DNS rebinding — همان نام بارِ دوم IPِ دیگری بدهد). وقتی خودِ aiohttp با این
+    رزولور وصل می‌شود، آدرسی که واقعاً به آن وصل می‌شویم همان است که وتو شده، و هر
+    پرشِ ریدایرکت هم خودکار پوشش داده می‌شود.
+
+    **نکته‌ای که باید بماند:** وقتی `proxy=` ست باشد، aiohttp نامِ *پروکسی* را حل
+    می‌کند نه مقصد را — مقصد را پروکسی حل می‌کند و ما اصلاً نمی‌بینیمش. این آگاهانه
+    پذیرفته است: پروکسیِ خروجیِ ادمین بیرونِ شبکهٔ داخلیِ مستر است، پس مسیرِ حمله
+    به شبکهٔ داخلی از آن‌جا باز نمی‌شود. به همین دلیل `_direct_connector` وقتی
+    پروکسی در کار است این رزولور را **اصلاً وصل نمی‌کند** — ببین آن‌جا.
+    """
+    import aiohttp
+
+    class SafeResolver(aiohttp.DefaultResolver):
+        async def resolve(self, host, port=0, family=socket.AF_INET):
+            hosts = await super().resolve(host, port, family)
+            if any(_addr_is_internal(h["host"]) for h in hosts):
+                raise OSError(f"blocked url: {host[:90]} resolves to an internal address")
+            return hosts
+
+    return SafeResolver()
+
+
+def _direct_connector(opts: dict):
+    """کانکتورِ سشنِ موتورِ `direct`.
+
+    بدونِ پروکسی: رزولورِ وتوکننده وصل می‌شود (بستنِ پنجرهٔ TOCTOU).
+
+    با پروکسیِ http(s): **بدونِ** آن رزولور. چون aiohttp در حالتِ پروکسی نامِ
+    *پروکسی* را حل می‌کند نه مقصد را، رزولور هیچ حفاظتی از مقصد نمی‌دهد و فقط
+    می‌تواند خودِ پروکسی را بشکند — یک `PROXY_URL` مثلِ `http://squid:3128`
+    (نامِ سرویسِ داکر) به IPِ ۱۷۲٫x حل می‌شود و «داخلی» شمرده می‌شد. مقصد در این
+    حالت با درِ ورودیِ `is_safe_url_resolved` گیت می‌خورد، که خودش با پروکسی
+    fail-open است — همان‌جا هم توضیح داده شده.
+
+    با پروکسیِ socks: رزولور **می‌ماند**، و دلیلش خودِ aiohttp نیست بلکه
+    `_http_proxy` است. aiohttp به مستقیم برنمی‌گردد — `socks5://h:1080` را مثلِ
+    آدرسِ یک پروکسیِ HTTP می‌گیرد و به همان host:port تلاشِ CONNECT می‌کند
+    (`ClientProxyConnectionError`). به همین دلیل `_http_proxy` پروکسیِ غیرِhttp(s)
+    را دور می‌ریزد و ما `proxy=None` پاس می‌دهیم؛ یعنی موتورِ `direct` واقعاً
+    اتصالِ **مستقیم** می‌زند و رزولور دقیقاً همان چیزی است که لازم است.
+    عوارضِ جانبیِ (از پیش موجودِ) این تصمیم: با `PROXY_URL`ی که فقط socks است،
+    موتورِ `direct` از پروکسی رد نمی‌شود و از IPِ خودِ مستر بیرون می‌رود —
+    yt-dlp/gallery-dl که `--proxy` می‌گیرند از آن استفاده می‌کنند.
+    """
+    import aiohttp
+    if _http_proxy(opts.get("proxy")):
+        return aiohttp.TCPConnector()
+    return aiohttp.TCPConnector(resolver=_safe_resolver())
 
 
 def _writable_cookie(cookie_path: str | None) -> str | None:
@@ -253,8 +388,31 @@ def _est_mb(fmt: dict, duration: float | None) -> float | None:
 _TARGET_HEIGHTS = (2160, 1440, 1080, 720, 480, 360)
 
 
+# فیلدهایی که فیلترِ محتوای بزرگسال (`safety.check_meta`) می‌خوانَد. تا دیروز
+# `normalize_probe` هیچ‌کدام را حمل نمی‌کرد، پس در فازِ probe شرطِ `age_limit>=18`
+# — که ارزان‌ترین و قوی‌ترین سیگنالِ ماست — **هرگز** شلیک نمی‌کرد و لایهٔ ۲ عملاً
+# به تطبیقِ کلیدواژه روی «عنوان» تقلیل پیدا می‌کرد.
+_META_LIMITS = {"description": 2000, "tags": 40, "categories": 20}
+
+
+def _carry_meta(data: dict) -> dict:
+    """فیلدهای موردِ نیازِ `safety.check_meta` را (با سقفِ اندازه) از ‎-J بردار."""
+    out: dict = {}
+    for key in ("age_limit", "uploader", "channel"):
+        if data.get(key) is not None:
+            out[key] = data[key]
+    desc = data.get("description")
+    if desc:
+        out["description"] = str(desc)[:_META_LIMITS["description"]]
+    for key in ("tags", "categories"):
+        val = data.get(key)
+        if isinstance(val, (list, tuple)) and val:
+            out[key] = [str(v) for v in val[:_META_LIMITS[key]]]
+    return out
+
+
 def normalize_probe(data: dict) -> dict:
-    """خروجیِ ‎-J را به {title, duration, kind, options[]} تمیز می‌کند."""
+    """خروجیِ ‎-J را به {title, duration, kind, options[], + متادیتای ایمنی} تمیز می‌کند."""
     duration = data.get("duration")
     formats = data.get("formats") or []
     # بیشترین tbr ویدیویی به‌ازای هر ارتفاع + یک صوتِ نماینده (برای تخمینِ merge)
@@ -280,6 +438,7 @@ def normalize_probe(data: dict) -> dict:
         "kind": "audio" if data.get("vcodec") in (None, "none") and not data.get("height") else "video",
         "thumbnail": data.get("thumbnail"),
         "options": options,
+        **_carry_meta(data),
     }
 
 
@@ -345,11 +504,21 @@ def _selector_to_format(sel: str) -> str:
 _FORMAT_SORT = "res,vcodec:h264,acodec:aac,ext:mp4:m4a"
 
 
-async def _run_dl(cmd: list[str], progress=None, cancel=None, timeout: float = 3000) -> None:
-    """اجرای yt-dlp/gallery-dl با خواندنِ درصد از stdout و چکِ لغو."""
+_OUT_TAIL_LINES = 40       # چند خطِ آخرِ stdout نگه داشته شود (تشخیص، نه لاگ)
+# پیامِ خودِ yt-dlp وقتی `--match-filter` ویدیو را رد می‌کند. متنِ کامل بین نسخه‌ها
+# فرق می‌کند (با/بدونِ پرانتزِ عبارتِ فیلتر)، ولی این تکه ثابت مانده است.
+_MATCH_FILTER_MARK = "does not pass filter"
+
+
+async def _run_dl(cmd: list[str], progress=None, cancel=None, timeout: float = 3000) -> str:
+    """اجرای yt-dlp/gallery-dl با خواندنِ درصد از stdout و چکِ لغو.
+
+    برمی‌گرداند: دُمِ کراندارِ stdout (فراخوان‌هایی که لازم ندارند نادیده‌اش می‌گیرند).
+    """
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     err_chunks: list[bytes] = []
+    out_tail: list[str] = []       # دُمِ کراندارِ stdout (برای تشخیصِ ردِ match-filter)
     cancelled = False
 
     async def _drain_err() -> None:
@@ -360,6 +529,10 @@ async def _run_dl(cmd: list[str], progress=None, cancel=None, timeout: float = 3
         nonlocal cancelled
         async for raw in proc.stdout:  # type: ignore[union-attr]
             line = raw.decode("utf-8", "ignore").strip()
+            if line and not line.startswith("dl:"):
+                out_tail.append(line[:300])
+                if len(out_tail) > _OUT_TAIL_LINES:
+                    del out_tail[0]
             if line.startswith("dl:") and progress is not None:
                 m = re.search(r"([\d.]+)%", line)
                 if m:
@@ -386,7 +559,14 @@ async def _run_dl(cmd: list[str], progress=None, cancel=None, timeout: float = 3
     if cancelled:
         raise ProcessingCancelled()
     if proc.returncode != 0:
-        raise RuntimeError("download failed: " + (_stderr_summary(b"".join(err_chunks)) or "unknown"))
+        # دُمِ stdout روی خودِ استثنا سوار می‌شود (نه در متنِ پیام): متنِ خطای کاربر
+        # عوض نمی‌شود، ولی فراخوان می‌تواند بفهمد yt-dlp چه گفته — مثلِ ردِ
+        # match-filter که بسته به نسخه، هم با خروجیِ صفر می‌آید هم با ناصفر.
+        exc = RuntimeError("download failed: "
+                           + (_stderr_summary(b"".join(err_chunks)) or "unknown"))
+        exc.stdout_tail = "\n".join(out_tail)  # type: ignore[attr-defined]
+        raise exc
+    return "\n".join(out_tail)
 
 
 def _newest(workdir: str, exts: tuple[str, ...] | None = None) -> str | None:
@@ -478,9 +658,23 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
         cmd += ["--write-subs", "--write-auto-subs", "--sub-langs", "en.*,fa.*", "--embed-subs"]
     if opts.get("max_mb"):
         cmd += ["--max-filesize", f"{int(opts['max_mb'])}M"]
+    if opts.get("max_age_limit"):
+        # گیتِ سنیِ پیش‌از‌دانلود، روی **همان** فراخوانی: yt-dlp بعد از استخراج و
+        # قبل از کشیدنِ بایت‌های رسانه رد می‌کند → صفر رفت‌وبرگشتِ اضافه، صفر مصرفِ
+        # اضافه از سهمیهٔ اکانت.
+        # `<?` و نه `<`: مقایسهٔ عددیِ ساده روی فیلدِ **غایب** در yt-dlp False می‌دهد،
+        # یعنی `age_limit<18` هر ویدیویی را که extractor برایش age_limit ست نکرده
+        # (اکثریتِ قاطع) رد می‌کرد. `<?` غیبت را «قبول» معنی می‌کند.
+        cmd += ["--match-filter", f"age_limit<?{int(opts['max_age_limit'])}"]
     cmd += [*_common_flags(opts), url]
     try:
-        await _run_dl(cmd, progress=progress, cancel=cancel, timeout=opts.get("timeout", 3000))
+        out_tail = await _run_dl(cmd, progress=progress, cancel=cancel,
+                                 timeout=opts.get("timeout", 3000))
+    except RuntimeError as exc:
+        if opts.get("max_age_limit") and _MATCH_FILTER_MARK in (
+                getattr(exc, "stdout_tail", "") + str(exc)).lower():
+            raise AgeRestricted() from None
+        raise
     finally:
         _cleanup_cookie(ck)
 
@@ -493,6 +687,10 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
         # هر رسانه‌ای که تولید شده را بردار تا «produced no file» بی‌خود رخ ندهد.
         path = _newest(workdir, _MEDIA_EXTS)
     if not path:
+        # فایلی نیست و yt-dlp گفت «رد شد» → گیتِ سنی، نه شکستِ دانلود. (بسته به
+        # نسخه، ردِ match-filter با کدِ خروجیِ صفر هم می‌آید و اینجا می‌نشیند.)
+        if opts.get("max_age_limit") and _MATCH_FILTER_MARK in out_tail.lower():
+            raise AgeRestricted()
         raise RuntimeError("download produced no file")
     thumb = _newest(workdir, (".jpg", ".jpeg"))
     info = {}
@@ -704,6 +902,15 @@ class DirectTooLarge(Exception):
         self.size, self.cap_bytes = size, cap_bytes
 
 
+class AgeRestricted(Exception):
+    """خودِ yt-dlp با `--match-filter` رد کرد: محتوا سنی است.
+
+    این رد **بعد از استخراج و قبل از کشیدنِ بایت‌های رسانه** رخ می‌دهد، پس نه
+    رفت‌وبرگشتِ اضافه‌ای دارد و نه یک مصرفِ اضافه از سهمیهٔ اکانتِ کوکی (گران‌ترین
+    منبعِ ما). چرخشِ اکانت هم برایش بی‌معنی است — اکانتِ دیگر همین را می‌گیرد.
+    """
+
+
 _DIRECT_HOPS = 5           # سقفِ ریدایرکت (هر پرش دوباره SSRF-چک می‌شود)
 _DIRECT_CHUNK = 256 * 1024
 # نوعِ محتواهایی که «صفحه/فید» هستند نه فایل → همان مسیرِ قبلی (yt-dlp)
@@ -790,6 +997,9 @@ async def _follow(sess, method: str, url: str, proxy: str | None):
 
     aiohttp با allow_redirects خودش پرش‌ها را نشان نمی‌دهد، و یک ریدایرکت به
     ۱۶۹٫۲۵۴٫۱۶۹٫۲۵۴ دقیقاً همان چیزی است که is_safe_url جلویش را می‌گیرد.
+
+    این چکِ نحوی پیش‌فیلترِ ارزان است؛ حرفِ آخر با `_safe_resolver()` روی کانکتورِ
+    سشن است که هنگامِ **اتصال** وتو می‌کند (پس نامِ دامنه و rebinding را هم می‌گیرد).
     """
     for _ in range(_DIRECT_HOPS):
         if not is_safe_url(url):
@@ -814,8 +1024,8 @@ async def probe_direct(url: str, opts: dict | None = None) -> dict | None:
     opts = opts or {}
     try:
         timeout = aiohttp.ClientTimeout(total=15)   # HEAD است؛ بیش از این یعنی سرور نمی‌دهد
-        async with aiohttp.ClientSession(headers=_direct_headers(opts),
-                                         timeout=timeout) as sess:
+        async with aiohttp.ClientSession(headers=_direct_headers(opts), timeout=timeout,
+                                         connector=_direct_connector(opts)) as sess:
             resp = await _follow(sess, "HEAD", url, _http_proxy(opts.get("proxy")))
             try:
                 if resp.status >= 400:
@@ -853,7 +1063,8 @@ async def download_direct(url: str, workdir: str, opts: dict | None = None,
     opts = opts or {}
     os.makedirs(workdir, exist_ok=True)
     timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=120)
-    async with aiohttp.ClientSession(headers=_direct_headers(opts), timeout=timeout) as sess:
+    async with aiohttp.ClientSession(headers=_direct_headers(opts), timeout=timeout,
+                                     connector=_direct_connector(opts)) as sess:
         resp = await _follow(sess, "GET", url, _http_proxy(opts.get("proxy")))
         try:
             if resp.status >= 400:

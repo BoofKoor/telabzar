@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import zipfile
 
@@ -399,8 +400,20 @@ async def normalize_audio(inp: str, out: str, progress=None, duration=None, canc
         raise RuntimeError("normalize produced no output")
 
 
+SPEED_MIN, SPEED_MAX = 0.25, 4.0
+
+
 def _atempo_chain(rate: float) -> str:
-    """atempo فقط ۰٫۵–۲٫۰ را می‌پذیرد؛ برای خارج از بازه زنجیره می‌سازد."""
+    """atempo فقط ۰٫۵–۲٫۰ را می‌پذیرد؛ برای خارج از بازه زنجیره می‌سازد.
+
+    اعتبارسنجیِ بازه اینجا **اجباری** است، نه محضِ ادب: هر دو حلقهٔ زیر روی ورودیِ
+    نامعتبر واگرا می‌شوند (`rate=0` → `0/0.5 = 0` تا ابد؛ منفی → `-1,-2,-4,…`؛
+    `inf` → `inf/2 = inf`) و چون این تابع **همگام** است و قبل از هر `await` صدا زده
+    می‌شود، `job_timeout`ِ ARQ (که asyncio-محور است) نمی‌تواند شلیک کند — یعنی کلِ
+    پروسهٔ ورکر قفل می‌شود و `parts` تا OOM رشد می‌کند.
+    """
+    if not math.isfinite(rate) or not (SPEED_MIN <= rate <= SPEED_MAX):
+        raise ValueError(f"speed rate out of range ({SPEED_MIN}–{SPEED_MAX}): {rate}")
     parts: list[str] = []
     r = rate
     while r > 2.0:

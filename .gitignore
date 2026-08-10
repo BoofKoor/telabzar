@@ -33,3 +33,6 @@ cookies/*
 # آرتیفکت‌های رندرِ تست (اسکرین‌شات/HTML موقت در ریشه)
 /*_page.html
 /*_shot.png
+
+# pytest
+.pytest_cache/
