@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import weakref
 from datetime import datetime, timezone
 from html import escape
 
@@ -17,7 +18,7 @@ from .. import nodes, settings_store
 from ..cards import card_caption, meta_editor_view, set_card_note, update_card
 from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Spd, Tr, Wm
 from ..config import settings
-from ..crud import get_file_by_ref
+from ..crud import get_file_by_ref, get_owned_job
 from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
@@ -41,12 +42,20 @@ _FILE_F = (
 
 # قفلِ هر-چت برای جمع‌کردن: آپدیت‌های آلبوم همزمان پردازش می‌شوند
 # (aiogram با task)، و بدونِ قفل، read-modify-writeِ لیستِ اعضا دچارِ رقابت می‌شود.
-_collect_locks: dict[int, asyncio.Lock] = {}
+# ارجاعِ **ضعیف** عمدی است: با dictِ معمولی هر چتی که یک‌بار جمع‌کردن را استفاده
+# کند تا ابد یک Lock در حافظهٔ پروسه جا می‌گذاشت، و این پروسه ماه‌ها بالاست.
+# با WeakValueDictionary قفل دقیقاً تا وقتی زنده می‌ماند که کسی نگهش داشته باشد.
+# چرا امن است: هر استفاده‌کننده‌ای که واقعاً در حالِ رقابت است، به‌ضرورت ارجاعِ
+# قوی روی پشته دارد (`async with _collect_lock(...)` تا پایانِ بلوک نگهش می‌دارد)،
+# پس دو کارِ هم‌زمان همیشه **همان** شیء را می‌گیرند. اگر ورودی پاک شود یعنی
+# هیچ‌کس قفل را نداشته، و آن‌وقت ساختنِ قفلِ تازه هیچ رقابتی را از دست نمی‌دهد.
+_collect_locks: "weakref.WeakValueDictionary[int, asyncio.Lock]" = weakref.WeakValueDictionary()
 
 
 def _collect_lock(chat_id: int) -> asyncio.Lock:
     lock = _collect_locks.get(chat_id)
     if lock is None:
+        # بینِ get و انتساب هیچ awaitی نیست، پس در asyncio اتمی است.
         lock = _collect_locks[chat_id] = asyncio.Lock()
     return lock
 
@@ -225,7 +234,7 @@ async def _start(cq: CallbackQuery, file, lang, arq_pool, session, op, args, use
 @router.callback_query(Act.filter(F.op == "compress"))
 async def op_compress(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
                       arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -251,7 +260,7 @@ async def op_compress(cq: CallbackQuery, callback_data: Act, session: AsyncSessi
 @router.callback_query(Cmp.filter())
 async def op_compress_pick(cq: CallbackQuery, callback_data: Cmp, session: AsyncSession, lang: str,
                            arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -274,7 +283,7 @@ async def op_compress_pick(cq: CallbackQuery, callback_data: Cmp, session: Async
 @router.callback_query(Act.filter(F.op == "scan"))
 async def op_scan(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
                   arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -325,7 +334,7 @@ def _parse_range(s: str) -> tuple[float, float] | None:
 @router.callback_query(Act.filter(F.op.in_(_DIRECT_OPS)))
 async def op_direct(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
                     arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -343,7 +352,7 @@ _IMG_OPS = {"ocr", "enhance", "bg_remove"}
 @router.callback_query(Act.filter(F.op.in_(_IMG_OPS)))
 async def op_image_direct(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
                           arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -358,8 +367,8 @@ async def op_image_direct(cq: CallbackQuery, callback_data: Act, session: AsyncS
 
 # ── تغییرِ اندازهٔ تصویر: منو → انتخاب ──────────────────────────
 @router.callback_query(Act.filter(F.op == "resize"))
-async def op_resize(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_resize(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -379,7 +388,7 @@ async def op_resize(cq: CallbackQuery, callback_data: Act, session: AsyncSession
 @router.callback_query(Rsz.filter())
 async def op_resize_pick(cq: CallbackQuery, callback_data: Rsz, session: AsyncSession, lang: str,
                          arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -391,8 +400,8 @@ async def op_resize_pick(cq: CallbackQuery, callback_data: Rsz, session: AsyncSe
 
 # ── چرخش/آینهٔ تصویر: منو → انتخاب ──────────────────────────────
 @router.callback_query(Act.filter(F.op == "rotate"))
-async def op_rotate(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_rotate(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -412,7 +421,7 @@ async def op_rotate(cq: CallbackQuery, callback_data: Act, session: AsyncSession
 @router.callback_query(Rot.filter())
 async def op_rotate_pick(cq: CallbackQuery, callback_data: Rot, session: AsyncSession, lang: str,
                          arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -425,8 +434,8 @@ async def op_rotate_pick(cq: CallbackQuery, callback_data: Rot, session: AsyncSe
 # ── عکس‌ها به PDF: شروع (جمع‌آوریِ چند تصویر) ───────────────────
 @router.callback_query(Act.filter(F.op == "img_pdf"))
 async def op_img_pdf_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
-                           lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                           lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -438,8 +447,8 @@ async def op_img_pdf_start(cq: CallbackQuery, callback_data: Act, session: Async
 
 # ── تبدیلِ فرمت: منو ────────────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "convert"))
-async def op_convert_menu(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_convert_menu(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -460,7 +469,7 @@ async def op_convert_menu(cq: CallbackQuery, callback_data: Act, session: AsyncS
 @router.callback_query(Conv.filter())
 async def op_convert_pick(cq: CallbackQuery, callback_data: Conv, session: AsyncSession, lang: str,
                           arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -472,8 +481,8 @@ async def op_convert_pick(cq: CallbackQuery, callback_data: Conv, session: Async
 
 # ── بازگشت به منوی اصلیِ کارت ───────────────────────────────────
 @router.callback_query(Act.filter(F.op == "menu"))
-async def op_back(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_back(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is not None and isinstance(cq.message, Message):
         await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang, keyboard=True)
     await cq.answer()
@@ -481,9 +490,9 @@ async def op_back(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
 
 # ── لغو (وسطِ تغییرِ نام) ───────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "cancel"))
-async def op_cancel(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, state: FSMContext) -> None:
+async def op_cancel(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, state: FSMContext, user: User | None) -> None:
     await state.clear()
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is not None and isinstance(cq.message, Message):
         await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang, keyboard=True)
     await cq.answer()
@@ -491,8 +500,8 @@ async def op_cancel(cq: CallbackQuery, callback_data: Act, session: AsyncSession
 
 # ── تغییرِ نام (FSM) ───────────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "rename"))
-async def op_rename_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_rename_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -514,7 +523,7 @@ async def op_rename_recv(message: Message, state: FSMContext, session: AsyncSess
     data = await state.get_data()
     await state.clear()
     new_name = (message.text or "").strip()
-    file = await get_file_by_ref(session, data.get("ref", ""))
+    file = await get_file_by_ref(session, data.get("ref", ""), user)
     card_chat = data.get("card_chat")
     card_mid = data.get("card_mid")
     if file is None or card_chat is None:
@@ -550,8 +559,8 @@ async def _collect_start(cq: CallbackQuery, file, lang: str, state: FSMContext, 
 # ── زیپِ چندفایلی: شروع ─────────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "zip"))
 async def op_zip_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
-                       lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                       lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -561,8 +570,8 @@ async def op_zip_start(cq: CallbackQuery, callback_data: Act, session: AsyncSess
 # ── ادغامِ PDF: شروع ────────────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "merge"))
 async def op_merge_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
-                         lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                         lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -575,8 +584,8 @@ async def op_merge_start(cq: CallbackQuery, callback_data: Act, session: AsyncSe
 # ── چسباندنِ ویدیو (concat): شروع ───────────────────────────────
 @router.callback_query(Act.filter(F.op == "vjoin"))
 async def op_vjoin_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
-                         lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                         lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -588,7 +597,7 @@ async def op_vjoin_start(cq: CallbackQuery, callback_data: Act, session: AsyncSe
 
 # ── جمع‌کردن: دریافتِ فایل‌های بعدی ─────────────────────────────
 @router.message(Collect.collecting, _FILE_F)
-async def collect_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str) -> None:
+async def collect_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str, user: User | None) -> None:
     info = detect(message)
     try:
         await message.delete()  # آپلود را پاک کن تا چت تمیز و کارت پایین بماند
@@ -601,7 +610,7 @@ async def collect_recv(message: Message, state: FSMContext, session: AsyncSessio
     card_chat, card_mid, ref = data.get("card_chat"), data.get("card_mid"), data.get("ref", "")
     if card_chat is None:
         return
-    file = await get_file_by_ref(session, ref)
+    file = await get_file_by_ref(session, ref, user)
     if file is None:
         return
     # هدف‌های نوع‌مقید (ادغامِ PDF → فقط PDF · عکس‌ها به PDF → فقط تصویر · چسباندن → فقط ویدیو)
@@ -652,7 +661,7 @@ async def op_collect_go(cq: CallbackQuery, callback_data: Act, session: AsyncSes
     members = list(data.get("members", []))
     purpose = data.get("purpose", "zip")
     await state.clear()
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -682,8 +691,8 @@ async def op_collect_go(cq: CallbackQuery, callback_data: Act, session: AsyncSes
 # ── ویرایشِ متادیتای صوت: منوی فیلدها (+ خواندنِ اطلاعاتِ فعلی) ──
 @router.callback_query(Act.filter(F.op == "meta"))
 async def op_meta_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
-                        lang: str, state: FSMContext, arq_pool: ArqRedis) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                        lang: str, state: FSMContext, arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -704,8 +713,8 @@ async def op_meta_start(cq: CallbackQuery, callback_data: Act, session: AsyncSes
 # ── ویرایشِ متادیتا: انتخابِ فیلد → درخواستِ مقدار/عکس ─────────
 @router.callback_query(Meta.filter())
 async def op_meta_field(cq: CallbackQuery, callback_data: Meta, session: AsyncSession,
-                        lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                        lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -726,8 +735,8 @@ async def op_meta_field(cq: CallbackQuery, callback_data: Meta, session: AsyncSe
 
 
 async def _meta_refresh(message: Message, ref: str, card_chat, card_mid,
-                        session: AsyncSession, lang: str, pending: dict) -> None:
-    file = await get_file_by_ref(session, ref)
+                        session: AsyncSession, lang: str, pending: dict, user: User | None) -> None:
+    file = await get_file_by_ref(session, ref, user)
     if file is None or card_chat is None:
         return
     caption, kb = meta_editor_view(file, lang, pending)
@@ -739,7 +748,7 @@ async def _meta_refresh(message: Message, ref: str, card_chat, card_mid,
 
 # ── ویرایشِ متادیتا: دریافتِ مقدارِ متنی ───────────────────────
 @router.message(MetaEdit.waiting_value, F.text)
-async def op_meta_value(message: Message, state: FSMContext, session: AsyncSession, lang: str) -> None:
+async def op_meta_value(message: Message, state: FSMContext, session: AsyncSession, lang: str, user: User | None) -> None:
     data = await state.get_data()
     field = data.get("field")
     pending = dict(data.get("pending", {}))
@@ -753,12 +762,12 @@ async def op_meta_value(message: Message, state: FSMContext, session: AsyncSessi
     await state.update_data(pending=pending)
     await state.set_state(MetaEdit.choosing)
     await _meta_refresh(message, data.get("ref", ""), data.get("card_chat"), data.get("card_mid"),
-                        session, lang, pending)
+                        session, lang, pending, user)
 
 
 # ── ویرایشِ متادیتا: دریافتِ عکسِ کاور ─────────────────────────
 @router.message(MetaEdit.waiting_cover)
-async def op_meta_cover(message: Message, state: FSMContext, session: AsyncSession, lang: str) -> None:
+async def op_meta_cover(message: Message, state: FSMContext, session: AsyncSession, lang: str, user: User | None) -> None:
     if not message.photo:  # فقط عکس؛ بقیه را پاک کن و منتظر بمان
         try:
             await message.delete()
@@ -775,7 +784,7 @@ async def op_meta_cover(message: Message, state: FSMContext, session: AsyncSessi
     await state.update_data(pending=pending)
     await state.set_state(MetaEdit.choosing)
     await _meta_refresh(message, data.get("ref", ""), data.get("card_chat"), data.get("card_mid"),
-                        session, lang, pending)
+                        session, lang, pending, user)
 
 
 # ── ویرایشِ متادیتا: اعمال ─────────────────────────────────────
@@ -785,7 +794,7 @@ async def op_meta_apply(cq: CallbackQuery, callback_data: Act, session: AsyncSes
     data = await state.get_data()
     pending = dict(data.get("pending", {}))
     await state.clear()
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -808,8 +817,8 @@ async def op_meta_apply(cq: CallbackQuery, callback_data: Act, session: AsyncSes
 
 # ── صوتِ عمیق: رونویسی / نرمال‌سازی / سرعت ──────────────────────
 @router.callback_query(Act.filter(F.op == "transcribe"))
-async def op_transcribe(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_transcribe(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -829,7 +838,7 @@ async def op_transcribe(cq: CallbackQuery, callback_data: Act, session: AsyncSes
 @router.callback_query(Tr.filter())
 async def op_transcribe_pick(cq: CallbackQuery, callback_data: Tr, session: AsyncSession, lang: str,
                              arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -842,7 +851,7 @@ async def op_transcribe_pick(cq: CallbackQuery, callback_data: Tr, session: Asyn
 @router.callback_query(Act.filter(F.op == "normalize"))
 async def op_normalize(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
                        arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -856,8 +865,8 @@ async def op_normalize(cq: CallbackQuery, callback_data: Act, session: AsyncSess
 
 
 @router.callback_query(Act.filter(F.op == "speed"))
-async def op_speed(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_speed(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -877,7 +886,7 @@ async def op_speed(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
 @router.callback_query(Spd.filter())
 async def op_speed_pick(cq: CallbackQuery, callback_data: Spd, session: AsyncSession, lang: str,
                         arq_pool: ArqRedis, user: User | None) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -892,8 +901,8 @@ async def op_speed_pick(cq: CallbackQuery, callback_data: Spd, session: AsyncSes
 
 # ── لینکِ دانلود/استریم: زیرمنوی درجا ───────────────────────────
 @router.callback_query(Act.filter(F.op == "link"))
-async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -918,8 +927,8 @@ async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
 # ── ست‌کردنِ کاورِ ویدیو (FSM؛ درجا با editMessageMedia) ─────────
 @router.callback_query(Act.filter(F.op == "cover"))
 async def op_cover_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
-                         lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                         lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -939,7 +948,7 @@ async def op_cover_start(cq: CallbackQuery, callback_data: Act, session: AsyncSe
 
 
 @router.message(SetCover.waiting)
-async def op_cover_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str) -> None:
+async def op_cover_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str, user: User | None) -> None:
     if not message.photo:  # فقط عکس؛ بقیه را پاک کن و منتظر بمان
         try:
             await message.delete()
@@ -954,7 +963,7 @@ async def op_cover_recv(message: Message, state: FSMContext, session: AsyncSessi
         await message.delete()
     except Exception:  # noqa: BLE001
         pass
-    file = await get_file_by_ref(session, ref)
+    file = await get_file_by_ref(session, ref, user)
     if file is None or card_chat is None:
         return
     file.cover_id = cover_fid
@@ -968,8 +977,8 @@ async def op_cover_recv(message: Message, state: FSMContext, session: AsyncSessi
 
 # ── واترمارک: انتخابِ موقعیت ────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "watermark"))
-async def op_watermark_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_watermark_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -986,8 +995,8 @@ async def op_watermark_start(cq: CallbackQuery, callback_data: Act, session: Asy
 
 @router.callback_query(Wm.filter())
 async def op_watermark_pos(cq: CallbackQuery, callback_data: Wm, session: AsyncSession,
-                           lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                           lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -1022,7 +1031,7 @@ async def op_watermark_recv(message: Message, state: FSMContext, session: AsyncS
     except Exception:  # noqa: BLE001
         pass
     await state.clear()
-    file = await get_file_by_ref(session, ref)
+    file = await get_file_by_ref(session, ref, user)
     if file is None or card_chat is None:
         return
     if user is not None:
@@ -1036,8 +1045,8 @@ async def op_watermark_recv(message: Message, state: FSMContext, session: AsyncS
 # ── برش: دریافتِ بازه ───────────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "trim"))
 async def op_trim_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
-                        lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                        lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -1064,7 +1073,7 @@ async def op_trim_recv(message: Message, state: FSMContext, session: AsyncSessio
         await message.delete()
     except Exception:  # noqa: BLE001
         pass
-    file = await get_file_by_ref(session, ref)
+    file = await get_file_by_ref(session, ref, user)
     if file is None or card_chat is None:
         return
     if rng is None:  # نامعتبر → همان‌جا بمان و دوباره بپرس
@@ -1084,8 +1093,8 @@ async def op_trim_recv(message: Message, state: FSMContext, session: AsyncSessio
 # ── اسکرین‌شات: دریافتِ لحظه ────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "screenshot"))
 async def op_screenshot_start(cq: CallbackQuery, callback_data: Act, session: AsyncSession,
-                              lang: str, state: FSMContext) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+                              lang: str, state: FSMContext, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
@@ -1112,7 +1121,7 @@ async def op_screenshot_recv(message: Message, state: FSMContext, session: Async
         await message.delete()
     except Exception:  # noqa: BLE001
         pass
-    file = await get_file_by_ref(session, ref)
+    file = await get_file_by_ref(session, ref, user)
     if file is None or card_chat is None:
         return
     if ts is None:
@@ -1130,9 +1139,17 @@ async def op_screenshot_recv(message: Message, state: FSMContext, session: Async
 
 # ── لغوِ جابِ در حالِ اجرا ──────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "canceljob"))
-async def op_cancel_job(cq: CallbackQuery, callback_data: Act, arq_pool: ArqRedis, lang: str) -> None:
+async def op_cancel_job(cq: CallbackQuery, callback_data: Act, arq_pool: ArqRedis, lang: str,
+                        session: AsyncSession, user: User | None) -> None:
+    """لغوِ جاب — فقط جابِ خودِ کاربر.
+
+    برخلافِ `ref` که هشت کاراکترِ تصادفی است، `Job.id` عددِ **ترتیبی** است، پس
+    این تنها جای مسیرِ opها بود که برای دست‌زدن به کارِ کاربرِ دیگر هیچ حدسی لازم
+    نداشت: شمردنِ ۱،۲،۳… کافی بود. مالکیت از رویِ `Job.file_id → File.owner_id`
+    سنجیده می‌شود.
+    """
     job_id = callback_data.ref
-    if job_id.isdigit():
+    if job_id.isdigit() and await get_owned_job(session, int(job_id), user):
         try:
             await arq_pool.set(f"cancel:{job_id}", "1", ex=1200)
         except Exception:  # noqa: BLE001
@@ -1153,8 +1170,8 @@ async def op_close(cq: CallbackQuery, lang: str) -> None:
 
 # ── جمع‌کردنِ منو (فایلِ لینک): فقط منو بسته می‌شود، فایل می‌ماند ──
 @router.callback_query(Act.filter(F.op == "collapse"))
-async def op_collapse(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str) -> None:
-    file = await get_file_by_ref(session, callback_data.ref)
+async def op_collapse(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
     if file is not None and isinstance(cq.message, Message):
         # جمع‌شده = کپشنِ اصلیِ پست در بلاک‌کوتِ بسته + فقط دکمهٔ «نمایش آپشن‌ها»
         await set_card_note(cq.message.bot, cq.message.chat.id, cq.message.message_id, file, lang,

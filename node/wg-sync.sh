@@ -22,9 +22,12 @@ PORT=$(env_get ADMIN_HTTPS_PORT); PORT="${PORT:-2083}"
 # پنل روی هاست منتشر شده (TLS یا http)؛ اول https با -k، بعد http.
 # -k لازم است: گواهیِ پنل برای دامنهٔ عمومی است نه 127.0.0.1، پس بدونِ آن تأییدِ TLS
 # می‌شکند و wg-sync هیچ‌وقت peerها را نمی‌گیرد → نود آفلاین می‌ماند.
-fetch(){ curl -fsSk --max-time 8 "$1" 2>/dev/null; }
-PEERS=$(fetch "https://127.0.0.1:${PORT}/node/peers?key=${SECRET}" ) \
-  || PEERS=$(fetch "http://127.0.0.1:${PORT}/node/peers?key=${SECRET}") \
+# راز در **هدر** می‌رود نه در query string: پارامترِ URL در لاگِ دسترسیِ پنل و هر
+# پروکسیِ میانی ثبت می‌شود، هدر نه. سمتِ سرور (`admin_web.node_peers`) دیگر
+# `?key=` را نمی‌پذیرد، پس این دو باید با هم عوض شوند.
+fetch(){ curl -fsSk --max-time 8 -H "X-Node-Key: ${SECRET}" "$1" 2>/dev/null; }
+PEERS=$(fetch "https://127.0.0.1:${PORT}/node/peers") \
+  || PEERS=$(fetch "http://127.0.0.1:${PORT}/node/peers") \
   || { echo "wg-sync: پنل در دسترس نیست (127.0.0.1:${PORT})"; exit 0; }
 
 # پاسخِ نامعتبر (مثلِ 403 که با -f نمی‌آید، ولی محضِ احتیاط) → کاری نکن
