@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# یک اجرا برای هر شاخه؛ pushِ جدید اجرای قبلی را لغو می‌کند.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ۳.۱۲ چون ایمیج‌های اجرایی روی همین‌اند (`docker/*.Dockerfile`: python:3.12-slim).
+      # عمداً بدونِ ماتریسِ چندنسخه‌ای — هدف، همان محیطِ تولید است نه پوششِ نسخه‌ها.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      # محیط از صفر ساخته می‌شود: هیچ پکیجِ سیستمیِ از پیش‌نصب‌شده‌ای در کار نیست.
+      # (روی یک ماشینِ دبیانی، `cryptography`ِ سیستمی که `_cffi_backend` نداشت سرِ
+      # collect کلِ suite را می‌شکست — روی رانرِ تمیز اصلاً نصب نمی‌شود و PyJWT
+      # با has_crypto=False درست کار می‌کند.)
+      - name: install dev requirements
+        run: pip install -r requirements-dev.txt
+
+      # ffmpeg عمداً نصب **نمی‌شود**. تستِ نیازمندِ ffmpeg با `@pytest.mark.ffmpeg`
+      # علامت می‌خورد و `conftest.pytest_runtest_setup` در نبودش skip می‌کند — ولی
+      # امروز هیچ تستی این مارکر را ندارد، پس این قلاب فعلاً از چیزی محافظت نمی‌کند.
+      # تا وقتی فاز ۲ب تست‌های مسیرِ رسانه را کامیت نکند، نصبِ ffmpeg این‌جا فقط
+      # زمانِ build می‌خورد و هیچ ادعای پوششی را صادق نمی‌کند.
+      - name: pytest
+        run: pytest -q
