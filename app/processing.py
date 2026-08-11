@@ -875,15 +875,8 @@ async def audio_metadata(inp: str) -> dict:
 
 
 # ── زیپ ────────────────────────────────────────────────────────
-def _zip_sync(inp: str, out: str, arcname: str) -> None:
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(inp, arcname=arcname)
-
-
-async def make_zip(inp: str, out: str, arcname: str) -> None:
-    await asyncio.to_thread(_zip_sync, inp, out, arcname)
-
-
+# نکته: `make_zip`ِ تک‌فایلی حذف شد (فاز ۳الف، موردِ ۸) — دکمهٔ «زیپ» به فلوِ
+# جمع‌کردن می‌رود و همیشه `zip_many` را صف می‌کند، حتی برای یک فایل.
 def _zip_many_sync(members: list[tuple[str, str]], out: str) -> None:
     used: set[str] = set()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:

@@ -96,9 +96,8 @@ install_master() {
 
   # اسرارِ ثابت را از .envِ موجود حفظ کن (رمزِ Postgres در ولومِ pg-data پخته
   # شده؛ بازتولیدِ آن هنگامِ reconfigure اتصالِ دیتابیس را می‌شکند).
-  local PG_PASS WH_SECRET
+  local PG_PASS
   PG_PASS=$(env_get POSTGRES_PASSWORD); [[ -n "$PG_PASS" ]] || PG_PASS=$(rand 18)
-  WH_SECRET=$(env_get WEBHOOK_SECRET); [[ -n "$WH_SECRET" ]] || WH_SECRET=$(rand 24)
 
   umask 077
   cat > .env <<EOF
@@ -109,11 +108,11 @@ TG_API_HASH=${TG_API_HASH}
 ADMIN_IDS=${ADMIN_IDS}
 DEFAULT_LANG=${DEFAULT_LANG}
 MAX_FILE_MB=${MAX_FILE_MB}
-WEBHOOK_SECRET=${WH_SECRET}
 POSTGRES_USER=telabzar
 POSTGRES_PASSWORD=${PG_PASS}
 POSTGRES_DB=telabzar
-DOMAIN=${DOMAIN}
+# نکته: DOMAIN عمداً نوشته نمی‌شود — فقط ورودیِ همین اسکریپت است تا PUBLIC_BASE
+# و مسیرِ سرتیفیکیت از آن ساخته شوند؛ هیچ کدی آن را از .env نمی‌خواند.
 PUBLIC_BASE=${PUBLIC_BASE}
 GATEWAY_HTTPS_PORT=${GW_PORT}
 TLS_CERT=${TLS_CERT}

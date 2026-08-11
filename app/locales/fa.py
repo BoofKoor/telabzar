@@ -49,7 +49,6 @@ MESSAGES: dict[str, str] = {
     "cl_scan_clean": "🛡 اسکن: امن ✓",
     "cl_scan_infected": "⚠️ اسکن: آلوده — {name}",
     "cl_scan_unavailable": "🛡 اسکن فعلاً در دسترس نیست",
-    "cl_zip": "🗜 زیپ شد",
     "cl_topdf": "📄 تبدیل به PDF",
     "cl_list": "📋 لیستِ محتویات ({n} مورد)",
     "cl_extract": "📤 استخراج شد ({n} فایل)",

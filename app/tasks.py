@@ -258,11 +258,6 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         return {"path": out, "filename": f"{stem}-joined.mp4",
                 "label": t(lang, "cl_vjoin", n=len(paths)), "kind": "video"}
 
-    if op == "zip":
-        out = os.path.join(workdir, f"{stem}.zip")
-        await P.make_zip(inpath, out, file.name or stem)
-        return {"path": out, "filename": f"{stem}.zip", "label": t(lang, "cl_zip"), "kind": "archive"}
-
     if op == "zip_many":
         members = args.get("members") or []
         downloaded: list[tuple[str, str]] = []

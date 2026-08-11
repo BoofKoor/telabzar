@@ -12,6 +12,15 @@ from sqlalchemy.orm import DeclarativeBase
 from .config import settings
 
 # مهاجرت‌های سبک (تا وقتی Alembic اضافه شود): افزودنِ ستون‌ها به جدولِ موجود.
+#
+# **این فهرست نحوِ Postgres است، نه SQL قابلِ‌حمل.** `ALTER TABLE … ADD COLUMN
+# IF NOT EXISTS` را SQLite با خطای نحوی رد می‌کند (`near "EXISTS"`)؛ فقط
+# `CREATE INDEX IF NOT EXISTS` روی هر دو کار می‌کند. امروز **باگِ فعال نیست**،
+# چون `init_models()` تنها از `__main__.py` و `worker.py` صدا زده می‌شود و آن‌ها
+# همیشه به Postgres وصل‌اند (تست‌ها SQLite را مستقیم می‌سازند و از این مسیر
+# رد نمی‌شوند). عمداً قابلِ‌حمل نشده — استقرارِ SQLiteای نه هست نه برنامه‌ریزی
+# شده. اگر روزی شد، این‌جا باید dialect-aware شود، نه این‌که یک `IF NOT EXISTS`
+# دیگر اضافه شود. (فاز ۳الف، موردِ ۹)
 _MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS changelog JSON DEFAULT '[]'",
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS meta JSON",
