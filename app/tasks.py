@@ -38,6 +38,15 @@ from .security import ScanUnavailable, scan_file
 
 log = logging.getLogger("telabzar.worker")
 
+# یادداشتِ «در حالِ بررسی» در `run_screen`: چقدر صبر کنیم تا **اولین** به‌روزرسانی،
+# و بعدش هر چند ثانیه. تأخیرِ اولیه از عددِ واقعی آمده نه از حس: غربالگریِ یک فایلِ
+# کوچک ~۱٫۴ ثانیه طول می‌کشد (اندازه‌گیریِ ۲۰۲۶-۰۸-۱۰)، پس ۴ ثانیه با حاشیهٔ ~۳
+# برابر یعنی آپلودهای عادی **هیچ** ویرایشی نمی‌گیرند و رگبارِ آلبوم به سقفِ نرخِ
+# تلگرام نزدیک نمی‌شود؛ در عوض ویدیوی بزرگ که تنها `get_file`ش ۱۰٫۳ ثانیه است،
+# اولین بازخورد را خیلی زودتر از پایانِ کار می‌گیرد.
+_SCREEN_NOTE_DELAY = 4.0
+_SCREEN_NOTE_EVERY = 5.0
+
 # نگاشتِ عملیات → برچسبِ نوارِ پیشرفت
 _PROGRESS_LABEL = {
     "compress": "pr_compress", "convert": "pr_convert",
@@ -765,7 +774,34 @@ async def run_screen(ctx: dict, payload: dict) -> None:
             except Exception:  # noqa: BLE001
                 pass
 
-    why, pol = "", None
+    phase = "fetch"
+    started = time.monotonic()
+
+    async def _ticker() -> None:
+        """برچسبِ فاز + ثانیهٔ سپری‌شده روی همان یادداشتِ «در حالِ بررسی».
+
+        **تأخیرِ اولیه عمدی است.** اندازه‌گیری: فایلِ کوچک در ~۱٫۴ ثانیه کامل
+        غربال می‌شود، پس ticker از ثانیهٔ صفر یعنی اکثریتِ مطلقِ آپلودها یک
+        ویرایشِ بی‌فایده می‌گیرند — و در رگبارِ آلبوم (ده آپلودِ هم‌زمان) به
+        سقفِ نرخِ تلگرام نزدیک می‌شویم. با `_SCREEN_NOTE_DELAY` فایل‌های سریع
+        **هیچ** ویرایشی نمی‌گیرند و فقط موردی که واقعاً کند است پیشرفت می‌بیند.
+
+        **درصد نمی‌سازیم.** تقسیمِ زمان اندازه‌گیری شده است: دریافتِ فایل ۱۰٫۳
+        ثانیه، استخراجِ فریم ۱٫۱، استنتاج ۰٫۳ — یعنی کار عملاً یک انتظارِ شبکه
+        است و شمارندهٔ فریم یا درصدِ ساختگی چیزی به کاربر نمی‌گوید. فقط
+        «کجاییم» و «چقدر گذشته».
+        """
+        await asyncio.sleep(_SCREEN_NOTE_DELAY)
+        while True:
+            try:
+                await bot.edit_message_text(
+                    t(lang, f"nsfw_phase_{phase}", s=int(time.monotonic() - started)),
+                    chat_id, note_mid)
+            except Exception:  # noqa: BLE001 — ویرایشِ ناموفق نباید غربالگری را بشکند
+                pass
+            await asyncio.sleep(_SCREEN_NOTE_EVERY)
+
+    why, pol, ticker = "", None, None
     try:
         async with Sessionmaker() as session:
             file = await session.get(File, file_id_row)
@@ -775,8 +811,11 @@ async def run_screen(ctx: dict, payload: dict) -> None:
         pol = await safety.load_policy()
         if pol.enabled and pol.scan_pixels:
             os.makedirs(workdir, exist_ok=True)
+            if note_mid:
+                ticker = asyncio.create_task(_ticker())
             local = await _localize(bot, file.file_id, workdir)
             if local:
+                phase = "scan"
                 hit, score, label = await safety.scan_file(
                     local, file.kind, pol.threshold, pol.frames, workdir)
                 if hit:
@@ -784,7 +823,10 @@ async def run_screen(ctx: dict, payload: dict) -> None:
     except Exception:  # noqa: BLE001
         log.warning("screen failed for file row %s", file_id_row, exc_info=True)
     finally:
+        # پاک‌سازیِ دیسک اول: `stop_task` می‌تواند لغوِ خودِ جاب را بالا بدهد
+        # (درسِ ۲-۷)، و آن‌وقت خطِ بعدی اجرا نمی‌شد.
         shutil.rmtree(workdir, ignore_errors=True)
+        await P.stop_task(ticker)     # لغوِ خودِ جاب را نمی‌بلعد
 
     if not why:                       # پاک است → همان کارتِ همیشگی
         await _drop_note()
