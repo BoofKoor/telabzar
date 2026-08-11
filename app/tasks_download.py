@@ -812,11 +812,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
         ticker = asyncio.create_task(_ticker())
 
         async def _stop_ticker() -> None:
-            ticker.cancel()
-            try:
-                await ticker
-            except BaseException:  # noqa: BLE001
-                pass
+            # `except BaseException` بود و همه‌چیز را می‌بلعید — از لغوِ خودِ جاب
+            # تا SystemExit سرِ خاموشی. `P.stop_task` فقط لغوِ همین ticker را می‌بلعد.
+            await P.stop_task(ticker)
 
         gallery_caption = None
         # ── حلقهٔ تلاش با چرخشِ اکانت ──

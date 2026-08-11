@@ -587,11 +587,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 res = await _do_op(bot, job.op, job.args or {}, file, inpath, workdir, lang,
                                    progress=_on_progress, cancel=_should_cancel)
             finally:
-                ticker.cancel()
-                try:
-                    await ticker
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                    pass
+                await P.stop_task(ticker)   # لغوِ خودِ جاب را نمی‌بلعد
         except P.ProcessingCancelled:
             log.info("job %s cancelled by user", job_id)
             job.status = "cancelled"
@@ -754,8 +750,15 @@ async def run_screen(ctx: dict, payload: dict) -> None:
     """گیتِ محتوای بزرگسال برای **فایلِ آپلودیِ کاربر** — قبل از ساختنِ کارت.
 
     چرا در ورکر و نه در ربات: بارگذاری/اجرای مدل کارِ CPU است و نباید حلقهٔ
-    long-pollingِ ربات را بگیرد. چرا **قبل** از کارت و نه بعدش: کارت یعنی ربات
-    خودش فایل را دوباره آپلود کرده — همان کاری که نباید با محتوای غیرمجاز بکند.
+    long-pollingِ ربات را بگیرد.
+
+    چرا **قبل** از کارت و نه بعدش — و مکانیزمش را دقیق بگوییم چون آیندگان روی
+    همین تصمیم می‌گیرند: کارتِ فایلِ آپلودی با **`file_id`** فرستاده می‌شود
+    (`cards.py:188`)، یعنی تلگرام سمتِ خودش کپی می‌کند و رباتْ **هیچ بایتی
+    آپلود نمی‌کند**. پس ریسک پهنای‌باند نیست، **انتساب** است: پیامی که آن محتوا
+    را دارد از حسابِ ربات فرستاده شده و از دیدِ مدیریتِ تلگرام ربات آن را پست
+    کرده. همین کافی است که گیت قبل از کارت باشد نه بعدش.
+
     هر شکستی (مدل نبود، دانلود نشد) = «مجاز»، چون فیلتر نباید سرویس را بخورد.
     """
     from . import safety
