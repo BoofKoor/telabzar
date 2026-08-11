@@ -46,7 +46,13 @@ class FakeBot:
 
 
 @pytest_asyncio.fixture
-async def env(monkeypatch):
+async def env(monkeypatch, tmp_path):
+    # `run_screen` زیرِ `settings.work_dir` دایرکتوری می‌سازد و پیش‌فرضش `/work`
+    # است. این را CI پیدا کرد نه محیطِ محلی: من root اجرا می‌شوم و `/work`
+    # ساخته می‌شد، ولی رانر نمی‌تواند و `PermissionError` داخلِ `except Exception`
+    # بلعیده می‌شد — یعنی غربالگری اصلاً اجرا نمی‌شد و تست‌های «سریع» به دلیلِ
+    # **غلط** سبز می‌ماندند. برای همین پایین‌تر هم اجرا شدنِ مراحل assert می‌شود.
+    monkeypatch.setattr(T.settings, "work_dir", str(tmp_path))
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -93,25 +99,36 @@ def _payload(row_id: int, note: int | None = NOTE_MID) -> dict:
             "lang": "fa", "tg_user_id": 5}
 
 
-def _stage(monkeypatch, fetch: float = 0.0, scan: float = 0.0) -> None:
+def _stage(monkeypatch, fetch: float = 0.0, scan: float = 0.0) -> list[str]:
+    """مراحل را کند می‌کند و **ثبت** می‌کند که واقعاً اجرا شده‌اند.
+
+    ثبت لازم است چون «صفر ویرایش» به‌تنهایی مبهم است: اگر غربالگری اصلاً اجرا
+    نشود هم صفر ویرایش می‌گیریم. دقیقاً همین روی CI اتفاق افتاد.
+    """
+    ran: list[str] = []
+
     async def _localize(bot, fid, workdir):
+        ran.append("fetch")
         await asyncio.sleep(fetch)
         return "/tmp/whatever.mp4"
 
     async def _scan_file(path, kind, threshold, frames, workdir):
+        ran.append("scan")
         await asyncio.sleep(scan)
         return False, 0.0, ""
 
     monkeypatch.setattr(T, "_localize", _localize)
     monkeypatch.setattr(safety, "scan_file", _scan_file)
+    return ran
 
 
 # ── قلبِ خواستهٔ اپراتور: سریع = صفر ویرایش ────────────────────────────────
 async def test_a_fast_screen_produces_no_edits_at_all(env, monkeypatch):
     """فایلِ کوچک (~۱٫۴ ثانیه در واقعیت) نباید هیچ ویرایشی بگیرد."""
     bot = FakeBot()
-    _stage(monkeypatch, fetch=0.02, scan=0.02)
+    ran = _stage(monkeypatch, fetch=0.02, scan=0.02)
     await T.run_screen({"bot": bot, "redis": None}, _payload(env))
+    assert ran == ["fetch", "scan"], "غربالگری اصلاً اجرا نشد — «صفر ویرایش» بی‌معنا می‌شود"
     assert bot.edits == [], f"غربالگریِ سریع ویرایش تولید کرد: {bot.edits}"
     assert bot.deleted == [NOTE_MID], "یادداشت باید در پایان پاک شود"
 
@@ -119,10 +136,11 @@ async def test_a_fast_screen_produces_no_edits_at_all(env, monkeypatch):
 async def test_a_burst_of_fast_screens_stays_silent(env, monkeypatch):
     """رگبارِ آلبوم: ده آپلودِ سریعِ هم‌زمان → صفر ویرایش، نه ۱۰ تا."""
     bot = FakeBot()
-    _stage(monkeypatch, fetch=0.02, scan=0.02)
+    ran = _stage(monkeypatch, fetch=0.02, scan=0.02)
     await asyncio.gather(*[
         T.run_screen({"bot": bot, "redis": None}, _payload(env)) for _ in range(10)
     ])
+    assert ran.count("scan") == 10, "هر ده غربالگری باید واقعاً اجرا شده باشند"
     assert bot.edits == [], f"رگبار {len(bot.edits)} ویرایش تولید کرد"
 
 
