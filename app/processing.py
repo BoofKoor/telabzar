@@ -104,6 +104,57 @@ async def stop_task(task) -> None:
         pass
 
 
+class CancelWatch:
+    """وضعیتِ ناظرِ لغو. `fired` یعنی **خودِ ما** فرایند را کشتیم (نه شکستِ عادی)."""
+
+    __slots__ = ("fired", "task")
+
+    def __init__(self) -> None:
+        self.fired = False
+        self.task: asyncio.Task | None = None
+
+    def stop(self) -> None:
+        """در `finally` صدا زده شود، وگرنه ناظر از خودِ جاب عمر می‌کند."""
+        if self.task is not None:
+            self.task.cancel()
+            self.task = None
+
+
+def start_cancel_watcher(proc, cancel) -> CancelWatch:
+    """هر `_CANCEL_POLL` ثانیه لغو را می‌پرسد و در صورتِ True فرایند را می‌کُشد.
+
+    **مکانیزمِ یکتای لغو برای هر دو زیرفرایندِ پروژه** — ffmpeg در `_run` و
+    yt-dlp/gallery-dl در `downloader._run_dl`. عمداً یک پیاده‌سازی است، چون دو
+    نسخهٔ دست‌نویسِ یک قاعده سرانجام واگرا می‌شوند (همان درسی که `remove_cookie_file`
+    ثبت کرد).
+
+    چرا چکِ لغو **نباید** سوارِ حلقهٔ خواندنِ خروجی شود — دو شکستِ متقارن:
+      • حلقه ممکن است **اصلاً اجرا نشود**: `_run` بدونِ progress، یا yt-dlpی که
+        اتصالش هنگ کرده و هیچ خطی نمی‌دهد. آن‌وقت دکمهٔ لغو تا تایم‌اوت بی‌اثر
+        است — و تایم‌اوتِ دانلود ۳۰۰۰ ثانیه است.
+      • حلقه ممکن است **خیلی زیاد** اجرا شود: yt-dlp با `--newline` و
+        `--concurrent-fragments 4` ده‌ها خط در ثانیه می‌دهد و هر خط یک
+        `EXISTS`ِ Redis می‌شد — که روی نودِ دانلود یک رفت‌وبرگشتِ WireGuard است.
+    """
+    watch = CancelWatch()
+    if cancel is None:
+        return watch
+
+    async def _loop() -> None:
+        while True:
+            await asyncio.sleep(_CANCEL_POLL)
+            try:
+                if await cancel():
+                    watch.fired = True
+                    proc.kill()
+                    return
+            except Exception:  # noqa: BLE001 — خطای چک نباید کار را بشکند
+                pass
+
+    watch.task = asyncio.create_task(_loop())
+    return watch
+
+
 async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: float | None = None,
                cancel=None) -> None:
     """اجرای ffmpeg. اگر progress و duration بدهی، از ‎-progress درصد را می‌خواند
@@ -123,22 +174,7 @@ async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: f
         stdout=asyncio.subprocess.PIPE if use_prog else asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
-    cancelled = False
-
-    async def _watch_cancel() -> None:
-        """هر چند ثانیه لغو را می‌پرسد و در صورتِ True فرایند را می‌کُشد."""
-        nonlocal cancelled
-        while True:
-            await asyncio.sleep(_CANCEL_POLL)
-            try:
-                if await cancel():
-                    cancelled = True
-                    proc.kill()
-                    return
-            except Exception:  # noqa: BLE001 — خطای چک نباید کار را بشکند
-                pass
-
-    watcher = asyncio.create_task(_watch_cancel()) if cancel is not None else None
+    watch = start_cancel_watcher(proc, cancel)
     try:
         if use_prog:
             err_chunks: list[bytes] = []
@@ -192,10 +228,9 @@ async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: f
                 pass
         raise
     finally:
-        if watcher is not None:
-            watcher.cancel()
+        watch.stop()
 
-    if cancelled:
+    if watch.fired:
         raise ProcessingCancelled()
 
     if proc.returncode != 0:
