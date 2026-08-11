@@ -666,15 +666,9 @@ async def video_to_gif(inp: str, out: str, seconds: int = 6, width: int = 360, f
 
 
 # ── تامبنیلِ ویدیو (فریمِ نماینده با فیلترِ thumbnail) ──────────
-async def video_thumbnail(inp: str, out: str) -> None:
-    await _run([
-        FFMPEG, "-y", "-i", inp,
-        "-vf", "thumbnail,scale=640:-1", "-frames:v", "1", "-q:v", "3", out,
-    ])
-    if not os.path.exists(out):
-        raise RuntimeError("thumbnail extraction produced no output")
-
-
+# نکته: `video_thumbnail` با opِ `thumb` حذف شد — تنها فراخوانش همان شاخه بود.
+# نیازِ داخلی (کاورِ خودکارِ دانلود) را `video_poster` می‌دهد که همان فیلترِ
+# `thumbnail` را دارد، فقط در ≤۳۲۰px و best-effort.
 async def video_poster(inp: str, out: str) -> bool:
     """یک فریمِ نماینده در ≤۳۲۰px (سقفِ تامبنیلِ تلگرام) — best-effort، بدونِ خطا."""
     try:
