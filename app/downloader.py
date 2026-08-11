@@ -514,19 +514,22 @@ async def _run_dl(cmd: list[str], progress=None, cancel=None, timeout: float = 3
     """اجرای yt-dlp/gallery-dl با خواندنِ درصد از stdout و چکِ لغو.
 
     برمی‌گرداند: دُمِ کراندارِ stdout (فراخوان‌هایی که لازم ندارند نادیده‌اش می‌گیرند).
+
+    لغو با **همان ناظرِ مشترکِ** `processing` انجام می‌شود، نه با چک روی هر خطِ
+    stdout. importِ آن عمداً تنبل است (مثلِ `_ffprobe_video` پایین‌تر) تا این
+    ماژول در زمانِ import به PIL گره نخورد.
     """
+    from . import processing as _P     # تنبل — منبعِ یکتای ناظرِ لغو
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     err_chunks: list[bytes] = []
     out_tail: list[str] = []       # دُمِ کراندارِ stdout (برای تشخیصِ ردِ match-filter)
-    cancelled = False
 
     async def _drain_err() -> None:
         async for raw in proc.stderr:  # type: ignore[union-attr]
             err_chunks.append(raw)
 
     async def _read_out() -> None:
-        nonlocal cancelled
         async for raw in proc.stdout:  # type: ignore[union-attr]
             line = raw.decode("utf-8", "ignore").strip()
             if line and not line.startswith("dl:"):
@@ -540,23 +543,31 @@ async def _run_dl(cmd: list[str], progress=None, cancel=None, timeout: float = 3
                         await progress(float(m.group(1)))
                     except Exception:  # noqa: BLE001
                         pass
-            if cancel is not None:
-                try:
-                    if await cancel():
-                        cancelled = True
-                        proc.kill()
-                        return
-                except Exception:  # noqa: BLE001
-                    pass
 
+    watch = _P.start_cancel_watcher(proc, cancel)
     try:
         await asyncio.wait_for(asyncio.gather(_read_out(), _drain_err()), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
         raise RuntimeError("download timed out") from None
+    except BaseException:
+        # همان درسِ ۲-۲، ولی این‌جا گران‌تر: روی `job_timeout`ِ ARQ یا خاموشیِ
+        # ورکر، yt-dlpِ یتیم **به دانلود ادامه می‌دهد** — پهنای‌باند می‌خورد و
+        # مهم‌تر از آن سهمیهٔ همان اکانتِ کوکی را می‌سوزاند که گران‌ترین منبعِ
+        # ماست، بی‌آنکه هیچ‌جا ثبت شود (جاب مرده، پس `mark_ok/mark_fail` هم
+        # صدا زده نمی‌شود). عمداً `await proc.wait()` نمی‌زنیم — در مسیرِ لغو
+        # خودِ آن await می‌تواند دوباره `CancelledError` بگیرد.
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except (ProcessLookupError, OSError):   # از قبل مرده
+                pass
+        raise
+    finally:
+        watch.stop()
     await proc.wait()
-    if cancelled:
+    if watch.fired:
         raise ProcessingCancelled()
     if proc.returncode != 0:
         # دُمِ stdout روی خودِ استثنا سوار می‌شود (نه در متنِ پیام): متنِ خطای کاربر

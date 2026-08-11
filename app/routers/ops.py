@@ -629,28 +629,45 @@ async def collect_recv(message: Message, state: FSMContext, session: AsyncSessio
     if only and info.kind != only[0]:
         await _warn(t(lang, only[1]))
         return
-    # سقفِ مجموعِ حجمِ چسباندنِ ویدیو (از پنل) — اگر با این ویدیو رد شود، درجا هشدار بده
-    if purpose == "vjoin":
-        cap_mb = await _vjoin_cap_mb()
-        cur = sum(m.get("size", 0) for m in data.get("members", []))
-        if cap_mb > 0 and cur + (info.size or 0) > cap_mb * 1024 * 1024:
-            await _warn(t(lang, "vjoin_too_big", mb=cap_mb))
-            return
-    # قفلِ هر-چت: افزودنِ همزمانِ عکس‌های آلبوم دچارِ رقابت نشود
+    # سقفِ مجموعِ حجمِ چسباندنِ ویدیو (از پنل). خواندنِ **عددِ** سقف عمداً بیرونِ
+    # قفل می‌ماند: یک خواندنِ تنظیمات است نه حالتِ مشترک، و بردنش به داخل یک
+    # رفت‌وبرگشتِ Redis را وسطِ ناحیهٔ بحرانی می‌گذاشت. کهنه‌بودنِ یک‌لحظه‌ایِ خودِ
+    # عدد بی‌ضرر است (ادمین وسطِ یک آلبوم سقف را عوض کند)؛ آنچه باید اتمی باشد
+    # مقایسهٔ آن با فهرستِ اعضاست، نه خواندنش.
+    cap_mb = await _vjoin_cap_mb() if purpose == "vjoin" else 0
+
+    # ناحیهٔ بحرانی: خواندنِ اعضا → چکِ سقف → افزودن → نوشتن → به‌روزرسانیِ کارت.
+    #
+    # قبلاً فقط «افزودن → نوشتن» داخلِ قفل بود و چکِ سقف روی `data`ی کهنه از
+    # بالای تابع حساب می‌کرد. چون بینِ آن خواندن و قفل یک نقطهٔ yieldِ واقعی
+    # هست (`await _vjoin_cap_mb()`)، دو آپلودِ هم‌زمانِ یک آلبوم — که aiogram
+    # موازی هندل می‌کند — هر دو از چک رد می‌شدند و بعد پشتِ قفل صف می‌کشیدند و
+    # هر دو append می‌کردند: سقف به‌اندازهٔ «تعدادِ آپلودِ هم‌زمان منهای یک»
+    # می‌شکست. ویرایشِ کپشن هم بیرون بود، پس دو هندلر می‌توانستند جابه‌جا
+    # تمام شوند و کارتْ **کمتر** از آنچه واقعاً ثبت شده نشان دهد.
+    #
+    # نگه‌داشتنِ قفل روی فراخوانیِ تلگرام، آپلودهای هم‌زمانِ همان چت را سریالی
+    # می‌کند — که دقیقاً در حالتِ آلبوم مطلوب است، چون همان باگِ دوم را می‌بندد.
     async with _collect_lock(message.chat.id):
-        data = await state.get_data()
-        members = list(data.get("members", []))
+        members = list((await state.get_data()).get("members", []))
+        if cap_mb > 0:
+            cur = sum(m.get("size", 0) for m in members)
+            if cur + (info.size or 0) > cap_mb * 1024 * 1024:
+                await _warn(t(lang, "vjoin_too_big", mb=cap_mb))
+                return
         name = suggested_name(info.name, info.kind, info.mime, idx=len(members) + 1)
         members.append({"file_id": info.file_id, "name": name, "size": info.size or 0})
         await state.update_data(members=members)
-    try:
-        await message.bot.edit_message_caption(
-            chat_id=card_chat, message_id=card_mid,
-            caption=card_caption(file, lang, note=_collect_note(lang, purpose, members, last=name)),
-            reply_markup=collect_kb(ref, lang, purpose),
-        )
-    except Exception:  # noqa: BLE001
-        pass
+        try:
+            await message.bot.edit_message_caption(
+                chat_id=card_chat, message_id=card_mid,
+                caption=card_caption(file, lang, note=_collect_note(lang, purpose, members, last=name)),
+                reply_markup=collect_kb(ref, lang, purpose),
+            )
+        except Exception:  # noqa: BLE001
+            # خطای تلگرام (۴۲۹/ویرایشِ ناموفق) نباید کالکت را بشکند: عضو از قبل
+            # ثبت شده و `async with` قفل را در هر مسیری آزاد می‌کند.
+            pass
 
 
 # ── جمع‌کردن: اجرا (زیپ یا ادغامِ PDF) ──────────────────────────
