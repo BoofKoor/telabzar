@@ -319,6 +319,10 @@ async def _opts(redis, platform: str, workdir: str | None = None,
         "proxy": (ident.get("proxy")
                   or await settings_store.get_str("proxy_url", settings.proxy_url) or None),
         "user_agent": ident.get("user_agent") or None,
+        # موتورِ `direct` از پروکسی برود یا نه (socks از کانکتور می‌رود، پس
+        # این تصمیم باید قبل از ساختِ سشن گرفته شود).
+        "direct_proxy": await settings_store.get_bool(
+            "dl_direct_proxy", settings.dl_direct_proxy),
         "pot_provider": (settings.pot_provider_url or None) if pot_on else None,
         "cookies": cookie_path,
         "max_mb": await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb),

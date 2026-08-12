@@ -71,7 +71,8 @@ quick-grab. هاستِ خارج از این فهرست هم اگر `dl_allow_unk
 | `dl_cooldown_sec` | `0` | عدد | فاصلهٔ بینِ دو دانلودِ هر کاربر |
 | `dl_op_daily_min` | `0` | عدد | سقفِ دقیقهٔ **پردازشِ** رسانهٔ دانلودی per-user (opهای گران) |
 | `dl_min_free_gb` | `3` | عدد | گاردِ فضای دیسکِ `/work` |
-| `proxy_url` | `` | env/پنل | egressِ تمیزِ خودت (`socks5h://…`) — برای یوتیوب توصیه می‌شود |
+| `proxy_url` | `` | env/پنل | egressِ تمیزِ خودت. `http(s)://` و `socks5h://` هر دو کار می‌کنند و **هر سه موتور** (yt-dlp، gallery-dl، `direct`) از آن می‌روند |
+| `dl_direct_proxy` | `on` | پنل | آیا موتورِ `direct` (لینکِ فایلِ مستقیم) هم از پروکسی برود. خاموش = از IPِ خودِ سرور |
 | `dl_sponsorblock` | `` | پنل | دسته‌های SponsorBlock برای حذف (مثل `sponsor,selfpromo,intro`)؛ خالی=خاموش |
 | `dl_subs` | `off` | پنل | جاسازیِ زیرنویسِ خودکار (en+fa) در ویدیو |
 
