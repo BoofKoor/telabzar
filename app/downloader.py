@@ -1228,7 +1228,14 @@ _NOISE_RE = re.compile(
     r"remaster(?:ed)?|full|album|track|version|feat|ft|featuring|prod)\b", re.I)
 _PAREN_RE = re.compile(r"[\(\[\{][^)\]\}]*[\)\]\}]")     # (feat. X) [Official Video] {…}
 _FEAT_RE = re.compile(r"\b(?:feat|ft|featuring|with)\.?\s.*$", re.I)  # دنبالهٔ «feat …»
-_ARTIST_SPLIT_RE = re.compile(r"\s*(?:,|&|/|;|\bx\b|\bvs\b|\band\b|feat\.?|ft\.?|featuring)\s*", re.I)
+# جداکنندهٔ نامِ هنرمندان. **مرزِ کلمه روی هر سه شاخهٔ feat/ft/featuring اجباری است**:
+# بدونش `ft` هرجای نام بیفتد می‌بُرد و «Daft Punk» → ['Da','Punk'] می‌شد (و
+# Taylor Swift / Kraftwerk / Deftones / Soft Cell / Shaft / …). `\b`ِ **جلو** تنها
+# کافی نیست — «Feature Films» را می‌شکند — پس هر دو طرف بسته است؛ `\.?` بعد از
+# `\b` می‌آید تا «feat.» همچنان جدا شود. سه شاخهٔ دیگر (`x`/`vs`/`and`) از اول
+# `\b` داشتند، که همین ناهماهنگی باعث شد به چشم نیاید.
+_ARTIST_SPLIT_RE = re.compile(
+    r"\s*(?:,|&|/|;|\bx\b|\bvs\b|\band\b|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b)\s*", re.I)
 
 
 def _cand_url(c: dict) -> str | None:
@@ -1323,6 +1330,17 @@ def _time_match(cand_dur: int | None, target_dur: int | None) -> float | None:
     return math.exp(-0.1 * abs(cand_dur - target_dur)) * 100.0
 
 
+# امتیازِ مدت وقتی مدتِ نامزد را **نمی‌دانیم**. تا امروز مؤلفه از میانگینِ وزن‌دار
+# حذف می‌شد و بقیه دوباره نرمال می‌شدند — یعنی «نمی‌دانم» دقیقاً مثلِ «مدتِ کاملاً
+# درست» امتیاز می‌گرفت (هر دو ۱۰۶٫۰۰) و از نامزدی که ۳ ثانیه اختلاف داشت (۹۹٫۰۰)
+# جلو می‌زد. عدد **۵۰ = وسطِ بازهٔ خروجیِ `_time_match`** است، یعنی نه پاداش نه
+# جریمه؛ روی منحنیِ خودِ `_time_match` معادلِ **۶٫۹ ثانیه** اختلاف است
+# (`-ln(0.5)/0.1`) — که خوش‌اقبالانه جایی می‌افتد بینِ «همان ضبط با مسترِ متفاوت»
+# (۰..۳ ثانیه) و «نسخهٔ دیگر: لایو/اکستندد» (۲۰+ ثانیه). عمداً **جریمه نیست**:
+# جریمه ادعای «نبودنِ مدت مشکوک است» را دارد که شاهدی برایش نداریم.
+_TIME_UNKNOWN = 50.0
+
+
 def _duration_reject(cand: dict, track: dict) -> bool:
     """گیتِ سختِ مدت: اختلافِ زیاد = نسخهٔ دیگر (لایو/اکستندد/رادیو-ادیت) → رد."""
     td = track.get("duration")
@@ -1338,6 +1356,12 @@ def _match_score(cand: dict, track: dict) -> float:
     name = _name_match(track, cand)
     artist = _artist_match(track, cand)
     tscore = _time_match(_cand_dur(cand), track.get("duration"))
+    if tscore is None and track.get("duration") and not _cand_dur(cand):
+        # مدتِ ترک را داریم ولی مدتِ نامزد را نه → مقدارِ خنثی، نه حذفِ مؤلفه.
+        # اگر مدتِ **خودِ ترک** نامعلوم باشد عمداً حذف می‌شود: آن‌وقت هیچ نامزدی
+        # قابلِ مقایسه نیست و دادنِ ۵۰ به همه فقط امتیازها را فشرده می‌کند بی‌آنکه
+        # ذره‌ای اطلاعات اضافه کند (رتبه‌بندی هم عوض نمی‌شود، چون تبدیلش یکنواست).
+        tscore = _TIME_UNKNOWN
     album = _album_match(track, cand)
     parts: list[tuple[float, float]] = [(name, 0.40)]
     if artist is not None:
@@ -1356,7 +1380,12 @@ def _match_score(cand: dict, track: dict) -> float:
             score -= 12
     if cand.get("art_track"):   # نتیجهٔ فیلترِ «songs» = Art Trackِ رسمی
         score += 6
-    if cand.get("isrc_hit"):    # از سرچِ ISRC آمده = تطبیقِ قطعی
+    # از سرچِ ISRC آمده = تطبیقِ قطعی. **در تولید هرگز شلیک نمی‌کند** و عمداً
+    # نگه داشته شده: ISRC فقط از APIِ رسمیِ اسپاتیفای می‌آید و آن مسیر برای ما
+    # بسته است (بولتِ «The Spotify Web API is closed to us» در §۷). صفر هزینه
+    # دارد و اگر روزی کسی credential داشت کار می‌کند — ولی هیچ طراحی‌ای نباید
+    # رویش حساب کند؛ امروز قوی‌ترین سیگنالِ باقی‌مانده `art_track`ِ +۶ است.
+    if cand.get("isrc_hit"):
         score += 20
     return score
 
@@ -1388,12 +1417,9 @@ def _rank_candidates(candidates: list[dict], track: dict) -> list[tuple[float, d
     return scored
 
 
-def _pick_best_match(candidates: list[dict], track: dict, min_score: float = 55.0) -> dict | None:
-    """بهترین نامزدِ بالای آستانه (وگرنه None). گیت‌های سختِ نام/مدت/هنرمند اعمال می‌شوند."""
-    ranked = _rank_candidates(candidates, track)
-    if ranked and ranked[0][0] >= min_score:
-        return ranked[0][1]
-    return None
+# `_pick_best_match` این‌جا بود و **هیچ فراخوانی نداشت** — `download_spotify` همان
+# منطق را درجا نوشته. حذف شد تا دو نسخه از یک قاعده واگرا نشوند (همان دلیلِ
+# حذفِ `zip` و `thumb` در فاز ۳).
 
 
 async def _yt_search_candidates(query: str, opts: dict, limit: int = 6, timeout: float = 60) -> list[dict]:
@@ -1487,8 +1513,12 @@ async def _gather_candidates(track: dict, opts: dict, source: str) -> list[dict]
     proxy = opts.get("proxy")
     cands: list[dict] = []
     if source != "youtube":  # پیش‌فرض: YouTube Music
+        # تلاشِ اول: تطبیقِ قطعی با ISRC (روشِ spotDL). **در تولید هرگز اجرا
+        # نمی‌شود** — ISRC فقط از APIِ رسمی می‌آید و مسیرِ embed همیشه `None`
+        # می‌دهد (`_embed_track`). نگه داشته شده چون هزینه‌اش صفر است؛ ببین
+        # بولتِ «The Spotify Web API is closed to us» در §۷.
         isrc = track.get("isrc")
-        if isrc:  # تلاشِ اول: تطبیقِ قطعی با ISRC (روشِ spotDL)
+        if isrc:
             for h in await _ytmusic_search(isrc, "songs", proxy, limit=3):
                 h["isrc_hit"] = True
                 cands.append(h)
