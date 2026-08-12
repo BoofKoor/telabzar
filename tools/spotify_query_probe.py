@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 
 sys.path.insert(0, "/srv")
@@ -58,23 +59,89 @@ def variants(track: dict, fa: str = "") -> list[tuple[str, str]]:
 
 def hits(cands: list[dict], want_artist: str, want_secs: int,
          tol: int = 20) -> list[tuple[int, str]]:
-    """(ایندکس, دلیل) برای نامزدهایی که با هدف می‌خوانند.
+    """(ایندکس, دلیل) برای نامزدهایی که با هدف می‌خوانند — **قوی‌ها اول**.
 
     **دو معیار، عمداً:** تطبیقِ نامِ هنرمند، **یا** فقط مدت. دلیلش همان چیزی است
     که این ابزار برای آن ساخته شده — اگر ضبطِ درست با نامِ **فارسی** فهرست شده
     باشد («هایده» در برابرِ `Haydeh`)، معیارِ نامْ آن را نمی‌بیند و ابزار
     «پیدا نشد» گزارش می‌کند، یعنی دقیقاً همان مثبتِ کاذبی که ما را به مسیرِ
     اشتباه می‌فرستد. مدت این شکاف را پر می‌کند.
+
+    **ولی دو معیارِ نامساوی نباید در یک فهرستِ مسطح قاتی شوند.** نسخهٔ اول
+    اصابت‌ها را به ترتیبِ **استخر** برمی‌گرداند و هر دو صداکننده `[0]` را
+    «هدف» می‌گیرند (`mark_of` برای چاپِ رتبه، و مسیرِ ادغام برای انتخابِ
+    ویدیویی که رتبه‌بندی رویش سنجیده می‌شود). پس یک مثبتِ کاذبِ «فقط مدت» که
+    در فهرست جلوتر بیفتد، اصابتِ واقعیِ «نام+مدت» را می‌پوشاند. اندازه‌گیری‌شده
+    روی یک `Faryaad`ِ ۳۱۲ ثانیه‌ایِ دیگر که پیش از ضبطِ درستِ ۳۱۱ ثانیه‌ای
+    می‌آمد: خروجی `[(0,'فقط مدت'), (2,'نام+مدت')]` بود و ابزار «رتبهٔ ۱» را
+    برای ضبطِ **غلط** چاپ می‌کرد — همان «رتبهٔ ۳»ی که در گزارشِ قبلی مثبتِ
+    کاذب از آب درآمد.
+
+    حالا دو **رده** برمی‌گردد: نام+مدت، بعد فقط-مدت. ترتیبِ استخر داخلِ هر رده
+    حفظ می‌شود (رده‌بندی است، نه مرتب‌سازیِ کامل) تا «رتبه»ی که چاپ می‌شود
+    همان معنیِ قبلی را داشته باشد.
     """
-    out = []
+    strong: list[tuple[int, str]] = []
+    weak: list[tuple[int, str]] = []
     for i, c in enumerate(cands):
         arts = " ".join(D._cand_artists(c)).lower()
         dur = D._cand_dur(c)
-        near = bool(dur and abs(dur - want_secs) <= tol)
-        if want_artist.lower() in arts and near:
-            out.append((i, "نام+مدت"))
-        elif near:
-            out.append((i, "فقط مدت — نامِ هنرمند شاید فارسی باشد"))
+        if not (dur and abs(dur - want_secs) <= tol):
+            continue
+        if want_artist.lower() in arts:
+            strong.append((i, "نام+مدت"))
+        else:
+            weak.append((i, "فقط مدت — نامِ هنرمند شاید فارسی باشد"))
+    return strong + weak
+
+
+def mark_of(idx: list[tuple[int, str]]) -> str:
+    """نشانِ یک‌خطیِ یک کوئری — و **نوعِ** اصابت را پنهان نمی‌کند.
+
+    «✓ رتبهٔ ۳» برای اصابتی که فقط مدت خوانده، همان جمله‌ای است که ما را به
+    نتیجهٔ غلط رساند. اصابتِ ضعیف حالا `؟` می‌گیرد و علتش را همراه دارد.
+    """
+    if not idx:
+        return "✗ نیست"
+    i, why = idx[0]
+    if why.startswith("نام"):
+        return f"✓ رتبهٔ {i + 1}"
+    return f"؟ رتبهٔ {i + 1} (فقط مدت)"
+
+
+# نشانه‌های «نسخهٔ دیگر» روی عنوانِ **خام**. عمداً با **مرزِ کلمه**، چون
+# `_BAD_KW` در تولید زیررشته‌ای تطبیق می‌خورد و آن‌جا برخورد دارد
+# (`Delivery`→`live`، `Recovery`→`cover`، `Sessions`→`session` — اندازه‌گیری‌شده).
+# این‌جا فقط تشخیصی است و هیچ تصمیمی دربارهٔ رفعِ تولیدی نمی‌گیرد.
+_MARKER_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in D._BAD_KW) + r")\b", re.I)
+
+
+def version_markers(title: str) -> list[str]:
+    """کلمه‌های نسخه‌ای که در عنوانِ خام هست (براکت‌ها دست‌نخورده)."""
+    return sorted({m.group(1).lower() for m in _MARKER_RE.finditer(title or "")})
+
+
+def describe(c: dict) -> str:
+    """شناسه + عنوانِ کامل + همهٔ هنرمندان + مدت — **بی‌برش**، چند خطی.
+
+    خطِ برندهٔ نسخهٔ اول نه شناسه چاپ می‌کرد نه مدت، و فهرستِ هنرمند را روی ۲۴
+    کاراکتر می‌بُرید (`'Anoushirvan Rohani, Maz…'`) — پس از خروجیِ ابزار
+    نمی‌شد فهمید برنده **کدام ویدیو** است، و همین ابهامِ «برندهٔ ۱۰۳٫۲» را
+    بی‌جواب گذاشت. این تابع برای همان یک سؤال است، پس چیزی را کوتاه نمی‌کند.
+
+    نشانهٔ نسخه هم چاپ می‌شود، چون معیارِ `hits()` (هنرمند + مدت) ریمیکسِ همان
+    هنرمند با همان طول را هم «هدف» می‌شمارد — با اجرای خشکِ ابزار پیدا شد، نه
+    با استدلال.
+    """
+    arts = ", ".join(D._cand_artists(c)) or "—"
+    dur = D._cand_dur(c)
+    marks = version_markers(c.get("title") or "")
+    out = (f"{D._cand_url(c)}\n"
+           f"        عنوان : {c.get('title')}\n"
+           f"        هنرمند: {arts}\n"
+           f"        مدت   : {dur if dur is not None else '—'}s")
+    if marks:
+        out += f"\n        ⚠ نشانهٔ نسخه: {', '.join(marks)}  ← ضبطِ اصلی نیست؟"
     return out
 
 
@@ -117,8 +184,7 @@ async def main() -> int:
         rows.append((name, q, len(cands), idx, cands))
         for c in cands:
             pool.setdefault(D._cand_url(c) or repr(c), c)
-        mark = f"✓ رتبهٔ {idx[0][0] + 1}" if idx else "✗ نیست"
-        print(f"  {mark:<12} {name:<24} {q!r}   ({len(cands)} نامزد)")
+        print(f"  {mark_of(idx):<22} {name:<24} {q!r}   ({len(cands)} نامزد)")
         for j, why in idx[:2]:
             c = cands[j]
             print(f"               → {clip(c.get('title'), 40)} — "
@@ -133,14 +199,30 @@ async def main() -> int:
     if midx:
         ranked = D._rank_candidates(merged, track)
         target = merged[midx[0][0]]
+        print(f"  هدف   : [{midx[0][1]}]\n        {describe(target)}")
         pos = next((n for n, (_, c) in enumerate(ranked, 1)
                     if D._cand_url(c) == D._cand_url(target)), None)
         print(f"  و بعد از رتبه‌بندی: {'رتبهٔ ' + str(pos) if pos else '**گیت خورد**'}"
               f"  (از {len(ranked)} بازمانده)")
         if ranked:
-            print(f"  برندهٔ فعلی: {clip(ranked[0][1].get('title'), 40)} — "
-                  f"{clip(', '.join(D._cand_artists(ranked[0][1])), 24)} "
-                  f"({ranked[0][0]:.1f})")
+            win = ranked[0][1]
+            print(f"  برندهٔ فعلی ({ranked[0][0]:.1f}):\n        {describe(win)}")
+            # همان سؤالی که ابهامِ «برندهٔ ۱۰۳٫۲» رویش بود — ولی **بیش از آنچه
+            # سنجیده شده ادعا نمی‌کند**. تنها چیزی که این‌جا معلوم است این است
+            # که برنده همان ویدیوی هدف است یا نه؛ و «هدف» صرفاً با نامِ هنرمند
+            # + مدت تشخیص داده شده، پس نسخه/ریمیکسِ همان هنرمند با همان طول هم
+            # واجدِ شرط است. با اجرای خشکِ ابزار پیدا شد: یک ریمیکسِ ۳۱۱ ثانیه‌ای
+            # از همان هنرمند «هدف» شمرده شد و ابزار می‌گفت «همان ضبطِ درست است».
+            same = D._cand_url(win) == D._cand_url(target)
+            if same:
+                print("\n  ⇒ برنده = همان ویدیوی هدف")
+                if version_markers(win.get("title") or ""):
+                    print("     ⚠ ولی عنوانش نشانهٔ نسخه دارد — با چشم بسنج، "
+                          "ممکن است ضبطِ اصلی نباشد")
+                else:
+                    print("     (معیارِ هدف = هنرمند + مدت؛ عنوانِ بالا را با چشم تأیید کن)")
+            else:
+                print("\n  ⇒ برنده ویدیوی هدف **نیست**  ← ادغام به‌تنهایی کافی نیست")
     print("\n  ⇒ اگر ادغام هدف را می‌آورد ولی رتبه‌بندی نمی‌بردش، مسئله دوباره امتیازدهی است.")
     return 0
 
