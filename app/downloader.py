@@ -957,6 +957,19 @@ def _parse_spotify_embed(html: str, kind: str, max_tracks: int) -> dict | None:
         return None
     title = entity.get("title") or entity.get("name") or ""
     tl = entity.get("trackList") or []
+    # **`subtitle` سه معنا دارد، بسته به اینکه کجا باشد** — و یکی‌شان تله است:
+    #   ترکِ داخلِ `trackList` → هنرمند (شکلِ زنده)
+    #   entityِ سطحِ پلی‌لیست  → **مالکِ پلی‌لیست** (مثلاً «Spotify»)
+    #   entityِ ترکِ قدیمی    → هنرمند (شکلِ کهنه)
+    # شاخهٔ تک‌ترک روی `not tl` می‌افتاد نه روی `kind`، پس یک پلی‌لیستِ خالی یا
+    # هر پلی‌لیستی که فهرستش خوانده نشود، **یک ترکِ ساختگی** می‌ساخت با نامِ
+    # پلی‌لیست و هنرمندِ «Spotify» — و `reference_is_blind` هم نمی‌گرفتش، چون
+    # «Spotify» هنرمندِ ناتهی است. سنجیده شد: خروجی `('Persian Essentials',
+    # 'Spotify', None)` بود، یعنی جست‌وجوی یوتیوب برای «Spotify Persian
+    # Essentials» و دانلودِ هرچه برگردد — بی‌صدا.
+    etype = str(entity.get("type") or "").lower()
+    if (kind in ("playlist", "album") or etype in ("playlist", "album")) and not tl:
+        return None      # مجموعه‌ای که فهرستش خوانده نشد، «یک ترک» نیست
     if kind == "track" or not tl:
         # لینکِ **تک‌ترک**: هنرمند در `artists: [{name}]` است.
         artists = entity.get("subtitle") or entity.get("artists")

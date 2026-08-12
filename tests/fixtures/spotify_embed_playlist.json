@@ -1,18 +1,23 @@
 {
  "_fixture_note": [
-  "پاسخِ **واقعیِ** __NEXT_DATA__ برای یک **پلی‌لیست**، گرفته‌شده روی مستر",
-  "(2026-08-12). شکلِ آیتم‌های trackList عیناً از همان دامپ است.",
+  "پاسخِ **واقعیِ** __NEXT_DATA__ برای یک **پلی‌لیست**، از دو دامپِ مستر (2026-08-12):",
+  "کلیدهای سطحِ پلی‌لیست از دامپِ اول، شکلِ آیتم‌های trackList از دامپِ دوم.",
+  "",
+  "⚠ **`subtitle` این‌جا دو معنای متفاوت دارد و همین تله است:**",
+  "    entity.subtitle            = 'Spotify'  ← **مالکِ پلی‌لیست**، نه هنرمند",
+  "    entity.trackList[].subtitle = 'Fereydoon Foroughi'  ← هنرمند",
+  "  اگر entityِ سطحِ پلی‌لیست از شاخهٔ تک‌ترک رد شود، هنرمندِ همهٔ ترک‌ها",
+  "  «Spotify» می‌شود — سنجیده شد و رخ می‌داد وقتی trackList خالی/غایب بود.",
   "",
   "مرزِ صداقت — چه چیزی ضبط شد و چه چیزی نه:",
-  "  * شکلِ آیتمِ trackList: **عیناً ضبط‌شده** (uri/title/subtitle/duration/",
-  "    isExplicit/isNineteenPlus/playabilityReason/audioPreview/entityType).",
+  "  * کلیدهای سطحِ پلی‌لیست: type/title/subtitle/duration **عیناً ضبط‌شده**.",
+  "  * شکلِ آیتمِ trackList: **عیناً ضبط‌شده**.",
   "  * پلی‌لیستِ واقعی ۱۰۰ عضو داشت؛ این‌جا برای حجم به ۴ تا کوتاه شده.",
-  "  * کلیدهای **سطحِ خودِ پلی‌لیست** (کاور، سال، …) در دامپ گزارش نشدند، پس",
-  "    این‌جا هم نیامده‌اند و هیچ تستی رویشان ادعا نمی‌کند. اگر روزی معلوم شد",
-  "    پلی‌لیست کاورِ سطحِ‌مجموعه دارد، همین‌جا اضافه شود.",
+  "  * کاور و سالِ سطحِ پلی‌لیست در هیچ‌کدام از دو دامپ نبودند، پس این‌جا هم",
+  "    نیامده‌اند و هیچ تستی رویشان ادعا نمی‌کند.",
   "",
-  "نکتهٔ مهم: `subtitle` **کدِ کهنه نیست** — شکلِ زندهٔ هنرمند در این مسیر است.",
-  "لینکِ تک‌ترک `artists[].name` می‌دهد و ترکِ داخلِ trackList `subtitle`ِ رشته‌ای.",
+  "نکته: `subtitle`ِ داخلِ trackList **کدِ کهنه نیست** — شکلِ زندهٔ هنرمند در این",
+  "مسیر است. لینکِ تک‌ترک به‌جایش `artists[].name` می‌دهد.",
   "تازه‌کردن: docker compose exec -T download-worker python - <playlist-url>",
   "  --save /work/embed_pl.json < tools/spotify_embed_dump.py"
  ],
@@ -22,8 +27,8 @@
     "data": {
      "entity": {
       "type": "playlist",
-      "title": "Persian Golden Oldies",
-      "name": "Persian Golden Oldies",
+      "title": "Persian Essentials",
+      "name": "Persian Essentials",
       "uri": "spotify:playlist:37i9dQZF1DX0XUfTFmNBRM",
       "trackList": [
        {
@@ -34,7 +39,9 @@
         "isExplicit": false,
         "isNineteenPlus": false,
         "playabilityReason": "COUNTRY_RESTRICTED",
-        "audioPreview": {"url": "https://p.scdn.co/mp3-preview/aaaa"},
+        "audioPreview": {
+         "url": "https://p.scdn.co/mp3-preview/aaaa"
+        },
         "entityType": "track"
        },
        {
@@ -45,7 +52,9 @@
         "isExplicit": false,
         "isNineteenPlus": false,
         "playabilityReason": "PLAYABLE",
-        "audioPreview": {"url": "https://p.scdn.co/mp3-preview/bbbb"},
+        "audioPreview": {
+         "url": "https://p.scdn.co/mp3-preview/bbbb"
+        },
         "entityType": "track"
        },
        {
@@ -56,7 +65,9 @@
         "isExplicit": false,
         "isNineteenPlus": false,
         "playabilityReason": "PLAYABLE",
-        "audioPreview": {"url": "https://p.scdn.co/mp3-preview/cccc"},
+        "audioPreview": {
+         "url": "https://p.scdn.co/mp3-preview/cccc"
+        },
         "entityType": "track"
        },
        {
@@ -67,18 +78,27 @@
         "isExplicit": false,
         "isNineteenPlus": false,
         "playabilityReason": "PLAYABLE",
-        "audioPreview": {"url": "https://p.scdn.co/mp3-preview/dddd"},
+        "audioPreview": {
+         "url": "https://p.scdn.co/mp3-preview/dddd"
+        },
         "entityType": "track"
        }
-      ]
+      ],
+      "subtitle": "Spotify",
+      "duration": 0
      }
     },
-    "settings": {"entityContext": "playlist", "isMobile": false}
+    "settings": {
+     "entityContext": "playlist",
+     "isMobile": false
+    }
    }
   },
   "__N_SSP": true
  },
  "page": "/playlist/[id]",
- "query": {"id": "37i9dQZF1DX0XUfTFmNBRM"},
+ "query": {
+  "id": "37i9dQZF1DX0XUfTFmNBRM"
+ },
  "gssp": true
 }

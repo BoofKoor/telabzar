@@ -383,6 +383,58 @@ def test_both_live_artist_shapes_are_supported():
     assert not D.reference_is_blind(single) and not D.reference_is_blind(in_list)
 
 
+def test_the_playlist_owner_never_becomes_an_artist():
+    """`subtitle` روی خودِ پلی‌لیست **مالک** است («Spotify»)، نه هنرمند.
+
+    فیکسچرِ واقعی هر دو را دارد، پس این تست تفکیک را روی همان داده می‌سنجد.
+    """
+    out = D._parse_spotify_embed(playlist_page(), "playlist", 20)
+    assert "Spotify" not in [t["artist"] for t in out["tracks"]]
+    data = json.loads(PLAYLIST_FIXTURE.read_text(encoding="utf-8"))
+    ent = data["props"]["pageProps"]["state"]["data"]["entity"]
+    assert ent["subtitle"] == "Spotify", "فرضِ تست: فیکسچر مالک را دارد"
+
+
+@pytest.mark.parametrize("kind", ["playlist", "album", "track"])
+def test_a_collection_without_a_tracklist_is_a_parse_failure_not_one_track(kind):
+    """مسیرِ واقعی و بی‌صدا که با اجرا پیدا شد.
+
+    شاخهٔ تک‌ترک روی `not tl` می‌افتاد نه روی `kind`، پس پلی‌لیستِ خالی (یا هر
+    پلی‌لیستی که فهرستش خوانده نشود) **یک ترکِ ساختگی** می‌ساخت: عنوانِ پلی‌لیست
+    با هنرمندِ «Spotify». اندازه‌گیری‌شده پیش از رفع:
+    `('Persian Essentials', 'Spotify', None)` — و `reference_is_blind` هم
+    نمی‌گرفتش چون «Spotify» هنرمندِ ناتهی است. یعنی جست‌وجوی یوتیوب برای
+    «Spotify Persian Essentials» و دانلودِ هرچه برگردد.
+
+    مجموعه‌ای که فهرستش خوانده نشد، «یک ترک» نیست → شکستِ پارس، که به oEmbed
+    می‌افتد و **هشدار لاگ می‌کند**.
+    """
+    data = json.loads(PLAYLIST_FIXTURE.read_text(encoding="utf-8"))
+    ent = {k: v for k, v in
+           data["props"]["pageProps"]["state"]["data"]["entity"].items() if k != "trackList"}
+    page = ('<script id="__NEXT_DATA__" type="application/json">'
+            + json.dumps({"props": {"pageProps": {"state": {"data": {"entity": ent}}}}})
+            + "</script>")
+    assert D._parse_spotify_embed(page, kind, 20) is None
+
+
+def test_an_empty_playlist_is_also_a_parse_failure():
+    data = json.loads(PLAYLIST_FIXTURE.read_text(encoding="utf-8"))
+    ent = {**data["props"]["pageProps"]["state"]["data"]["entity"], "trackList": []}
+    page = ('<script id="__NEXT_DATA__" type="application/json">'
+            + json.dumps({"props": {"pageProps": {"state": {"data": {"entity": ent}}}}})
+            + "</script>")
+    assert D._parse_spotify_embed(page, "playlist", 20) is None
+
+
+def test_the_playlist_entity_outscores_its_own_items():
+    """اگر آیتمی برنده شود، فقط همان یک ترک پارس می‌شود و بقیه گم می‌شوند."""
+    data = json.loads(PLAYLIST_FIXTURE.read_text(encoding="utf-8"))
+    ent = data["props"]["pageProps"]["state"]["data"]["entity"]
+    assert D._entity_score(ent) > D._entity_score(ent["trackList"][0])
+    assert D._find_spotify_entity({"deep": {"x": ent}}) is ent
+
+
 def test_a_playlist_track_has_no_cover_of_its_own():
     """در دامپِ واقعی، آیتم‌های trackList کاورِ اختصاصی ندارند.
 
