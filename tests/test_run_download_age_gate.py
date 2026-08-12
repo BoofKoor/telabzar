@@ -16,6 +16,8 @@ import textwrap
 
 import pytest
 
+from tests.aiogram_double import ValidatingBot
+
 from app import tasks_download as TD
 from app.i18n import t
 
@@ -32,22 +34,28 @@ sys.exit(1)
 '''
 
 
-class FakeBot:
-    """فقط چیزی که `run_download` از Bot صدا می‌زند."""
+class FakeBot(ValidatingBot):
+    """فقط چیزی که `run_download` از Bot صدا می‌زند.
+
+    امضاها را خودش تعریف نمی‌کند: نسخهٔ قبلی `edit_message_text(text, chat_id,
+    message_id)` را می‌پذیرفت، که شکلِ **غلطی** است (پارامترِ دومِ aiogram
+    `business_connection_id` است). این‌جا اتفاقی مشکلی پیش نمی‌آمد چون
+    `tasks_download` با kwarg صدا می‌زند — ولی ماک اجازهٔ همان اشتباهی را
+    می‌داد که در `run_screen` سه هفته زنده ماند.
+    """
 
     def __init__(self) -> None:
         self.edits: list[str] = []
         self.messages: list[str] = []
 
-    async def edit_message_text(self, text, chat_id=None, message_id=None, reply_markup=None):
-        self.edits.append(text)
-
-    async def edit_message_caption(self, chat_id=None, message_id=None, caption=None,
-                                   reply_markup=None):
-        self.edits.append(caption)
-
-    async def send_message(self, chat_id, text, **kw):
-        self.messages.append(text)
+    def _on(self, name, payload):
+        if name == "edit_message_text":
+            self.edits.append(payload["text"])
+        elif name == "edit_message_caption":
+            self.edits.append(payload.get("caption"))
+        elif name == "send_message":
+            self.messages.append(payload["text"])
+        return True
 
 
 @pytest.fixture

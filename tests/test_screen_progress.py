@@ -26,22 +26,33 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app import safety
 from app import tasks as T
+from app.i18n import t as t_
 from app.models import Base, File, User
+from tests.aiogram_double import ValidatingBot
 
 CHAT, NOTE_MID = 991, 5150
 
 
-class FakeBot:
+class FakeBot(ValidatingBot):
+    """امضای خودش را تعریف نمی‌کند — `ValidatingBot` شکلِ واقعیِ aiogram را
+    تحمیل می‌کند. نسخهٔ قبلی `(text, chat_id, message_id)` را موضعی می‌پذیرفت و
+    دقیقاً همین باگی را پنهان کرد که در تولید ticker را بی‌اثر کرده بود."""
+
     def __init__(self) -> None:
         self.edits: list[str] = []
         self.deleted: list[int] = []
+        self.sent: list[str] = []
+        self.edit_error: Exception | None = None
 
-    async def edit_message_text(self, text: str, chat_id=None, message_id=None, **kw):
-        self.edits.append(text)
-        return True
-
-    async def delete_message(self, chat_id, message_id, **kw):
-        self.deleted.append(message_id)
+    def _on(self, name, payload):
+        if name == "edit_message_text":
+            if self.edit_error is not None:
+                raise self.edit_error
+            self.edits.append(payload["text"])
+        elif name == "delete_message":
+            self.deleted.append(payload["message_id"])
+        elif name == "send_message":
+            self.sent.append(payload["text"])
         return True
 
 
@@ -210,6 +221,47 @@ async def test_cancelling_the_job_still_propagates(env, monkeypatch):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# ── ردِ محتوا: کاربر **باید** بفهمد چرا فایلش رفت ─────────────────────────
+def _blocking_stage(monkeypatch) -> None:
+    async def _localize(bot, fid, workdir):
+        return "/tmp/whatever.mp4"
+
+    async def _scan_file(path, kind, threshold, frames, workdir):
+        return True, 0.97, "EXPOSED"
+
+    async def _report(*a, **kw):
+        return False                       # به آستانهٔ بن نرسیده
+
+    monkeypatch.setattr(T, "_localize", _localize)
+    monkeypatch.setattr(safety, "scan_file", _scan_file)
+    monkeypatch.setattr(safety, "report_block", _report)
+
+
+async def test_a_blocked_upload_actually_tells_the_user(env, monkeypatch):
+    """سه هفته این کار نمی‌کرد: ویرایش `ValidationError` می‌داد، `except`
+    یادداشت را پاک می‌کرد، و شاخهٔ `else` هم اجرا نمی‌شد چون `note_mid` هست —
+    یعنی فایل بی‌صدا ناپدید می‌شد و کاربر هیچ توضیحی نمی‌گرفت."""
+    bot = FakeBot()
+    _blocking_stage(monkeypatch)
+    await T.run_screen({"bot": bot, "redis": None}, _payload(env))
+
+    told = bot.edits + bot.sent
+    assert told, "کاربرِ ردشده هیچ پیامی نگرفت"
+    assert any(t_("fa", "nsfw_blocked") == m for m in told), \
+        f"پیامِ رد نیامد؛ آنچه فرستاده شد: {told!r}"
+
+
+async def test_the_block_message_survives_a_failing_edit(env, monkeypatch):
+    """اگر ویرایش شکست خورد (۴۲۹/پیامِ پاک‌شده)، باید پیامِ تازه فرستاده شود —
+    نه اینکه فقط یادداشت پاک شود و کاربر با سکوت بماند."""
+    bot = FakeBot()
+    bot.edit_error = RuntimeError("Telegram says no")
+    _blocking_stage(monkeypatch)
+    await T.run_screen({"bot": bot, "redis": None}, _payload(env))
+    assert bot.sent and bot.sent[-1] == t_("fa", "nsfw_blocked"), \
+        f"روی شکستِ ویرایش باید پیام فرستاده شود؛ sent={bot.sent!r}"
 
 
 # ── گاردِ خودِ عدد (وگرنه تست‌های بالا با تأخیرِ ۰٫۵ هم سبز می‌مانند) ──────

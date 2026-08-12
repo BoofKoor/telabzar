@@ -794,9 +794,13 @@ async def run_screen(ctx: dict, payload: dict) -> None:
         await asyncio.sleep(_SCREEN_NOTE_DELAY)
         while True:
             try:
+                # kwarg، نه موضعی: پارامترِ **دومِ** `edit_message_text` در aiogram
+                # `business_connection_id` است نه `chat_id` (بی‌شباهت به بقیهٔ
+                # متدها). فرمِ موضعی یک `ValidationError` می‌دهد که همین `except`
+                # می‌بلعدش — یعنی ticker بی‌صدا هیچ‌وقت شلیک نمی‌کرد.
                 await bot.edit_message_text(
-                    t(lang, f"nsfw_phase_{phase}", s=int(time.monotonic() - started)),
-                    chat_id, note_mid)
+                    text=t(lang, f"nsfw_phase_{phase}", s=int(time.monotonic() - started)),
+                    chat_id=chat_id, message_id=note_mid)
             except Exception:  # noqa: BLE001 — ویرایشِ ناموفق نباید غربالگری را بشکند
                 pass
             await asyncio.sleep(_SCREEN_NOTE_EVERY)
@@ -842,13 +846,24 @@ async def run_screen(ctx: dict, payload: dict) -> None:
         if file is not None:
             await session.delete(file)
             await session.commit()
+    # کاربر **باید** بفهمد چرا فایلش ناپدید شد. تا امروز نمی‌فهمید: فراخوانیِ
+    # موضعیِ زیر همیشه `ValidationError` می‌داد (پارامترِ دومِ aiogram
+    # `business_connection_id` است)، `except` می‌گرفتش، یادداشت پاک می‌شد و
+    # شاخهٔ `else` هم اجرا نمی‌شد چون `note_mid` وجود دارد — یعنی حذفِ بی‌صدای
+    # فایل بدونِ هیچ توضیحی. حالا ویرایش fallback به ارسال دارد.
+    blocked = t(lang, "nsfw_blocked")
+    told = False
     if note_mid:
         try:
-            await bot.edit_message_text(t(lang, "nsfw_blocked"), chat_id, note_mid)
+            await bot.edit_message_text(text=blocked, chat_id=chat_id, message_id=note_mid)
+            told = True
         except Exception:  # noqa: BLE001
             await _drop_note()
-    else:
-        await bot.send_message(chat_id, t(lang, "nsfw_blocked"))
+    if not told:
+        try:
+            await bot.send_message(chat_id, blocked)
+        except Exception:  # noqa: BLE001
+            log.warning("could not tell %s their upload was blocked", tg_user_id)
     banned = await safety.report_block(bot, ctx.get("redis"), tg_user_id, why, pol,
                                        detail=f"فایلِ آپلودی · {file_id_row}")
     if banned:

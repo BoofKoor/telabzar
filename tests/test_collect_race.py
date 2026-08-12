@@ -24,14 +24,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.models import Base, File, User
 from app.routers import ops
+from tests.aiogram_double import ValidatingBot, bind_like_aiogram
 
 CHAT_ID = 4242
 CAP_MB = 10
 HALF = 6 * 1024 * 1024          # دو تا از این‌ها از سقفِ ۱۰ مگابایتی رد می‌شود
 
 
-class FakeBot:
-    """فقط چیزی که این مسیر لازم دارد؛ ویرایش‌ها را برای بازرسی نگه می‌دارد."""
+class FakeBot(ValidatingBot):
+    """فقط چیزی که این مسیر لازم دارد؛ ویرایش‌ها را برای بازرسی نگه می‌دارد.
+
+    از `ValidatingBot` ارث می‌برد تا شکلِ فراخوانی با APIِ واقعی سنجیده شود؛
+    نسخهٔ قبلی `*a, **kw` می‌گرفت و هر شکلی را می‌پذیرفت.
+    """
 
     def __init__(self) -> None:
         self.captions: list[str] = []
@@ -42,16 +47,14 @@ class FakeBot:
         # ذاتاً سریالی است و این تأخیر هیچ اثری ندارد.
         self.delay_first = 0.0
 
-    async def delete_message(self, *a, **kw) -> bool:
-        return True
-
-    async def edit_message_caption(self, *a, caption: str = "", **kw):
+    async def edit_message_caption(self, *a, **kw):
+        payload = bind_like_aiogram("edit_message_caption", a, kw)
         if self.edit_error is not None:
             raise self.edit_error
         if self.delay_first and not self.captions:
             self.delay_first, pause = 0.0, self.delay_first
             await asyncio.sleep(pause)
-        self.captions.append(caption)
+        self.captions.append(payload.get("caption", ""))
         return True
 
 
