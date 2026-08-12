@@ -125,8 +125,15 @@ async def main() -> int:
         print(f"{head}   [{src}{' · art_track' if c.get('art_track') else ''}"
               f"{' · صریح' if D._explicit_artist(c) else ''}]")
         print(f"      عنوان : {clip(c.get('title'), 60)}")
-        print(f"      هنرمند: {clip(arts, 40)}   مدت: {mmss(cd)}"
-              + (f"  (Δ {cd - td:+d}s)" if cd and td else "  (مدت ندارد)"))
+        # «مدت ندارد» فقط وقتی که **نامزد** مدت ندارد. قبلاً وقتی مدتِ *ترک*
+        # خالی بود هم چاپ می‌شد، و همان باعث شد خروجیِ واقعی گمراه‌کننده بخوانم.
+        if cd and td:
+            dur_note = f"  (Δ {cd - td:+d}s)"
+        elif not cd:
+            dur_note = "  ← نامزد مدت ندارد"
+        else:
+            dur_note = "  ← مرجع مدت ندارد، پس مقایسه‌ای ممکن نیست"
+        print(f"      هنرمند: {clip(arts, 40)}   مدت: {mmss(cd)}{dur_note}")
         print(f"      مؤلفه‌ها: نام {D._name_match(track, c):5.1f} · "
               f"هنرمند {('%5.1f' % D._artist_match(track, c)) if D._artist_match(track, c) is not None else '   —'} · "
               f"مدت {tm_s}")
