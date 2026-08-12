@@ -1626,16 +1626,83 @@ async def _ytmusic_search(query: str, filt: str, proxy: str | None,
     return out
 
 
+def _search_queries(track: dict) -> list[str]:
+    """کوئری‌های جست‌وجوی یک ترک: «هنرمندِ اول + عنوان» و «هنرمندِ آخر + عنوان».
+
+    کوئریِ قبلی `"{artist} {title}"` بود و `artist` **همهٔ** هنرمندان را با
+    ویرگول به‌هم می‌چسباند. probeِ زنده روی مستر (۲۰۲۶-۰۸-۱۲) اندازه گرفت که آن
+    شکل ضبطِ درستِ «Faryad» را **اصلاً برنمی‌گرداند** — تنها اصابتش یک مثبتِ
+    کاذبِ «فقط مدت» در رتبهٔ ۳ بود — در حالی که «هنرمندِ اول + عنوان» رتبهٔ ۱ و
+    «هنرمندِ آخر + عنوان» رتبهٔ ۲ داد، هر دو با تطبیقِ نام **و** مدت. ادغامِ
+    شکل‌ها ۶۱ نامزدِ یکتا داد و برنده (`WUxurPJmKXI`, ۱۰۳٫۲) با چشمِ اپراتور
+    همان ضبطِ درست تأیید شد.
+
+    **چرا هر دو سر، نه فقط اولی:** اسپاتیفای برای موسیقیِ کلاسیکِ ایرانی
+    آهنگساز را اول فهرست می‌کند، پس «آخر» خواننده است — و خواننده چیزی است که
+    ضبط را می‌شناساند. برای انتشارِ غربی «اول» هنرمندِ اصلی است. دو شکل هر دو
+    قاعده را می‌پوشاند.
+
+    **هزینه:** ترکِ تک‌هنرمند به **یک** کوئری فرو می‌ریزد (اول و آخر یکی‌اند)،
+    پس از امروز گران‌تر نمی‌شود؛ فقط چندهنرمند دو فراخوان می‌گیرد.
+
+    **«فقط عنوان» عمداً نیست:** هدف را می‌آورد ولی در رتبهٔ ۱۶ (Faryad) و ۱۰
+    (Jane Maryam)، و در هر دو مورد وقتی شکل‌های دیگر از قبل آورده بودند — پس
+    فراخوانِ اضافه‌اش را نمی‌ارزد. کوئریِ **فارسی** هم ساختنی نیست: اسپاتیفای
+    فقط نامِ رومی‌شده می‌دهد (بولتِ «The Spotify Web API is closed to us» در §۷).
+    """
+    title = (track.get("title") or "").strip()
+    arts = _track_artists(track)
+    if not arts:                      # هنرمند نداریم → فقط عنوان تنها چیزِ ممکن است
+        return [title] if title else []
+    out: list[str] = []
+    for a in (arts[0], arts[-1]):     # تک‌هنرمند: هر دو یکی‌اند → dedup به یک کوئری
+        q = f"{a} {title}".strip()
+        if q and q not in out:
+            out.append(q)
+    return out
+
+
 async def _gather_candidates(track: dict, opts: dict, source: str) -> list[dict]:
-    """نامزدهای یک ترک: YT Music (ISRC→songs→videos)، و در صورتِ کم‌بودن + استخرِ ytsearch.
+    """نامزدهای یک ترک: YT Music (ISRC→songs→videos) روی چند شکلِ کوئری، و در
+    صورتِ کم‌بودنِ استخر + استخرِ ytsearch.
 
     استخرِ ytsearch همیشه وقتی YT Music کم/خالی بود اضافه می‌شود (نه فقط وقتی صفر است)
     تا امتیازده روی مجموعهٔ بزرگ‌تری انتخاب کند و هیچ‌وقت به «گرفتنِ خامِ نتیجهٔ اول»
     نیفتیم — که علتِ فرستادنِ آهنگ/خوانندهٔ اشتباه بود.
+
+    **گیتِ «استخر کم‌عمق است» روی استخرِ ادغام‌شده سنجیده می‌شود، نه به‌ازای هر
+    شکل** — وگرنه هر شکلِ تازه fallbackهای خودش را هم می‌آورد و هزینه ضرب
+    می‌شود؛ و خودِ fallbackها به‌محضِ پرشدنِ استخر می‌ایستند.
+
+    **ترتیبی، عمداً:** `_ytmusic_search` روی ۴۲۹ خطا را می‌بلعد و `[]`
+    برمی‌گرداند، یعنی شکستِ **خاموش**؛ هم‌زمانی نرخِ لحظه‌ای را روی endpointِ
+    بی‌احراز-هویت و بی‌سهمیهٔ مستند دو برابر می‌کند. تأخیرِ هر ترک هم به دانلودِ
+    yt-dlp بند است نه به این جست‌وجوها.
     """
-    query = " ".join(p for p in (track.get("artist"), track.get("title")) if p).strip()
+    queries = _search_queries(track)
+    if not queries:                   # نه عنوان نه هنرمند → جست‌وجو بی‌معنی است
+        return []
     proxy = opts.get("proxy")
     cands: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(items: list[dict]) -> None:
+        """ادغام با dedup روی URL؛ **اولین** نسخه می‌ماند.
+
+        ترتیب باربر است: `songs` پیش از `videos` می‌آید، پس نگه‌داشتنِ اولی
+        یعنی `art_track=True` (و بونوسِ +۶) حفظ می‌شود؛ اصابتِ ISRC هم که
+        زودتر می‌آید پرچمش را از دست نمی‌دهد.
+        """
+        for c in items:
+            u = _cand_url(c)
+            if u is None:             # بی‌شناسه — `_rank_candidates` خودش می‌اندازدش
+                cands.append(c)
+                continue
+            if u in seen:
+                continue
+            seen.add(u)
+            cands.append(c)
+
     if source != "youtube":  # پیش‌فرض: YouTube Music
         # تلاشِ اول: تطبیقِ قطعی با ISRC (روشِ spotDL). **در تولید هرگز اجرا
         # نمی‌شود** — ISRC فقط از APIِ رسمی می‌آید و مسیرِ embed همیشه `None`
@@ -1643,15 +1710,23 @@ async def _gather_candidates(track: dict, opts: dict, source: str) -> list[dict]
         # بولتِ «The Spotify Web API is closed to us» در §۷.
         isrc = track.get("isrc")
         if isrc:
-            for h in await _ytmusic_search(isrc, "songs", proxy, limit=3):
+            found = await _ytmusic_search(isrc, "songs", proxy, limit=3)
+            for h in found:
                 h["isrc_hit"] = True
-                cands.append(h)
-        cands += await _ytmusic_search(query, "songs", proxy)
+            _add(found)
+        for q in queries:
+            _add(await _ytmusic_search(q, "songs", proxy))
         if len(cands) < 3:  # کاتالوگِ songs کم بود → ویدیوهای موزیک را هم بگیر
-            cands += await _ytmusic_search(query, "videos", proxy)
+            for q in queries:
+                _add(await _ytmusic_search(q, "videos", proxy))
+                if len(cands) >= 3:
+                    break
     # اگر YT Music خالی/کم بود (یا source=youtube)، استخرِ ytsearch را هم ضمیمه کن
     if len(cands) < 3:
-        cands += await _yt_search_candidates(query, opts)
+        for q in queries:
+            _add(await _yt_search_candidates(q, opts))
+            if len(cands) >= 3:
+                break
     return cands
 
 
@@ -1686,7 +1761,14 @@ async def download_spotify(url: str, workdir: str, opts: dict,
             raise ProcessingCancelled()
         tdir = os.path.join(workdir, f"t{i}")
         os.makedirs(tdir, exist_ok=True)
-        query = " ".join(p for p in (tr.get("artist"), tr.get("title")) if p).strip()
+        # **از همان یک منبعِ `_gather_candidates`.** این کوئری قبلاً این‌جا
+        # دوباره و مستقل ساخته می‌شد (`"{artist} {title}"`ِ کامایی)، و آخرین‌چارهٔ
+        # `ytsearch1:` پایین‌تر رویش سوار است — پس عوض‌کردنِ استراتژی در
+        # `_gather_candidates` به‌تنهایی، آخرین‌چاره را روی همان شکلی می‌گذاشت که
+        # اندازه‌گیری شد **هدف را نمی‌آورد**. دو نسخهٔ دست‌نویس از یک قاعده واگرا
+        # می‌شوند؛ همان درسِ `remove_cookie_file` در §۷.
+        _qs = _search_queries(tr)
+        query = _qs[0] if _qs else (tr.get("title") or "")
         # نامزدها را از کاتالوگِ «songs»ی YouTube Music (+ استخرِ ytsearch) بگیر و با امتیازِ
         # fuzzyِ وزن‌دار (نام/هنرمند/آلبوم/مدت) رتبه بده؛ بهترینِ بالای آستانه را بردار.
         candidates = await _gather_candidates(tr, opts, source)
