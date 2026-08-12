@@ -123,11 +123,19 @@ async def test_dns_failure_is_rejected_without_proxy(monkeypatch):
     assert await D.is_safe_url_resolved("https://nope.example/v") is False
 
 
-async def test_dns_failure_is_allowed_with_proxy(monkeypatch):
-    """با پروکسیِ خروجی، نام را **پروکسی** حل می‌کند و دیدِ محلیِ ما بی‌ربط است."""
+@pytest.mark.parametrize("proxy", ["http://exit:3128", "socks5h://exit:1080"])
+async def test_dns_failure_is_rejected_with_a_proxy_too(monkeypatch, proxy):
+    """**رفتار در فاز ۳ت عوض شد — و این یکی یک دورزدنِ واقعی را می‌بست.**
+
+    قبلاً با پروکسیِ ست‌شده اجازه می‌داد، به این استدلال که «نام را پروکسی حل
+    می‌کند». آن فقط برای DNSِ افقِ‌تقسیم‌شده صادق است و خروجیِ ما بیرونی است.
+    در مقابل: نامی که برای ما NXDOMAIN است ولی پروکسی حلش می‌کند از درِ ورودی
+    رد می‌شد — و در حالتِ پروکسی همین در **تنها** دفاع است، چون رزولورِ
+    وتوکننده وصل نمی‌شود. یعنی fail-open همان‌جا ضعیف بود که بیشترین اهمیت را
+    داشت.
+    """
     monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo({}))
-    assert await D.is_safe_url_resolved(
-        "https://nope.example/v", proxy="http://exit:3128") is True
+    assert await D.is_safe_url_resolved("https://nope.example/v", proxy=proxy) is False
 
 
 async def test_resolution_is_cached(monkeypatch):
@@ -247,16 +255,33 @@ async def test_safe_resolver_is_attached_when_there_is_no_proxy():
 
 @pytest.mark.parametrize("proxy", ["socks5://127.0.0.1:1080", "socks5h://exit:1080",
                                    "socks4://exit:1080"])
-async def test_socks_proxy_still_gets_the_safe_resolver(proxy):
-    """با پروکسیِ socks، `_http_proxy` آن را دور می‌ریزد و ما `proxy=None` پاس
-    می‌دهیم → اتصالِ واقعاً مستقیم → رزولور باید سرِ جایش بماند.
+async def test_socks_proxy_now_goes_through_the_proxy_connector(proxy):
+    """**رفتار در فاز ۳ت عوض شد.**
 
-    (aiohttp خودش به مستقیم برنمی‌گردد؛ socks را مثلِ آدرسِ یک پروکسیِ HTTP
-    می‌گیرد و شکست می‌خورد. تستِ زیر همین را تثبیت می‌کند تا استدلال روی فرضِ
-    غلط ننشیند.)
+    نسخهٔ قبلیِ این تست تثبیت می‌کرد که با پروکسیِ socks رزولورِ وتوکننده سرِ
+    جایش می‌ماند — که درست بود، ولی فقط چون `_http_proxy` پروکسی را دور
+    می‌ریخت و اتصال **واقعاً مستقیم** می‌شد. یعنی تست داشت یک باگ را پین
+    می‌کرد: کاربری که `socks5h://` گذاشته بود، دانلودِ فایلِ مستقیمش از IPِ
+    خودِ مستر بیرون می‌رفت.
+
+    حالا socks از `ProxyConnector` می‌رود. رزولور آن‌جا **قابلِ وصل نیست**
+    (`aiohttp_socks` بی‌قیدوشرط `NoResolver()` می‌گذارد) و دفاع درِ ورودی است —
+    دقیقاً همان وضعِ پروکسیِ http(s). `test_socks_direct.py` را ببین.
     """
-    assert D._http_proxy(proxy) is None
-    conn = D._direct_connector({"proxy": proxy})
+    from aiohttp_socks import ProxyConnector
+    assert D._http_proxy(proxy) is None, "پارامترِ درخواست هنوز فقط http می‌گیرد"
+    conn = D._direct_connector({"proxy": proxy, "direct_proxy": True})
+    try:
+        assert isinstance(conn, ProxyConnector)
+    finally:
+        await conn.close()
+
+
+@pytest.mark.parametrize("proxy", ["socks5://127.0.0.1:1080", "socks5h://exit:1080"])
+async def test_socks_with_direct_proxy_off_keeps_the_safe_resolver(proxy):
+    """وقتی ادمین صریحاً `dl_direct_proxy` را خاموش کند، اتصال مستقیم است —
+    و آن‌وقت رزولورِ وتوکننده دقیقاً همان چیزی است که لازم است."""
+    conn = D._direct_connector({"proxy": proxy, "direct_proxy": False})
     try:
         assert type(conn._resolver).__name__ == "SafeResolver"
     finally:

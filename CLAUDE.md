@@ -441,18 +441,14 @@ usable accounts drop below `cookie_alert_min`.
   hop — a `PROXY_URL` of `http://squid:3128` (a docker service name → `172.x`) counted as "internal"
   and every download died with `ClientConnectorDNSError`. A proxy given as a bare IP was unaffected,
   which is exactly what makes this the kind of regression a unit test doesn't find.
-  **The socks branch keeps the resolver, and the reason is `_http_proxy`, not aiohttp.** aiohttp does
-  **not** ignore a socks proxy and fall back to a direct connection — it treats `socks5://h:1080` as an
-  HTTP proxy address and tries to CONNECT to that host:port, which fails. `_http_proxy` therefore drops
-  any non-http(s) proxy and we pass `proxy=None`, so the `direct` engine really does connect directly
-  and the resolver is exactly right there. The pre-existing side effect worth knowing: with a
-  socks-only `PROXY_URL` the `direct` engine bypasses the proxy and exits from the master's own IP;
-  only yt-dlp/gallery-dl (which get `--proxy`) use it. **Nothing else in
-  the codebase goes through these checks:** `is_safe_url*` has exactly two call sites (the link front
-  door and `_follow`), and every internal address — `gateway_node.py`→`NODE_GATEWAY_URL`, the panel's
-  pot-provider ping and bot-API DM, `download_cobalt`→`COBALT_URL`, aiogram→`LOCAL_API_BASE`, Redis and
-  Postgres — uses its own plain session or driver. `node/wg-sync.sh` reaches `/node/peers` with `curl`
-  from the host and never touches Python. Verify this inventory before widening where the checks run.
+  **A socks proxy now goes through `aiohttp_socks.ProxyConnector`** (phase 3d). Before that,
+  `_http_proxy` dropped it and the `direct` engine connected straight out of the master's IP while
+  yt-dlp and gallery-dl used the exit — silently, and against our own documentation. Two things to
+  know before touching it: the anti-TOCTOU resolver **cannot** be attached to `ProxyConnector`
+  (`kwargs["resolver"] = NoResolver()` is unconditional), and pinning a vetted IP instead breaks TLS
+  because python_socks builds `server_hostname` from the destination — so the front door is the
+  defence, the same posture an http proxy already had. `socks5h://` is rewritten to `socks5://`
+  (python_socks rejects the scheme and defaults to proxy-side DNS anyway). Switch: `dl_direct_proxy`.
 - **`INCR` + `DECR`-in-`finally` is not a concurrency limiter.** `finally` does not run on OOM/kill, and
   `dl:active` had no TTL, so three ungraceful deaths permanently pinned the counter above
   `dl_concurrency` and **every** later download answered "busy" forever — self-inflicted, invisible, and
@@ -626,26 +622,32 @@ usable accounts drop below `cookie_alert_min`.
   the file under a new name where the server can read it does not work today. It would also apply to
   every file-producing op, not to rename specifically.
 - ~~**Tests:**~~ **resolved 2026-07-26** — `tests/` + `requirements-dev.txt` + `pytest.ini` are committed (see §6). Coverage today is the security/correctness regressions of the phase-one bug audit, not the whole app; grow it fix-by-fix.
-- **Phase-3 backlog — a socks `PROXY_URL` does not apply to the `direct` engine, and the docs say
-  otherwise.** `docs/ADMIN_PANEL.md:74` recommends `socks5h://…` for `proxy_url`, so anyone following
-  the documentation believes every download leaves through their clean exit. It does not:
-  `downloader._http_proxy()` passes only `http(s)://` proxies to aiohttp and drops everything else, so
-  the `direct` engine (plain download links — GitHub releases, APKs, PDFs) connects **directly and
-  exits from the master's own IP**. Only yt-dlp and gallery-dl, which receive `--proxy`, honour it.
-  This is a **docs-vs-code contradiction**, not a footnote — and it blocks the near-term plan of using
-  a mobile/4G proxy as the exit, because that exit would silently not cover direct downloads.
-  The likely fix is `aiohttp_socks.ProxyConnector`, and it was checked against 0.11.0 so phase 3 does
-  not start from zero. Two blockers, both verified by running it:
-  (a) **it is incompatible with our resolver, silently.** `aiohttp_socks/connector.py:107` does
-  `kwargs['resolver'] = NoResolver()`, overwriting whatever you pass — an instrumented resolver handed
-  to `ProxyConnector` was never called for the destination. So the anti-TOCTOU veto **disappears with
-  no error and no warning**; the SSRF defence for socks downloads has to come from somewhere else
-  (front door only, or resolve the destination ourselves and hand the vetted IP to the proxy).
-  (b) **it rejects the `socks5h://` scheme our own docs recommend** —
-  `ValueError: Invalid scheme component: socks5h`. The URL has to be mapped to `socks5://` plus
-  `rdns=True`, which is what `socks5h` means anyway.
-  Decide first whether `direct` downloads should go through the proxy at all; if yes, the resolver
-  guarantee must be replaced, not assumed.
+- ~~**Phase-3 item 11 — a socks `PROXY_URL` does not apply to the `direct` engine:**~~ **closed
+  2026-08-12.** `_http_proxy` dropped every non-http(s) proxy, so with the `socks5h://` that
+  `docs/ADMIN_PANEL.md` itself recommended, yt-dlp and gallery-dl went through the exit while the
+  `direct` engine connected **straight out of the master's IP** — silently. The docs promised
+  coverage the code did not deliver, and it blocked the mobile-exit plan. `_proxy_kind()` now
+  classifies http/socks and `_direct_connector` routes socks through `aiohttp_socks.ProxyConnector`,
+  gated by the runtime key `dl_direct_proxy` (default **on**: with an http proxy the direct engine
+  always went through it, so on is the *consistent* setting, not a new behaviour; off means going back
+  to leaking the master IP, and `dl_direct_max_mb` is the sharper lever for mobile-data cost).
+  **Three facts that shaped it, all re-verified on aiohttp_socks 0.12.0 rather than inherited from the
+  0.11.0 note.** (a) `ProxyConnector.__init__` does `kwargs["resolver"] = NoResolver()`
+  unconditionally, so the anti-TOCTOU veto **cannot** be attached there — it disappears with no error.
+  (b) Pinning a pre-vetted IP instead was investigated and **rejected**: python_socks derives TLS
+  `server_hostname` from `dest_host` (`_stream.start_tls(hostname=…)`), so an IP would break
+  certificate validation for every HTTPS host, and the v1 connector exposes no override. So the SSRF
+  defence for socks is the **front door** — which is not a regression, because with an http proxy
+  `_direct_connector` already omitted the resolver and relied on exactly that. (c) `socks5h://` is
+  rejected by python_socks (`Invalid scheme component`) and is rewritten to `socks5://`; this is a
+  pure scheme rewrite because `rdns` already defaults to True there (`if rdns is None: rdns = True`),
+  i.e. `socks5://` in python_socks already means proxy-side DNS — unlike curl, where `socks5h` is the
+  one that does. The `socks5h` recommendation in our docs was therefore correct and stays.
+  **DNS failure is now fail-closed for both proxy kinds** (it used to be allowed whenever a proxy was
+  set). The old rationale only holds for split-horizon DNS; our exit is external and the master is a
+  normal VPS. Against that, a name that is NXDOMAIN for us but resolvable by the proxy walked straight
+  past the front door — and in the proxy case the front door is the *only* defence, so the fail-open
+  was weakest exactly where it mattered most.
 - **Phase-3 backlog — Spotify names the wrong cause when the age gate blocks everything.**
   `--match-filter age_limit<?18` reaches Spotify because `download_spotify` passes the same `opts` to
   `download_ytdlp` per track. A blocked track raises `AgeRestricted`, is swallowed by that loop's
@@ -676,18 +678,14 @@ usable accounts drop below `cookie_alert_min`.
   **A card for an uploaded file is sent by `file_id`** (`cards.py:188`), so without screening the bot never needs the bytes at all. For a user who uploads and never runs an op, that fetch is pure added cost on the master's uplink; for everyone else it moves a cost that `run_op` would have paid later.
   Directions, re-listed for an I/O-bound cost: **give screening its own queue and worker**, so a 10 s network wait cannot hold an op slot — this is the only option that addresses the actual bottleneck; or raise `max_jobs` on the existing worker, cheaper but it lets screening and CPU work contend. Two things that look attractive and are not: **routing `run_screen` to a processing node would make it worse**, because a node runs `is_local=False` and `_localize` would pull the bytes across WireGuard (master uplink pays twice); and **trimming `safety_video_frames` or disabling the pixel layer buys ~1 s and ~1.4 s** respectively, not the 10 s that actually hurts. Skipping the pixel scan above a size threshold would work but trades away exactly the coverage the layer exists for. **Settle before user growth.**
   **Two halves of this were closed in phase 3c; the queue gate is what remains.** The model no longer loads on the user's first upload — `worker._warm_safety_model` warms it at worker startup — and the wait is no longer silent: `run_screen` now labels its phase (fetch vs scan) with an elapsed second count. Neither touches the capacity ceiling, which is still the open decision, and one interaction matters when it is taken: a **dedicated screening worker would load its own copy of the model (~81 MB)**, so warm-up and the queue split should be decided together rather than in sequence. The warm-up's `node_role == "processing"` skip is written against today's routing (`run_screen` has no `_queue_name`, so it cannot reach `arq:queue:proc`) and has to be re-read if screening ever gets its own queue.
-- **The 4G/mobile-proxy plan is half-blocked today, and not by the `direct` engine — `gallery-dl` cannot
-  do socks without PySocks, which is not installed.** Verified 2026-08-12, and it matters because
-  gallery-dl is what fetches **Instagram**, i.e. the exact platform the mobile exit exists to protect.
-  **yt-dlp is fine**: `--proxy` documents "HTTP/HTTPS/SOCKS" and it ships its own `yt_dlp.socks`
-  (`make_socks_proxy_opts` accepts `socks5`/`socks5h`/`socks4`/`socks4a`) with no external dependency.
-  **gallery-dl runs on `requests`**, whose socks support lives in the optional `PySocks` package, and
-  `requirements-worker-dl.txt` does not list it. Measured: without PySocks a socks proxy fails at
-  `InvalidSchema: Missing dependencies for SOCKS support`; with it installed the same call proceeds to a
-  real connection attempt. So pointing `PROXY_URL` at a socks exit today gives working YouTube and a
-  hard failure on Instagram. The fix is one line in `requirements-worker-dl.txt`, but it rebuilds the
-  download-node image, so it should ship in the **same deployment** as phase-3d item 11 rather than on
-  its own.
+- ~~**The 4G/mobile-proxy plan is half-blocked — gallery-dl cannot do socks without PySocks:**~~
+  **closed 2026-08-12, shipped with item 11 as planned** (it rebuilds the download-node image, so the
+  two had to land in one deployment). The asymmetry is worth keeping: **yt-dlp** ships its own
+  `yt_dlp.socks` and needs nothing, while **gallery-dl** runs on `requests`, whose socks support lives
+  in the optional `PySocks` — and gallery-dl is what fetches **Instagram**, the exact platform the
+  mobile exit exists to protect. Measured before the fix: `InvalidSchema: Missing dependencies for
+  SOCKS support`; after installing it, the same call reaches a real connection attempt. So a socks
+  `PROXY_URL` would have given working YouTube and a hard failure on Instagram.
 - **Nothing exercises `_MIGRATIONS` until deployment — a typo in the next migration surfaces on the
   master, at startup, in production.** Found while closing phase-3 item 9 and worth more than item 9
   itself. `init_models()` is called from exactly two places (`__main__.py:31`, `worker.py:28`), both
@@ -717,6 +715,7 @@ usable accounts drop below `cookie_alert_min`.
 - **Why does `wg0` exist but carry no IP? — unknown, and it blocks bringing nodes back.** Observed on the master (2026-08-10): after the nodes were deleted from the panel, the stack would not come up because `.nodes-enabled` was still present, so the CLI kept applying `docker-compose.nodes.yml`, whose `local-bot-api` binds `${WG_MASTER_IP:-10.51.0.1}:8081:8081` (`docker-compose.nodes.yml:20-22`) — and that bind fails when `wg0` has no address. The interface existed; the address did not. **Nothing in this repo explains that state** — `node/master-setup.sh` is what assigns the WG address, and whether it never ran to completion, ran before a reboot, or had its address removed later is not something the code can tell us. This has to be answered on the master (`ip addr show wg0`, `wg show`, the `[Interface] Address` line in `/etc/wireguard/wg0.conf`, the `wg-quick@wg0` unit state, and the systemd ordering drop-in the setup installs) **before** re-enabling nodes, because re-enabling means re-applying the same overlay that failed. Related and separately confirmed: **`.nodes-enabled` is create-only.** `node/master-setup.sh:125` `touch`es it and **no code path anywhere removes it** (repo-wide grep), while the CLI gates the overlay on mere file presence (`install.sh:176`) with no check that a `Node` row still exists. So deleting every node from the panel leaves the master still configured for WG-bound services. Renaming it (`.nodes-enabled.off`) is the current workaround; the real fix is either to have the panel/`master-setup.sh` own the flag's lifecycle, or to gate the overlay on something that reflects reality rather than on a file that is never cleaned up.
 
 ## Changelog
+- 2026-08-12 — **فاز ۳ت (موردِ ۱۱ + PySocks): موتورِ `direct` بالاخره از پروکسیِ socks می‌رود.** تا امروز `_http_proxy` هر پروکسیِ غیرِhttp را دور می‌ریخت، پس با `socks5h://` — همان چیزی که **مستندِ خودمان توصیه می‌کرد** — یوتیوب و اینستاگرام از خروجی می‌رفتند و دانلودِ فایلِ مستقیم **بی‌صدا** از IPِ خودِ مستر. `_proxy_kind()` حالا http/socks را تفکیک می‌کند و `_direct_connector` مسیرِ socks را به `aiohttp_socks.ProxyConnector` می‌دهد، با کلیدِ زمانِ‌اجرای `dl_direct_proxy` (پیش‌فرض **روشن**، به استدلالِ اپراتور: با پروکسیِ http این موتور همیشه از پروکسی می‌رفته، پس روشن‌بودن هم‌شکل‌کردن است نه رفتارِ تازه؛ خاموش‌بودن یعنی نگه‌داشتنِ باگ). **سه یافته که همه روی ۰.۱۲.۰ دوباره سنجیده شدند نه ارثی از یادداشتِ ۰.۱۱.۰:** (الف) `ProxyConnector` بی‌قیدوشرط `NoResolver()` می‌گذارد، پس وتوی ضدِTOCTOU آن‌جا **قابلِ وصل نیست** و بی‌صدا ناپدید می‌شود؛ (ب) جایگزینش — پین‌کردنِ IPِ تأییدشده — بررسی و **رد شد**، چون python_socks `server_hostname` را از `dest_host` می‌سازد (`_stream.start_tls(hostname=…)`) و یک IP اعتبارسنجیِ سرتیفیکیتِ هر هاستِ HTTPS را می‌شکند؛ پس دفاع **درِ ورودی** است — که رگرسیون نیست، چون با پروکسیِ http هم از قبل همین بود؛ (پ) `socks5h://` را python_socks نمی‌شناسد و به `socks5://` بازنویسی می‌شود، که **بازنویسیِ خالصِ اسکیم** است چون `rdns` همان‌جا پیش‌فرض True است — برخلافِ curl. **شکستِ DNS برای هر دو نوعِ پروکسی fail-closed شد** (پیشنهادِ اپراتور، و درست: استدلالِ قدیمی فقط برای DNSِ افقِ‌تقسیم‌شده صادق بود، در حالی که نامی که برای ما NXDOMAIN است و پروکسی حلش می‌کند از درِ ورودی رد می‌شد — همان دری که در حالتِ پروکسی **تنها** دفاع است). **PySocks هم در همین استقرار آمد:** yt-dlp socksِ خودش را دارد ولی gallery-dl روی `requests` است و بدونِ PySocks خطای «Missing dependencies for SOCKS support» می‌دهد — و gallery-dl همان چیزی است که **اینستاگرام** را می‌کشد، یعنی دقیقاً هدفِ خروجیِ موبایل. **تست‌ها (۲۲۸ → ۲۴۲):** مسیرِ socks با یک **سرورِ SOCKS5ِ واقعیِ درون‌پروسه‌ای** سنجیده می‌شود که خودش پروتکل را حرف می‌زند و مقصدِ خواسته‌شده را ثبت می‌کند — همان ثبت اثبات می‌کند ترافیک واقعاً از پروکسی رد شده، نه اینکه صرفاً دانلود موفق بوده. **عمداً ماکِ کانکتور نه**، چون درسِ همین هفته این بود که ماک شکلِ کتابخانهٔ بیرونی را پنهان می‌کند. تنها چیزی که ماک می‌شود `_addr_is_internal` است (الگوی موجودِ `test_ssrf`) تا سرورِ ۱۲۷٫۰٫۰٫۱ قابلِ تست باشد. روی سورسِ پیش از رفع ۶ از ۱۱ تست fail می‌شود. **دو تستِ قدیمی عمداً عوض شدند** چون رفتارِ پین‌شده‌شان همان باگ بود: «socks رزولور را نگه می‌دارد» و «شکستِ DNS با پروکسی مجاز است». **اعمال:** `downloader.py` روی نودِ دانلود و `requirements-worker-dl.txt` عوض شده → `telabzar update` روی مستر **و** `node/update.sh` روی نودِ دانلود (rebuildِ ایمیج لازم است).
 - 2026-08-12 — **دو باگِ کاربر-محور از یک علتِ ریشه‌ای: ترتیبِ آرگومانِ `edit_message_text`.** اسموکِ ۳پ روی سرور نشان داد ویدیوی ۱٫۵ گیگی یک دقیقه روی «در حالِ بررسی…» می‌ماند و متن **هیچ‌وقت** عوض نمی‌شود. علت با اثباتِ محلی پیدا شد نه حدس: پارامترِ **دومِ** `Bot.edit_message_text` در aiogram `business_connection_id` است نه `chat_id`، پس فرمِ موضعیِ `(text, chat_id, mid)` مقدارِ `chat_id` را در `business_connection_id` می‌گذارد و **پیش از هر I/O شبکه‌ای** `ValidationError` می‌دهد — که هر دو محلِ فراخوانی داخلِ `except Exception` می‌بلعیدند. **باگِ مهم‌ترْ مالِ من نبود و ~۳ هفته زنده بود** (`22bd5c7`): پیامِ «محتوای غیرمجاز» هم با همین فرم فرستاده می‌شد، پس ویرایش می‌ترکید، `except` یادداشت را پاک می‌کرد، و شاخهٔ `else` هم اجرا نمی‌شد چون `note_mid` وجود دارد — یعنی **هر آپلودی که فیلتر ردش می‌کرد بی‌صدا ناپدید می‌شد و کاربر هیچ توضیحی نمی‌گرفت**. حالا ویرایش fallback به `send_message` دارد. **چرا فقط این دو متد:** `edit_message_text` و `edit_message_caption` تنها متدهایی‌اند که `business_connection_id` را قبل از `chat_id` دارند؛ `send_message`/`delete_message`/`send_*` همه شهودی‌اند و همین ناهماهنگی چشم را رد می‌کند. **چرا CI سبز بود — و درسِ اصلیِ این کار:** `FakeBot` امضای **خودش** را تعریف کرده بود و فراخوانیِ موضعی را می‌پذیرفت، یعنی ماک شکلِ API را پنهان کرد. جنسِ تازه‌ای از vacuous شدن که در دو موردِ قبلی ندیده بودیم. `tests/aiogram_double.py` حالا آرگومان‌ها را با امضای خودِ `aiogram.Bot` bind و همان مدلی را می‌سازد که aiogram می‌ساخت، پس pydantic واقعاً اعتبارسنجی می‌کند؛ **هر سه** `FakeBot`ِ ریپو رویش رفتند (دوتای دیگر هم همان امضای غلط را می‌پذیرفتند، هرچند مسیرشان با kwarg صدا زده می‌شد). به‌علاوهٔ گاردِ ASTی که متدهای تله‌دار را از امضای خودِ `Bot` **کشف** می‌کند نه از فهرستِ دستی. **تست‌ها (۲۲۳ → ۲۲۸):** روی کدِ مستقر، ۴ تستِ فازِ غربالگری + ۲ تستِ تازهٔ پیامِ رد + گاردِ AST fail می‌شوند — و آن ۴ تا **قبلاً روی همین کد سبز بودند**، که خودش اثباتِ رفعِ ماک است. **اعمال:** `tasks.py` روی مستر و نودِ پردازش → `telabzar update` + `node/update.sh`.
 - 2026-08-11 — **فاز ۳پ: دو نیمه از سقفِ ظرفیتِ غربالگری — بارگذاریِ مدل و سکوتِ انتظار.** **(۱۲ warm-upِ NudeNet)** بارگذاری ~۸۱ مگابایت و چند ثانیه است و تا امروز روی **اولین** فایلی که کاربر می‌فرستد اتفاق می‌افتاد، یعنی بدترین لحظهٔ ممکن: درست بعد از هر `telabzar update`. حالا `worker._warm_safety_model` سرِ استارت در پس‌زمینه بارش می‌کند. **یک کشفِ ساختاری کار را ساده کرد:** هم `startup_dl` هم `startup_master` خودشان `await startup(ctx)` می‌زنند، پس یک تغییر در `startup` هر چهار نوع ورکر را می‌گیرد. **سه قید، هرکدام با دلیل:** گیت روی `safety_enabled` + `safety_scan_pixels` (وگرنه ۸۱ مگابایت برای قابلیتِ خاموش)؛ **داخلِ `asyncio.to_thread`** چون `_get_detector` **همگام** است و صداکردنش روی حلقهٔ رویداد یعنی startup را مسدود نکرده‌ایم ولی کلِ ورکر را تا پایانِ بارگذاری کر کرده‌ایم — قیدی که در پلن نبود و سرِ طراحی اضافه شد؛ و **ردشدن روی نودِ پردازش** چون آن‌جا اثباتاً اسکن نمی‌شود (`run_screen` بدونِ `_queue_name` صف می‌شود پس به `arq:queue:proc` نمی‌رسد، و `run_op` هیچ مسیری به safety ندارد). **قفلِ #۸۹ پیش‌نیازِ این کار است نه جانبیِ آن:** warm-upِ پس‌زمینه‌ای احتمالِ ساختِ هم‌زمان را **بیشتر** می‌کند، و تست همین را می‌سنجد (warm-up + دو جابِ هم‌زمان → دقیقاً یک ساخت). **(۱۳الف برچسبِ فاز)** یادداشتِ «در حالِ بررسی» یک‌بار فرستاده می‌شد و تا پایان دست‌نخورده می‌ماند — روی ویدیوی بزرگ تا ~۹۴ ثانیه سکوت. حالا ticker فازِ جاری (دریافت/بررسی) + ثانیهٔ سپری‌شده را می‌نویسد. **درصد و شمارندهٔ فریم عمداً ساخته نشد،** چون تقسیمِ زمان (۱۰٫۳ / ۱٫۱ / ۰٫۳) می‌گوید کار یک انتظارِ شبکه است و درصدِ ساختگی چیزی نمی‌گوید. **و ticker با تأخیر شروع می‌شود (`_SCREEN_NOTE_DELAY=4`)، که تصمیمِ اپراتور بود و درست بود:** غربالگریِ فایلِ کوچک ~۱٫۴ ثانیه است، پس شروعِ بی‌تأخیر یعنی اکثریتِ مطلقِ آپلودها یک ویرایشِ بی‌فایده می‌گیرند و رگبارِ آلبوم به سقفِ نرخِ تلگرام نزدیک می‌شود. بستنِ ticker با `P.stop_task` است (درسِ ۲-۷) و `rmtree` **قبل** از آن، چون `stop_task` می‌تواند لغوِ خودِ جاب را بالا بدهد. **تصحیحِ یک کامنتِ جامانده:** `routers/files.py` هنوز می‌گفت کارت یعنی «آپلودِ دوباره» — همان جمله‌ای که ۲۰۲۶-۰۸-۱۰ در `tasks.py` و §۷ تصحیح شد ولی این نسخه‌اش جا مانده بود. **تست‌ها (۲۰۴ → ۲۲۳):** ۹ تستِ warm-up + ۱۰ تستِ برچسبِ فاز. روی سورسِ پیش از رفع ۹ + ۵ تا fail می‌شوند. **یک تصحیحِ روشِ خودم:** نسخهٔ اولِ فیکسچر با `monkeypatch.setattr` روی ثابت‌هایی که پیش از رفع وجود ندارند، باعث می‌شد تست‌ها با `AttributeError` سرِ **setup** بیفتند — یعنی «نبودِ صفت» را نشان می‌داد نه شکافِ رفتاری را؛ با `raising=False` نسخهٔ قدیمی واقعاً اجرا می‌شود و روی ادعای درست می‌افتد («کارِ کند هیچ بازخوردی نمی‌دهد»). پنج تستی که هر دو طرف سبزند کنترل‌اند، از جمله «سریع = صفر ویرایش» که گاردِ **ضدِ پرحرفیِ کدِ جدید** است نه اثباتِ قابلیت. **۱۳ب (گیتِ صف) عمداً انجام نشد** — تصمیمِ ظرفیت است و در Open Questions با تداخلش با ۱۲ (ورکرِ اختصاصی = نسخهٔ دومِ ۸۱ مگابایتیِ مدل) ثبت شد. **اعمال:** `worker.py`/`safety.py` روی مستر و نودِ دانلود، `tasks.py` روی نودِ پردازش → `telabzar update` + `node/update.sh` روی هر دو نوع نود.
 - 2026-08-11 — **حذفِ opِ مردهٔ `thumb`** (کارِ جدا، بعد از فاز ۳ب). گاردِ موردِ ۸ پیدایش کرده بود و تصمیمِ محصولی می‌خواست. **مقایسه‌ای که تصمیم را ساخت و حدسِ اولیه را رد کرد:** `thumb` تکرارِ دکمهٔ **کاور** نبود — جهتشان عکسِ هم است (`cover` عکسی را که کاربر می‌فرستد می‌گیرد و `file.cover_id` را ست می‌کند، کاملاً در روتر و بدونِ جاب؛ `thumb` یک JPG از **دلِ** ویدیو بیرون می‌داد). همپوشانیِ واقعی با **`screenshot`** بود که دقیقاً همان `{"send_media": {"as": "photo"}}` را برمی‌گرداند و تنها تفاوتش انتخابِ فریم بود: زمانِ انتخابیِ کاربر در برابرِ فریمِ نمایندهٔ خودکارِ فیلترِ `thumbnail`. با منوی ویدیو که از قبل ۱۱ دکمه دارد، صرفه‌جوییِ دو تپ ارزشِ دکمهٔ دوازدهم را نداشت. **حذف‌شده‌ها:** شاخهٔ `_do_op`، ورودیِ `OFFLOAD_OPS`، `btn_thumb`/`cl_thumb` در دو زبان، و `processing.video_thumbnail` که تنها فراخوانش همان شاخه بود (مثلِ `make_zip` در ۳الف). نیازِ داخلی دست‌نخورده می‌ماند چون `video_poster` همان فیلترِ `thumbnail` را در ≤۳۲۰px دارد. `_KNOWN_UNREACHABLE` تهی شد و **در همان کامیت**، چون گارد دوطرفه است. تعدادِ تست ثابت (۲۰۴) — چیزی اضافه نشد، ولی با سابوتاژ (افزودنِ دوبارهٔ یک هندلرِ بی‌دکمه) تأیید شد که گارد با فهرستِ تهی هنوز می‌گیرد. پاریتیِ locale سنجیده شد: ۲۱۰ → ۲۰۸ کلید، صفر اختلاف. **اعمال:** `tasks.py`/`processing.py`/`nodes.py` روی نودِ پردازش هم می‌دوند → `telabzar update` + `node/update.sh`؛ رفتارِ کاربر عوض نمی‌شود چون این مسیر از ابتدا در دسترس نبود.

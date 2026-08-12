@@ -248,9 +248,14 @@ async def is_safe_url_resolved(url: str, proxy: str | None = None) -> bool:
     `getaddrinfo` در thread می‌رود تا حلقهٔ رویدادِ ربات بند نیاید، و نتیجه
     `_DNS_TTL` ثانیه کش می‌شود (لینکِ تکراری دوباره DNS نمی‌زند).
 
-    **شکستِ DNS مشروط است، نه همیشه‌مجاز:** اگر پروکسیِ خروجی ست باشد نام را *پروکسی*
-    حل می‌کند و دیدِ محلیِ ما بی‌ربط است → اجازه. اگر پروکسی نداریم (پیش‌فرضِ ما)
-    درخواست از همین ماشین می‌رود، پس شکستِ DNS اینجا دلیلِ موجهی ندارد → رد + لاگ.
+    **شکستِ DNS همیشه رد است — با پروکسی یا بی‌پروکسی (تغییرِ فاز ۳ت).** قبلاً با
+    پروکسیِ ست‌شده اجازه می‌داد، به این استدلال که «نام را پروکسی حل می‌کند و دیدِ
+    محلیِ ما بی‌ربط است». آن استدلال فقط برای DNSِ افقِ‌تقسیم‌شده صادق است — پروکسیِ
+    داخلی‌ای که نامی را ببیند که ما نمی‌بینیم — و خروجیِ ما بیرونی است و مستر یک VPS
+    با DNSِ سالم. در مقابل، هزینه‌اش یک دورزدنِ واقعی بود: نامی که برای ما NXDOMAIN
+    است ولی پروکسی حلش می‌کند، از درِ ورودی رد می‌شد — و در حالتِ پروکسی همین در
+    **تنها** دفاع است، چون رزولورِ وتوکننده آن‌جا وصل نمی‌شود (`_direct_connector`).
+    یعنی fail-open دقیقاً همان‌جا ضعیف بود که بیشترین اهمیت را داشت.
     """
     if not is_safe_url(url):
         return False
@@ -269,10 +274,8 @@ async def is_safe_url_resolved(url: str, proxy: str | None = None) -> bool:
         if not ok:
             log.warning("blocked url: %s resolves to an internal address", host[:90])
     except (socket.gaierror, asyncio.TimeoutError, OSError, UnicodeError) as exc:
-        ok = bool(proxy)
-        if not ok:
-            log.warning("blocked url: dns lookup failed for %s (%s) and no proxy is set",
-                        host[:90], exc)
+        ok = False
+        log.warning("blocked url: dns lookup failed for %s (%s)", host[:90], exc)
     if len(_dns_cache) >= _DNS_CACHE_MAX:
         _dns_cache.clear()          # کشِ کوچک و بی‌اهمیت — پاکسازیِ ساده کافی است
     _dns_cache[host] = (now + _DNS_TTL, ok)
@@ -306,29 +309,34 @@ def _safe_resolver():
 
 
 def _direct_connector(opts: dict):
-    """کانکتورِ سشنِ موتورِ `direct`.
+    """کانکتورِ سشنِ موتورِ `direct` — سه حالت، هرکدام با دلیلِ خودش.
 
-    بدونِ پروکسی: رزولورِ وتوکننده وصل می‌شود (بستنِ پنجرهٔ TOCTOU).
+    **بدونِ پروکسی:** رزولورِ وتوکننده وصل می‌شود (بستنِ پنجرهٔ TOCTOU).
 
-    با پروکسیِ http(s): **بدونِ** آن رزولور. چون aiohttp در حالتِ پروکسی نامِ
-    *پروکسی* را حل می‌کند نه مقصد را، رزولور هیچ حفاظتی از مقصد نمی‌دهد و فقط
-    می‌تواند خودِ پروکسی را بشکند — یک `PROXY_URL` مثلِ `http://squid:3128`
-    (نامِ سرویسِ داکر) به IPِ ۱۷۲٫x حل می‌شود و «داخلی» شمرده می‌شد. مقصد در این
-    حالت با درِ ورودیِ `is_safe_url_resolved` گیت می‌خورد، که خودش با پروکسی
-    fail-open است — همان‌جا هم توضیح داده شده.
+    **با پروکسیِ http(s):** بدونِ آن رزولور. aiohttp در حالتِ پروکسی نامِ
+    *پروکسی* را حل می‌کند نه مقصد را، پس رزولور هیچ حفاظتی از مقصد نمی‌دهد و فقط
+    می‌تواند خودِ پروکسی را بشکند — `http://squid:3128` (نامِ سرویسِ داکر) به
+    ۱۷۲٫x حل می‌شود و «داخلی» شمرده می‌شد.
 
-    با پروکسیِ socks: رزولور **می‌ماند**، و دلیلش خودِ aiohttp نیست بلکه
-    `_http_proxy` است. aiohttp به مستقیم برنمی‌گردد — `socks5://h:1080` را مثلِ
-    آدرسِ یک پروکسیِ HTTP می‌گیرد و به همان host:port تلاشِ CONNECT می‌کند
-    (`ClientProxyConnectionError`). به همین دلیل `_http_proxy` پروکسیِ غیرِhttp(s)
-    را دور می‌ریزد و ما `proxy=None` پاس می‌دهیم؛ یعنی موتورِ `direct` واقعاً
-    اتصالِ **مستقیم** می‌زند و رزولور دقیقاً همان چیزی است که لازم است.
-    عوارضِ جانبیِ (از پیش موجودِ) این تصمیم: با `PROXY_URL`ی که فقط socks است،
-    موتورِ `direct` از پروکسی رد نمی‌شود و از IPِ خودِ مستر بیرون می‌رود —
-    yt-dlp/gallery-dl که `--proxy` می‌گیرند از آن استفاده می‌کنند.
+    **با پروکسیِ socks:** از `ProxyConnector` رد می‌شود. تا فاز ۳ت این‌جا
+    `proxy=None` می‌رفت و موتورِ `direct` **بی‌صدا مستقیم** وصل می‌شد، یعنی از
+    IPِ خودِ مستر — در حالی که مستندِ ما `socks5h` را توصیه می‌کرد. همان باگ.
+
+    **رزولورِ وتوکننده در حالتِ socks قابلِ وصل نیست، و این را باید دانست:**
+    `ProxyConnector.__init__` بی‌قیدوشرط `kwargs["resolver"] = NoResolver()`
+    می‌کند (سنجیده روی ۰.۱۲.۰)، پس هر رزولوری که بدهیم **بی‌صدا** دور ریخته
+    می‌شود. جایگزینی‌اش هم بررسی و رد شد: اگر IPِ تأییدشده را پین کنیم،
+    python_socks همان را `server_hostname` می‌کند
+    (`_stream.start_tls(hostname=dest_host)`) و اعتبارسنجیِ سرتیفیکیتِ هر هاستِ
+    HTTPS می‌شکند. پس دفاع این‌جا **درِ ورودی** است — دقیقاً همان وضعی که برای
+    پروکسیِ http(s) از قبل پذیرفته شده، نه سوراخِ تازه.
     """
     import aiohttp
-    if _http_proxy(opts.get("proxy")):
+    kind, url = _proxy_kind(opts.get("proxy"))
+    if kind == "socks" and opts.get("direct_proxy", True):
+        from aiohttp_socks import ProxyConnector
+        return ProxyConnector.from_url(url, rdns=True)
+    if kind == "http":
         return aiohttp.TCPConnector()
     return aiohttp.TCPConnector(resolver=_safe_resolver())
 
@@ -898,8 +906,35 @@ _BROWSER_HEADERS = {
 
 
 def _http_proxy(proxy: str | None) -> str | None:
-    """aiohttp فقط پروکسیِ http(s) را می‌فهمد (نه socks) → فقط همان را پاس بده."""
+    """پارامترِ `proxy=`ِ خودِ درخواست فقط http(s) را می‌فهمد (نه socks).
+
+    socks از **کانکتور** می‌رود، نه از این‌جا — `_direct_connector` را ببین.
+    """
     return proxy if proxy and proxy.startswith(("http://", "https://")) else None
+
+
+_SOCKS_SCHEMES = ("socks5://", "socks5h://", "socks4://", "socks4a://")
+
+
+def _proxy_kind(proxy: str | None) -> tuple[str, str | None]:
+    """(نوع، آدرسِ نرمال‌شده) — `http` / `socks` / `""` برای هیچ‌کدام.
+
+    `socks5h://` به `socks5://` بازنویسی می‌شود چون python_socks اسکیمِ `socks5h`
+    را نمی‌شناسد (`ValueError: Invalid scheme component: socks5h`، سنجیده‌شده).
+    این **تغییرِ رفتار نیست**: معنیِ `h` یعنی DNS سمتِ پروکسی، و در python_socks
+    همان پیش‌فرضِ `socks5` هم هست (`if rdns is None: rdns = True`). ما هم صریح
+    `rdns=True` می‌دهیم. توجه: این با curl فرق دارد، که در آن `socks5://` یعنی
+    DNSِ محلی — پس توصیهٔ `socks5h` در مستنداتِ ما درست بوده و می‌ماند.
+    """
+    if not proxy:
+        return "", None
+    if proxy.startswith(("http://", "https://")):
+        return "http", proxy
+    if proxy.startswith(_SOCKS_SCHEMES):
+        if proxy.startswith("socks5h://"):
+            proxy = "socks5://" + proxy[len("socks5h://"):]
+        return "socks", proxy
+    return "", None                 # اسکیمِ ناشناخته — مثلِ قبل نادیده گرفته می‌شود
 
 
 # ── موتورِ «فایلِ مستقیم» (لینکِ دانلودِ گیت‌هاب/APK/PDF/…) ──────────

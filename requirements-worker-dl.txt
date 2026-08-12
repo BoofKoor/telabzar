@@ -7,6 +7,10 @@ yt-dlp[default]            # موتورِ اصلی + yt-dlp-ejs (رانتایم�
 gallery-dl                 # گالری/کاروسلِ عکس
 bgutil-ytdlp-pot-provider  # پلاگینِ PO Token یوتیوب
 aiohttp                    # Spotify Web API + Cobalt (aiogram هم می‌آورد؛ صریح برای اطمینان)
+aiohttp_socks>=0.10,<1     # پروکسیِ socks برای موتورِ `direct` (aiohttp خودش نمی‌فهمد)
+PySocks>=1.7,<2            # socks برای gallery-dl: روی requests است و بدونِ این
+                           # «Missing dependencies for SOCKS support» می‌دهد — و
+                           # gallery-dl همان چیزی است که اینستاگرام را می‌کشد.
 ytmusicapi>=1.8,<2         # سرچِ کاتالوگِ «songs»ی YouTube Music (تطبیقِ دقیقِ اسپاتیفای)
 nudenet>=3.4,<4            # فیلترِ بزرگسال — باید همان‌جا که دانلود می‌شود اجرا شود
 onnxruntime>=1.16,<2       # موتورِ NudeNet (تنها بخشِ سنگینی که این ایمیج می‌گیرد)
