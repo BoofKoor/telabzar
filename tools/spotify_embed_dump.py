@@ -41,11 +41,25 @@ RELEVANT = re.compile(r"artist|subtitle|duration|isrc|album|release|year|title|n
 MAX_DEPTH = 7
 
 
+def embed_url(url: str) -> str:
+    """لینکِ اسپاتیفای → **لینکِ embed**، دقیقاً مثلِ `_spotify_scrape`.
+
+    باگِ نسخهٔ اول: URL را دست‌نخورده می‌فرستاد، پس `open.spotify.com/track/<id>`
+    را می‌گرفت — که پوستهٔ وب‌پلیر است و `__NEXT_DATA__`ی مفید ندارد. دادهٔ واقعی
+    فقط زیرِ `/embed/<kind>/<id>` است.
+    """
+    from app import downloader as D
+    kind, sid = D.spotify_id(url)
+    if kind and sid:
+        return f"https://open.spotify.com/embed/{kind}/{sid}"
+    return url                                # چیزی که نشناختیم، همان‌طور بفرست
+
+
 def fetch(url: str) -> str:
     from app import downloader as D          # همان هدرهایی که خودِ کد می‌فرستد
     req = urllib.request.Request(url, headers=D._BROWSER_HEADERS)
     with urllib.request.urlopen(req, timeout=25) as r:
-        print(f"HTTP {r.status}", file=sys.stderr)
+        print(f"HTTP {r.status}  ←  {url}", file=sys.stderr)
         return r.read().decode("utf-8", "replace")
 
 
@@ -97,22 +111,26 @@ def main() -> int:
         print(__doc__)
         return 2
 
-    html = fetch(url)
+    html = fetch(embed_url(url))
     print(f"طولِ HTML: {len(html)}")
+    if save:
+        # HTML را هم کنارِ JSON نگه دار: فیکسچرِ واقعیِ دفعهٔ بعد باید از همین
+        # بایت‌ها بیاید، نه از بازنویسیِ دستی.
+        html_path = save + ".html" if not save.endswith(".html") else save
+        with open(html_path, "w", encoding="utf-8") as fh:
+            fh.write(html)
+        print(f"HTMLِ خام ذخیره شد: {html_path}")
 
-    m = re.search(r'id="__NEXT_DATA__"[^>]*>(\{.*?\})</script>', html, re.S)
+    m = re.search(r'id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
     print(f"__NEXT_DATA__ پیدا شد: {bool(m)}")
     if not m:
         # شاید اسپاتیفای تگِ دیگری می‌دهد — هر اسکریپتِ JSONدار را نشان بده
         print("\nتگ‌های script با نوعِ json:")
         for mm in re.finditer(r'<script[^>]*id="([^"]+)"[^>]*type="application/json"', html):
             print("   ", mm.group(1))
-        if save:
-            open(save, "w", encoding="utf-8").write(html)
-            print(f"\nHTMLِ خام ذخیره شد: {save}")
         return 1
 
-    data = json.loads(m.group(1))
+    data = json.loads(m.group(1).strip())
     if save:
         with open(save, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=1)
