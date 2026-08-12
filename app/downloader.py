@@ -1366,6 +1366,11 @@ def _norm(s: str | None) -> str:
     """نرمال‌سازیِ عنوان/نام برای تطبیقِ fuzzy: NFKC + casefold + حذفِ براکت/نویز/نگارش.
 
     یونی‌کد را نگه می‌دارد (برای عنوان‌های فارسی)، فقط علائم را حذف می‌کند.
+
+    **این تابع برای مقایسهٔ fuzzy است و حذفِ براکت این‌جا درست است** — وگرنه
+    «Faryad (Official Video)» دیگر با «Faryad» تطبیق نمی‌خورد. برای *تشخیصِ
+    نشانهٔ نسخه* از `_penalty_text` استفاده کن، نه از این: یک نرمال‌ساز
+    نمی‌تواند هم‌زمان نویز را بریزد و نشانه را نگه دارد.
     """
     s = unicodedata.normalize("NFKC", s or "").casefold().strip()
     s = _PAREN_RE.sub(" ", s)
@@ -1373,6 +1378,64 @@ def _norm(s: str | None) -> str:
     s = _NOISE_RE.sub(" ", s)
     s = re.sub(r"[^\w\s]", " ", s)  # \w یونی‌کدی است → حروفِ فارسی می‌مانند
     return " ".join(s.split())
+
+
+def _penalty_text(s: str | None) -> str:
+    """نرمال‌سازیِ **دومِ** عنوان، فقط برای جست‌وجوی نشانهٔ نسخه.
+
+    سه کاری که `_norm` می‌کند و این **عمداً نمی‌کند**، هر سه اندازه‌گیری‌شده:
+
+    * **`_PAREN_RE` را اعمال نمی‌کند** — یوتیوب نشانهٔ نسخه را تقریباً همیشه
+      داخلِ پرانتز می‌گذارد، و ریختنِ آن پیش از جست‌وجوی کلیدواژه یعنی **۵ از ۶**
+      عنوانِ واقعی جریمه‌شان صفر می‌شد.
+    * **`_FEAT_RE` را اعمال نمی‌کند** — آن الگو `.*$` دارد، یعنی تا **آخرِ رشته**
+      را پاک می‌کند: «Faryad (Live) feat. Haydeh» به `'faryad'` فرو می‌ریخت و
+      نشانه کاملاً گم می‌شد.
+    * **`_NOISE_RE` را اعمال نمی‌کند** — برای تشخیص کمکی نمی‌کند.
+
+    **بده‌بستانِ پذیرفته‌شده:** با اعمال‌نشدنِ `_FEAT_RE`، عنوانی مثل
+    «Song with Live Band» (اگر «Live Band» نامِ گروه باشد) −۱۲ می‌گیرد که امروز
+    نمی‌گیرد. در برابرش، «Faryad (Live) feat. Haydeh» امروز نشانه‌اش را کامل گم
+    می‌کند. مثبتِ کاذب ۱۲ نمره است نه رد شدن؛ منفیِ کاذب همان باگی است که این
+    رفع می‌بنددش.
+
+    نگارش به فاصله تبدیل می‌شود (پس `(Live)` → ` live `)، که مرزِ کلمه را برای
+    `_BAD_KW_RE` طبیعی می‌کند.
+    """
+    s = unicodedata.normalize("NFKC", s or "").casefold().strip()
+    s = re.sub(r"[^\w\s]", " ", s)
+    return " ".join(s.split())
+
+
+# صورت‌های اضافیِ کلیدواژه‌های نسخه — **فهرستِ صریح، نه قاعدهٔ عامِ صرف.**
+# اندازه‌گیری‌شده روی ۲۰ عنوانِ واقعی: قاعدهٔ `(?:s|es|ed|ing)?` **ده** مثبتِ
+# کاذب داد، یعنی دقیقاً همان‌قدر که تطبیقِ زیررشته‌ایِ قبلی — چون `lives`,
+# `covered`, `covering`, `reactions` خودشان کلمهٔ عادیِ انگلیسی‌اند (zipf ۵٫۱،
+# ۴٫۸، ۴٫۵، ۴٫۲). «Nine Lives» و «Covered in Rain» با آن قاعده جریمه می‌خوردند.
+# فهرستِ صریح صفر خطا داد. `covered`/`covering`/`lives` عمداً **نیستند**؛
+# `covers`/`sessions`/`remixes`/`remixed`/`mashups` هستند چون در عنوانِ آهنگ
+# واقعاً نشانهٔ نسخه‌اند. همان شکلِ `safety.STRONG_TOKENS`/`WORD_TOKENS`:
+# فهرستِ صریح + تستِ رگرسیون، نه قاعده‌ای که خودش را گسترش بدهد.
+_BAD_KW_EXTRA = ("remixes", "remixed", "covers", "sessions", "mashups")
+
+# نگاشتِ هر صورت → کلیدواژهٔ پایه، تا جریمه همان معنیِ «۱۲− به‌ازای هر
+# کلیدواژه» را داشته باشد و یک عنوانِ «Remix / Remixes» دو بار جریمه نشود.
+_BAD_BASE = {**{k: k for k in _BAD_KW},
+             "remixes": "remix", "remixed": "remix",
+             "covers": "cover", "sessions": "session", "mashups": "mashup"}
+
+# بلندترین صورت اول، تا `m.group(1)` قابلِ‌پیش‌بینی باشد. `\b` در هر دو سر
+# اجباری است: بدونش بازکردنِ براکت یک باگِ خفته را فعال می‌کند —
+# `(feat. Oliver)` → `live` و `(album Recovery)` → `cover`، هر دو سنجیده‌شده.
+_BAD_KW_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in sorted(_BAD_BASE, key=len, reverse=True)) + r")\b",
+    re.I)
+
+
+def _version_markers(title: str | None) -> set[str]:
+    """کلیدواژه‌های «نسخهٔ نادرست» موجود در عنوان، به‌صورتِ کلیدواژهٔ **پایه**."""
+    return {_BAD_BASE[m.group(1).lower()]
+            for m in _BAD_KW_RE.finditer(_penalty_text(title))}
 
 
 def _ratio(a: str, b: str) -> float:
@@ -1496,12 +1559,13 @@ def _match_score(cand: dict, track: dict) -> float:
         parts.append((album, 0.08))
     tot = sum(w for _, w in parts)
     score = sum(v * w for v, w in parts) / tot if tot else 0.0
-    # جریمهٔ کلمه‌های نسخهٔ نادرست (اگر خودِ ترک آن کلمه را ندارد)
-    ct = _norm(cand.get("title"))
-    tt = _norm(track.get("title"))
-    for kw in _BAD_KW:
-        if kw in ct and kw not in tt:
-            score -= 12
+    # جریمهٔ کلمه‌های نسخهٔ نادرست (اگر خودِ ترک آن کلمه را ندارد).
+    #
+    # **هر دو طرف `_penalty_text` می‌گیرند، نه فقط نامزد.** با `_norm` این شرط
+    # متقارن بود (هر دو براکت را می‌ریختند)، پس عوض‌کردنِ تنها سمتِ نامزد یک
+    # باگِ تازه می‌ساخت: مرجعی که خودش لایو است `tt='faryad'` می‌داد در حالی که
+    # `ct='faryad live in tehran'` بود → جریمهٔ ناحقِ `live`. اندازه‌گیری‌شده.
+    score -= 12 * len(_version_markers(cand.get("title")) - _version_markers(track.get("title")))
     if cand.get("art_track"):   # نتیجهٔ فیلترِ «songs» = Art Trackِ رسمی
         score += 6
     # از سرچِ ISRC آمده = تطبیقِ قطعی. **در تولید هرگز شلیک نمی‌کند** و عمداً

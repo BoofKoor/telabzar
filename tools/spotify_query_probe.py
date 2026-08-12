@@ -109,16 +109,15 @@ def mark_of(idx: list[tuple[int, str]]) -> str:
     return f"؟ رتبهٔ {i + 1} (فقط مدت)"
 
 
-# نشانه‌های «نسخهٔ دیگر» روی عنوانِ **خام**. عمداً با **مرزِ کلمه**، چون
-# `_BAD_KW` در تولید زیررشته‌ای تطبیق می‌خورد و آن‌جا برخورد دارد
-# (`Delivery`→`live`، `Recovery`→`cover`، `Sessions`→`session` — اندازه‌گیری‌شده).
-# این‌جا فقط تشخیصی است و هیچ تصمیمی دربارهٔ رفعِ تولیدی نمی‌گیرد.
-_MARKER_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in D._BAD_KW) + r")\b", re.I)
-
-
 def version_markers(title: str) -> list[str]:
-    """کلمه‌های نسخه‌ای که در عنوانِ خام هست (براکت‌ها دست‌نخورده)."""
-    return sorted({m.group(1).lower() for m in _MARKER_RE.finditer(title or "")})
+    """کلمه‌های نسخه‌ای در عنوان — **از همان قاعدهٔ تولید**.
+
+    نسخهٔ اولِ این تابع الگوی خودش را دست‌نویس می‌کرد. حالا تولید خودش
+    `_version_markers` را دارد (روی متنِ حافظِ براکت، با مرزِ کلمه و فهرستِ
+    صریحِ صورت‌ها)، پس نگه‌داشتنِ کپیِ دوم فقط راهی بود برای واگرا شدن — همان
+    درسِ `remove_cookie_file`.
+    """
+    return sorted(D._version_markers(title))
 
 
 def describe(c: dict) -> str:
