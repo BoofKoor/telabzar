@@ -331,12 +331,6 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         return {"send_media": {"as": "animation", "path": out, "filename": f"{stem}.gif"},
                 "label": t(lang, "cl_gif")}
 
-    if op == "thumb":
-        out = os.path.join(workdir, f"{stem}-thumb.jpg")
-        await P.video_thumbnail(inpath, out)
-        return {"send_media": {"as": "photo", "path": out, "filename": f"{stem}.jpg"},
-                "label": t(lang, "cl_thumb")}
-
     if op == "watermark" and file.kind == "image":
         pos = args.get("pos", "br")
         out = os.path.join(workdir, f"{stem}-wm{_img_ext(file.name)}")
