@@ -224,6 +224,9 @@ MESSAGES: dict[str, str] = {
     "dl_exit_problem": "⚠️ Could not reach “{platform}” from this server. The cookies are fine — it is the network exit; another one will be used automatically.",
     "nsfw_blocked": "🔞 This content isn't allowed and was not processed.",
     "nsfw_checking": "🔎 Checking…",
+    # screening phases (only ever seen on a genuinely slow file — initial delay)
+    "nsfw_phase_fetch": "🔎 Fetching the file… ({s}s)",
+    "nsfw_phase_scan": "🔎 Checking the content… ({s}s)",
     "nsfw_user_blocked": "🚫 Your access has been revoked for repeatedly sending disallowed content.",
     "dl_too_long": "⏱ This media is longer than the {min}-minute limit.",
     "dl_busy": "⌛ Server is busy; try again in a moment.",

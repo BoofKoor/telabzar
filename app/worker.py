@@ -22,6 +22,45 @@ logging.basicConfig(
 log = logging.getLogger("telabzar.worker")
 
 
+async def _warm_safety_model() -> None:
+    """مدلِ NudeNet را در پس‌زمینه بار می‌کند تا اولین آپلودِ کاربر هزینه‌اش را ندهد.
+
+    بارگذاری ~۸۱ مگابایت و چند ثانیه است (اندازه‌گیریِ ۲۰۲۶-۰۸-۱۰: ۱۱ → ۹۲) و
+    امروز روی **اولین** فایلی که کاربر می‌فرستد اتفاق می‌افتد — یعنی بدترین
+    لحظهٔ ممکن، درست بعد از هر `telabzar update`.
+
+    سه قید، هرکدام با دلیلِ خودش:
+      • **گیت‌شده** روی `safety_enabled` + `safety_scan_pixels`، وگرنه ۸۱
+        مگابایت برای قابلیتی که خاموش است. (اگر ادمین بعداً از پنل روشنشان
+        کند، warm-up اجرا نشده و اولین اسکن هزینه را می‌دهد — خودترمیم است.)
+      • **داخلِ thread**، نه مستقیم: `_get_detector()` **همگام** است و
+        بارگذاری واقعاً طول می‌کشد؛ صداکردنش روی حلقهٔ رویداد یعنی startup را
+        مسدود نکرده‌ایم ولی کلِ ورکر را تا پایانِ بارگذاری کر کرده‌ایم.
+      • **نه روی نودِ پردازش**: آن‌جا هیچ‌وقت اسکن نمی‌شود — `run_screen` بدونِ
+        `_queue_name` صف می‌شود (`routers/files.py`) پس به `arq:queue:proc`
+        نمی‌رسد، و `run_op` هیچ مسیری به `safety` ندارد (مصرف‌کننده‌ها فقط
+        `run_screen` و `run_download`اند). اگر روزی غربالگری صفِ خودش را گرفت،
+        این شرط باید بازبینی شود.
+
+    ایمنیِ هم‌زمانی به قفلِ double-checkedِ `safety._get_detector` بند است و آن
+    قفل **پیش‌نیازِ** این کار است، نه جانبیِ آن: warm-upِ پس‌زمینه‌ای احتمالِ
+    ساختِ هم‌زمان را **بیشتر** می‌کند نه کمتر، چون حالا یک بارگذاری می‌تواند
+    دقیقاً هم‌زمان با اولین جابِ واقعی در جریان باشد.
+    """
+    try:
+        if settings.node_role == "processing":
+            return
+        if not await settings_store.get_bool("safety_enabled", settings.safety_enabled):
+            return
+        if not await settings_store.get_bool("safety_scan_pixels", settings.safety_scan_pixels):
+            return
+        from . import safety
+        await asyncio.to_thread(safety.available)
+        log.info("safety model warmed up")
+    except Exception:  # noqa: BLE001 — warm-up هرگز نباید استارتِ ورکر را بشکند
+        log.debug("safety warm-up skipped", exc_info=True)
+
+
 async def startup(ctx: dict) -> None:
     for i in range(1, 16):
         try:
@@ -38,6 +77,9 @@ async def startup(ctx: dict) -> None:
     await textstore.load()  # متن‌های override‌شدهٔ ادمین را پیش‌بارگذاری کن
     if settings.node_role:  # این پروسه یک نود است → heartbeat به رجیستریِ مستر بزن
         ctx["hb_task"] = asyncio.create_task(_node_heartbeat())
+    # پس‌زمینه و غیرمسدودکننده: ورکر همین حالا آمادهٔ کار است. ارجاع در ctx
+    # نگه داشته می‌شود وگرنه تسک می‌تواند قبل از اتمام زباله‌روبی شود.
+    ctx["warm_task"] = asyncio.create_task(_warm_safety_model())
     log.info("Worker ready%s.", f" (node: {settings.node_role})" if settings.node_role else "")
 
 
