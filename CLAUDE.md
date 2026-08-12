@@ -357,9 +357,16 @@ usable accounts drop below `cookie_alert_min`.
   sitting between "same recording, different master" (0–3 s) and "different version" (20 s+).
   It is deliberately **not** a penalty: a penalty asserts that a missing duration is itself
   suspicious, and there is no evidence for that. One case keeps the old drop-the-component behaviour
-  on purpose — when the **track's** own duration is unknown, no candidate can be compared, so giving
-  every one of them 50 only compresses the scores (the ranking is provably unchanged, since the
-  transform is monotonic when all candidates share the same weight set).
+  on purpose — when the **track's** own duration is unknown, the component is dropped as before. The
+  reason is **not** ranking: within one track both choices rank identically, since injecting a
+  constant is a monotonic transform when every candidate shares the same weight set. The reason is
+  **score comparability across tracks**, which is what makes a global threshold mean anything at all.
+  `spotify_match_min` is one number applied to every track, so if the scale shifts from track to
+  track it stops measuring a fixed thing and cannot be calibrated — and injecting 50 where there is
+  no information does exactly that, pulling a duration-less track onto a different scale from the
+  rest. That distinction is worth keeping in mind for **any** future optional signal: a substituted
+  neutral value is safe when it stands in for missing *candidate* data, and unsafe when it stands in
+  for a missing *reference*, because the second kind silently re-scales the track as a whole.
 - **A session is an identity, not a file: cookie + exit IP + User-Agent, always together.**
   Instagram treats the IP as identity, so moving one session between exits is the fastest route to a
   checkpoint. Each account carries `node_id` (pinned exit), `proxy` and `user_agent` in its meta;
