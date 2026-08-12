@@ -1,0 +1,104 @@
+{
+ "_fixture_note": [
+  "پاسخِ **واقعیِ** __NEXT_DATA__ برای یک **پلی‌لیست**، از دو دامپِ مستر (2026-08-12):",
+  "کلیدهای سطحِ پلی‌لیست از دامپِ اول، شکلِ آیتم‌های trackList از دامپِ دوم.",
+  "",
+  "⚠ **`subtitle` این‌جا دو معنای متفاوت دارد و همین تله است:**",
+  "    entity.subtitle            = 'Spotify'  ← **مالکِ پلی‌لیست**، نه هنرمند",
+  "    entity.trackList[].subtitle = 'Fereydoon Foroughi'  ← هنرمند",
+  "  اگر entityِ سطحِ پلی‌لیست از شاخهٔ تک‌ترک رد شود، هنرمندِ همهٔ ترک‌ها",
+  "  «Spotify» می‌شود — سنجیده شد و رخ می‌داد وقتی trackList خالی/غایب بود.",
+  "",
+  "مرزِ صداقت — چه چیزی ضبط شد و چه چیزی نه:",
+  "  * کلیدهای سطحِ پلی‌لیست: type/title/subtitle/duration **عیناً ضبط‌شده**.",
+  "  * شکلِ آیتمِ trackList: **عیناً ضبط‌شده**.",
+  "  * پلی‌لیستِ واقعی ۱۰۰ عضو داشت؛ این‌جا برای حجم به ۴ تا کوتاه شده.",
+  "  * کاور و سالِ سطحِ پلی‌لیست در هیچ‌کدام از دو دامپ نبودند، پس این‌جا هم",
+  "    نیامده‌اند و هیچ تستی رویشان ادعا نمی‌کند.",
+  "",
+  "نکته: `subtitle`ِ داخلِ trackList **کدِ کهنه نیست** — شکلِ زندهٔ هنرمند در این",
+  "مسیر است. لینکِ تک‌ترک به‌جایش `artists[].name` می‌دهد.",
+  "تازه‌کردن: docker compose exec -T download-worker python - <playlist-url>",
+  "  --save /work/embed_pl.json < tools/spotify_embed_dump.py"
+ ],
+ "props": {
+  "pageProps": {
+   "state": {
+    "data": {
+     "entity": {
+      "type": "playlist",
+      "title": "Persian Essentials",
+      "name": "Persian Essentials",
+      "uri": "spotify:playlist:37i9dQZF1DX0XUfTFmNBRM",
+      "trackList": [
+       {
+        "uri": "spotify:track:5ThumMdlPp3BWqSMdLefea",
+        "title": "Yare Dabestanie Man",
+        "subtitle": "Fereydoon Foroughi",
+        "duration": 216137,
+        "isExplicit": false,
+        "isNineteenPlus": false,
+        "playabilityReason": "COUNTRY_RESTRICTED",
+        "audioPreview": {
+         "url": "https://p.scdn.co/mp3-preview/aaaa"
+        },
+        "entityType": "track"
+       },
+       {
+        "uri": "spotify:track:1aaaaaaaaaaaaaaaaaaaaa",
+        "title": "Soltane Ghalbha",
+        "subtitle": "Aref",
+        "duration": 254000,
+        "isExplicit": false,
+        "isNineteenPlus": false,
+        "playabilityReason": "PLAYABLE",
+        "audioPreview": {
+         "url": "https://p.scdn.co/mp3-preview/bbbb"
+        },
+        "entityType": "track"
+       },
+       {
+        "uri": "spotify:track:2bbbbbbbbbbbbbbbbbbbbb",
+        "title": "Jane Maryam",
+        "subtitle": "Mohammad Nouri",
+        "duration": 310973,
+        "isExplicit": false,
+        "isNineteenPlus": false,
+        "playabilityReason": "PLAYABLE",
+        "audioPreview": {
+         "url": "https://p.scdn.co/mp3-preview/cccc"
+        },
+        "entityType": "track"
+       },
+       {
+        "uri": "spotify:track:3cccccccccccccccccccc",
+        "title": "Gole Sangam",
+        "subtitle": "Dariush",
+        "duration": 289500,
+        "isExplicit": false,
+        "isNineteenPlus": false,
+        "playabilityReason": "PLAYABLE",
+        "audioPreview": {
+         "url": "https://p.scdn.co/mp3-preview/dddd"
+        },
+        "entityType": "track"
+       }
+      ],
+      "subtitle": "Spotify",
+      "duration": 0
+     }
+    },
+    "settings": {
+     "entityContext": "playlist",
+     "isMobile": false
+    }
+   }
+  },
+  "__N_SSP": true
+ },
+ "page": "/playlist/[id]",
+ "query": {
+  "id": "37i9dQZF1DX0XUfTFmNBRM"
+ },
+ "gssp": true
+}

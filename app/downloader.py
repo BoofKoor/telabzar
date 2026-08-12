@@ -810,7 +810,7 @@ def _track_meta(t: dict, album: dict | None = None) -> dict:
         "album": album.get("name") or "",
         "year": (album.get("release_date") or "")[:4],
         "cover_url": images[0]["url"] if images else None,
-        "duration": int((t.get("duration_ms") or 0) / 1000) or None,
+        "duration": round((t.get("duration_ms") or 0) / 1000) or None,  # مثلِ `_embed_track`
         "isrc": (t.get("external_ids") or {}).get("isrc"),
     }
 
@@ -840,55 +840,159 @@ async def _spotify_api_resolve(url: str, client_id: str, secret: str, max_tracks
     return {"kind": kind, "title": title, "tracks": tracks[:max_tracks]}
 
 
+# فیلدهایی که «این آبجکت واقعاً entity است» را می‌سازند. صرفِ داشتنِ عنوان کافی
+# نیست (چند آبجکتِ تودرتو عنوان دارند)؛ اهمیتشان در امتیازدهیِ زیر است.
+_ENTITY_FIELDS = ("artists", "subtitle", "duration", "trackList", "coverArt",
+                  "visualIdentity", "releaseDate", "uri")
+
+
+def _entity_score(obj: dict) -> int:
+    """چقدر شبیهِ entityِ اصلی است؟ بالاتر = کامل‌تر."""
+    if not (obj.get("title") or obj.get("name")) and obj.get("trackList") is None:
+        return 0
+    n = sum(1 for k in _ENTITY_FIELDS if obj.get(k) not in (None, "", [], {}))
+    if not n:
+        return 0
+    if str(obj.get("type") or "").lower() in ("track", "album", "playlist", "episode"):
+        n += 2                       # خودِ اسپاتیفای می‌گوید این چیست
+    return n
+
+
 def _find_spotify_entity(obj):
-    """در JSONِ __NEXT_DATA__ی صفحهٔ embed دنبالِ آبجکتِ entity می‌گردد (مقاوم به تغییرِ مسیر)."""
-    if isinstance(obj, dict):
-        if obj.get("trackList") is not None or (obj.get("title") and obj.get("coverArt")):
-            return obj
-        for v in obj.values():
-            found = _find_spotify_entity(v)
-            if found:
-                return found
-    elif isinstance(obj, list):
-        for v in obj:
-            found = _find_spotify_entity(v)
-            if found:
-                return found
-    return None
+    """در JSONِ __NEXT_DATA__ دنبالِ entity می‌گردد و **کامل‌ترین** را برمی‌دارد.
+
+    نسخهٔ قبلی شرطِ `trackList is not None or (title and coverArt)` داشت و
+    **اولین** تطبیق را برمی‌گرداند. هر دو نیمه شکستند: اسکیمای امروزِ اسپاتیفای
+    اصلاً `coverArt` ندارد (کاور زیرِ `visualIdentity.image[]` رفته)، پس برای یک
+    ترک هیچ‌وقت چیزی پیدا نمی‌شد؛ و «اولینِ تطبیق» یعنی یک زیرآبجکتِ تصادفی که
+    اتفاقاً عنوان دارد می‌توانست برندهٔ entityِ واقعی شود.
+
+    حالا وابسته به هیچ کلیدِ منفردی نیست: نامزدها امتیاز می‌گیرند (تعدادِ
+    فیلدهای معنی‌دار + پاداشِ `type`) و بیشینه برنده می‌شود؛ تساوی → اولی، تا
+    نتیجه قطعی بماند.
+    """
+    best, best_score = None, 0
+
+    def walk(o):
+        nonlocal best, best_score
+        if isinstance(o, dict):
+            s = _entity_score(o)
+            if s > best_score:
+                best, best_score = o, s
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(obj)
+    return best
 
 
 def _embed_cover(entity: dict) -> str | None:
-    srcs = ((entity.get("coverArt") or {}).get("sources")) or []
-    return srcs[-1].get("url") if srcs else None
+    """کاور: شکلِ امروزی `visualIdentity.image[]`، و شکلِ قدیمیِ `coverArt.sources[]`."""
+    imgs = ((entity.get("visualIdentity") or {}).get("image")) or []
+    if not imgs:
+        imgs = ((entity.get("coverArt") or {}).get("sources")) or []
+    if not imgs:
+        return None
+    # بزرگ‌ترین را بردار؛ اگر ابعاد نیامده بود (اسپاتیفای امروز صفر می‌دهد) آخری،
+    # که همان قراردادِ قبلی برای `sources` بود.
+    best = max(imgs, key=lambda i: int(i.get("maxWidth") or 0)) if any(
+        int(i.get("maxWidth") or 0) for i in imgs if isinstance(i, dict)) else imgs[-1]
+    return best.get("url") if isinstance(best, dict) else None
 
 
-def _embed_track(title: str | None, subtitle, cover: str | None, dur_ms) -> dict:
-    if isinstance(subtitle, list):  # گاهی لیستِ [{name}] است
+def _embed_year(entity: dict) -> str:
+    """`releaseDate.isoString` (امروز) یا رشتهٔ تاریخ (قدیم) → سالِ چهاررقمی."""
+    rd = entity.get("releaseDate")
+    if isinstance(rd, dict):
+        rd = rd.get("isoString") or rd.get("date") or ""
+    return str(rd or "")[:4]
+
+
+def _embed_track(title: str | None, subtitle, cover: str | None, dur_ms,
+                 year: str = "") -> dict:
+    """یک ترکِ یکدست. `dur_ms` **میلی‌ثانیه** است — اسپاتیفای ۳۱۰۹۷۳ می‌دهد یعنی ۵:۱۱.
+
+    اگر روزی کسی این را ثانیه بخواند، همان عدد می‌شود ~۳٫۶ روز و گیتِ مدت
+    (`_duration_reject`) **هر** نامزدی را رد می‌کند — خرابیِ بی‌صدا از همان جنسی
+    که این پارسر را هفته‌ها مرده نگه داشت. تست واحدش را قفل می‌کند.
+    """
+    # دو شکل، **هر دو زنده**: لینکِ تک‌ترک آرایهٔ `[{"name": …}, …]` می‌دهد و
+    # ترکِ داخلِ `trackList`ِ پلی‌لیست یک رشتهٔ ساده. هیچ‌کدام کهنه نیست.
+    if isinstance(subtitle, list):
         subtitle = ", ".join(x.get("name", "") if isinstance(x, dict) else str(x) for x in subtitle)
-    return {"title": title or "", "artist": (subtitle or "").strip(), "album": "", "year": "",
-            "cover_url": cover, "duration": int((dur_ms or 0) / 1000) or None, "isrc": None}
+    # `round` نه `int`: بریدن هر مدتی را تا یک ثانیه **کم** می‌کند (۳۱۰۹۷۳ms →
+    # ۳۱۰ به‌جای ۳۱۱)، و آن یک ثانیه روی `_time_match` حدودِ ۱۰ واحد می‌ارزد،
+    # یعنی تطبیقِ دقیق را بی‌دلیل جریمه می‌کند.
+    return {"title": title or "", "artist": (subtitle or "").strip(), "album": "", "year": year,
+            "cover_url": cover, "duration": round((dur_ms or 0) / 1000) or None, "isrc": None}
+
+
+def reference_is_blind(track: dict) -> bool:
+    """مرجعی که نه هنرمند دارد نه مدت — یعنی matcher فقط روی نام قضاوت می‌کند.
+
+    آن‌وقت **هر دو** گیت خاموش‌اند (`_artist_match` روی مرجعِ بی‌هنرمند `None`
+    می‌دهد و شرطِ گیت `am is not None`ست؛ `_duration_reject` هر دو مدت را لازم
+    دارد) و نامزدهای هم‌نام امتیازِ **دقیقاً یکسان** می‌گیرند، پس برنده صرفاً
+    اولین نفرِ فهرست است. مصرف‌کنندهٔ کاربری‌اش رفعِ آستانه/هشدار است.
+    """
+    return not (track.get("artist") or "").strip() and not track.get("duration")
 
 
 def _parse_spotify_embed(html: str, kind: str, max_tracks: int) -> dict | None:
     """JSONِ __NEXT_DATA__ی صفحهٔ embed → {kind, title, tracks[]} (خالص، تست‌پذیر)."""
-    m = re.search(r'id="__NEXT_DATA__"[^>]*>(\{.*?\})</script>', html or "", re.S)
+    # الگو عمداً `(.*?)` است نه `(\{.*?\})`: فرمِ قبلی `}` را **بلافاصله** پیش از
+    # `</script>` می‌خواست، پس یک newline یا تورفتگی کلِ پارس را ساکت می‌شکست.
+    # این یکی همان فرمی است که روی صفحهٔ واقعی جواب داد.
+    m = re.search(r'id="__NEXT_DATA__"[^>]*>(.*?)</script>', html or "", re.S)
     if not m:
         return None
     try:
-        entity = _find_spotify_entity(json.loads(m.group(1)))
+        entity = _find_spotify_entity(json.loads(m.group(1).strip()))
     except (ValueError, KeyError):
         return None
     if not entity:
         return None
     title = entity.get("title") or entity.get("name") or ""
     tl = entity.get("trackList") or []
+    # **`subtitle` سه معنا دارد، بسته به اینکه کجا باشد** — و یکی‌شان تله است:
+    #   ترکِ داخلِ `trackList` → هنرمند (شکلِ زنده)
+    #   entityِ سطحِ پلی‌لیست  → **مالکِ پلی‌لیست** (مثلاً «Spotify»)
+    #   entityِ ترکِ قدیمی    → هنرمند (شکلِ کهنه)
+    # شاخهٔ تک‌ترک روی `not tl` می‌افتاد نه روی `kind`، پس یک پلی‌لیستِ خالی یا
+    # هر پلی‌لیستی که فهرستش خوانده نشود، **یک ترکِ ساختگی** می‌ساخت با نامِ
+    # پلی‌لیست و هنرمندِ «Spotify» — و `reference_is_blind` هم نمی‌گرفتش، چون
+    # «Spotify» هنرمندِ ناتهی است. سنجیده شد: خروجی `('Persian Essentials',
+    # 'Spotify', None)` بود، یعنی جست‌وجوی یوتیوب برای «Spotify Persian
+    # Essentials» و دانلودِ هرچه برگردد — بی‌صدا.
+    etype = str(entity.get("type") or "").lower()
+    if (kind in ("playlist", "album") or etype in ("playlist", "album")) and not tl:
+        return None      # مجموعه‌ای که فهرستش خوانده نشد، «یک ترک» نیست
     if kind == "track" or not tl:
+        # لینکِ **تک‌ترک**: هنرمند در `artists: [{name}]` است.
         artists = entity.get("subtitle") or entity.get("artists")
-        tracks = [_embed_track(title, artists, _embed_cover(entity), entity.get("duration"))]
+        tracks = [_embed_track(title, artists, _embed_cover(entity),
+                               entity.get("duration"), _embed_year(entity))]
     else:
+        # مسیرِ آلبوم/پلی‌لیست — **تأییدشده روی اسکیمای امروز** (دامپِ ۲۰۲۶-۰۸-۱۲،
+        # پلی‌لیستِ ۱۰۰تایی). این شاخه هیچ‌وقت نشکسته بود؛ فقط لینکِ تک‌ترک خراب بود.
+        #
+        # ⚠ **`subtitle` کدِ کهنه نیست — شکلِ زندهٔ همین مسیر است.** دو مسیر دو شکلِ
+        # متفاوت دارند و هر دو فعلی‌اند: ترکِ تکی `artists[].name` (آرایه) می‌دهد و
+        # ترکِ داخلِ `trackList` یک `subtitle`ِ **رشته‌ای**. هر «پاکسازیِ کدِ کهنه»
+        # که `subtitle` را بردارد، پلی‌لیست‌ها را می‌شکند.
+        #
+        # ترک‌های داخلِ `trackList` کاورِ اختصاصی ندارند، پس کاورِ سطحِ مجموعه
+        # به همه‌شان می‌رسد. `playabilityReason` (مثلاً `COUNTRY_RESTRICTED`) هم
+        # آن‌جا هست و برای ما بی‌اثر است، چون فایل را از یوتیوب می‌گیریم.
         alb_cover = _embed_cover(entity)
-        tracks = [_embed_track(it.get("title"), it.get("subtitle"),
-                               _embed_cover(it) or alb_cover, it.get("duration"))
+        alb_year = _embed_year(entity)
+        tracks = [_embed_track(it.get("title") or it.get("name"),
+                               it.get("subtitle") or it.get("artists"),
+                               _embed_cover(it) or alb_cover,
+                               it.get("duration"), _embed_year(it) or alb_year)
                   for it in tl[:max_tracks]]
     tracks = [t for t in tracks if t["title"]]
     if not tracks:
@@ -1168,8 +1272,21 @@ async def _spotify_scrape(url: str, max_tracks: int, proxy: str | None = None) -
             html = await r.text() if r.status == 200 else ""
     parsed = _parse_spotify_embed(html, kind, max_tracks)
     if parsed:
+        blind = [t["title"] for t in parsed["tracks"] if reference_is_blind(t)]
+        if blind:
+            log.warning("spotify embed parsed but %d/%d track(s) have neither artist nor "
+                        "duration — the matcher will rank on title alone: %s",
+                        len(blind), len(parsed["tracks"]), ", ".join(blind[:3]))
         return parsed
-    # fallback: oEmbedِ رسمی (عنوان + کاور)
+    # fallback: oEmbedِ رسمی (عنوان + کاور).
+    # **WARNING نه INFO، عمداً.** این مسیر فقط عنوان و کاور می‌دهد: نه هنرمند، نه
+    # مدت — یعنی matcher کور می‌شود و نامزدهای هم‌نام امتیازِ یکسان می‌گیرند. تا
+    # امروز این تنزل بی‌صدا بود و پارسر هفته‌ها مرده ماند بی‌آنکه چیزی خطا بدهد،
+    # چون «مسیرِ جایگزین موفق شد». هر بار که این خط را دیدی یعنی اسکیمای اسپاتیفای
+    # عوض شده و `_parse_spotify_embed` باید به‌روز شود.
+    log.warning("spotify: __NEXT_DATA__ parse failed for %s — falling back to oEmbed "
+                "(title only, no artist/duration). The embed schema has likely changed; "
+                "run tools/spotify_embed_dump.py and update _parse_spotify_embed.", url)
     async with aiohttp.ClientSession(headers=_BROWSER_HEADERS, timeout=timeout) as s:
         async with s.get(f"https://open.spotify.com/oembed?url={url}", proxy=px) as r:
             if r.status != 200:
@@ -1358,9 +1475,16 @@ def _match_score(cand: dict, track: dict) -> float:
     tscore = _time_match(_cand_dur(cand), track.get("duration"))
     if tscore is None and track.get("duration") and not _cand_dur(cand):
         # مدتِ ترک را داریم ولی مدتِ نامزد را نه → مقدارِ خنثی، نه حذفِ مؤلفه.
-        # اگر مدتِ **خودِ ترک** نامعلوم باشد عمداً حذف می‌شود: آن‌وقت هیچ نامزدی
-        # قابلِ مقایسه نیست و دادنِ ۵۰ به همه فقط امتیازها را فشرده می‌کند بی‌آنکه
-        # ذره‌ای اطلاعات اضافه کند (رتبه‌بندی هم عوض نمی‌شود، چون تبدیلش یکنواست).
+        #
+        # ولی اگر مدتِ **خودِ ترک** نامعلوم باشد، عمداً به حذفِ مؤلفه برمی‌گردیم.
+        # دلیلش رتبه‌بندی **نیست** — آن‌جا هر دو راه یکی‌اند، چون وقتی همهٔ
+        # نامزدها یک وزن دارند تزریقِ ۵۰ تبدیلی یکنواست. دلیل **مقایسه‌پذیریِ
+        # امتیاز بینِ ترک‌هاست**: `spotify_match_min` یک عددِ سراسری است که روی
+        # همهٔ ترک‌ها اعمال می‌شود، پس اگر مقیاسِ امتیاز از ترکی به ترکِ دیگر
+        # جابه‌جا شود، آستانه دیگر یک چیزِ ثابت را نمی‌سنجد و کالیبره‌کردنش
+        # بی‌معنا می‌شود. تزریقِ ۵۰ وقتی هیچ اطلاعاتی نداریم دقیقاً همین کار را
+        # می‌کند: امتیازها را به سمتِ ۵۰ جمع می‌کند و ترکِ بی‌مدت را روی مقیاسی
+        # متفاوت از بقیه می‌برد.
         tscore = _TIME_UNKNOWN
     album = _album_match(track, cand)
     parts: list[tuple[float, float]] = [(name, 0.40)]

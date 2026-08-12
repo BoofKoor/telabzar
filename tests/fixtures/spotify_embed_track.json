@@ -1,0 +1,75 @@
+{
+ "_fixture_note": [
+  "پاسخِ **واقعیِ** __NEXT_DATA__ صفحهٔ embedِ اسپاتیفای، گرفته‌شده روی مستر",
+  "(2026-08-12) از https://open.spotify.com/embed/track/4Mrmg7XjDKqKWTw38hFCq6 .",
+  "فیلدهای بی‌ربط به پارسر (رنگ‌های visualIdentity، sentry، accessToken، …) حذف",
+  "شده‌اند؛ هر کلیدی که پارسر می‌خواند دست‌نخورده است.",
+  "تازه‌کردن: docker compose exec -T download-worker python - <embed-url>",
+  "  --save /work/embed.json < tools/spotify_embed_dump.py",
+  "این کلید عمداً این‌جاست تا فیکسچر خودش بگوید از کجا آمده — نسخهٔ قبلیِ",
+  "تست‌ها ساختگی بود و دقیقاً همان شکاف، مرگِ پارسر را هفته‌ها پنهان کرد."
+ ],
+ "props": {
+  "pageProps": {
+   "state": {
+    "data": {
+     "entity": {
+      "type": "track",
+      "name": "Jane Maryam",
+      "uri": "spotify:track:4Mrmg7XjDKqKWTw38hFCq6",
+      "id": "4Mrmg7XjDKqKWTw38hFCq6",
+      "title": "Jane Maryam",
+      "artists": [
+       {
+        "name": "Mohammad Nouri",
+        "uri": "spotify:artist:75OTNsUeTabRQgjNnfSV9J"
+       }
+      ],
+      "releaseDate": {
+       "isoString": "1996-06-03T00:00:00Z"
+      },
+      "duration": 310973,
+      "isPlayable": true,
+      "playabilityReason": "PLAYABLE",
+      "isExplicit": false,
+      "isNineteenPlus": false,
+      "audioPreview": {
+       "url": "https://p.scdn.co/mp3-preview/a72b9d2ed180157b20318f8e40f25034723004a5"
+      },
+      "hasVideo": false,
+      "relatedEntityUri": "spotify:artist:75OTNsUeTabRQgjNnfSV9J",
+      "visualIdentity": {
+       "backgroundBase": {"alpha": 255, "blue": 130, "green": 85, "red": 38},
+       "textBase": {"alpha": 255, "blue": 255, "green": 255, "red": 255},
+       "image": [
+        {
+         "url": "https://i.scdn.co/image/ed5c0b36a2a80e037438dca38cd58f0a509136b0",
+         "maxHeight": 0,
+         "maxWidth": 0
+        }
+       ]
+      }
+     },
+     "embeded_entity_uri": "spotify:track:4Mrmg7XjDKqKWTw38hFCq6",
+     "defaultAudioFileObject": {"passthrough": "NONE"}
+    },
+    "settings": {
+     "rtl": false,
+     "session": {"isAnonymous": true},
+     "entityContext": "track",
+     "clientId": "ab9ad0d96a624805a7d51e8868df1f97",
+     "isMobile": false
+    },
+    "machineState": {"initialized": false, "playbackMode": "unknown"}
+   },
+   "config": {"locale": "en", "restrictionId": ""}
+  },
+  "__N_SSP": true
+ },
+ "page": "/track/[id]",
+ "query": {"id": "4Mrmg7XjDKqKWTw38hFCq6"},
+ "buildId": "e82d6788-51cd-468b-b1eb-c01d0dad911b",
+ "assetPrefix": "https://embed-cdn.spotifycdn.com",
+ "isFallback": false,
+ "gssp": true
+}
