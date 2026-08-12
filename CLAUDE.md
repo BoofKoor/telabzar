@@ -223,6 +223,19 @@ slow machines alike. Where ordering is the subject, the same idea applies as a d
 *first* operation only (`FakeBot.delay_first`): with the work outside the lock a later caller overtakes
 the earlier one and the stale value lands last, while with it inside the lock that ordering is
 impossible. A race test that merely runs things concurrently and hopes proves nothing when it passes.
+**(3) When the code under test swallows its own exceptions, an environment failure becomes a silent
+pass — so assert that the work *ran*, separately from what it produced.** `run_screen` wraps everything
+in `except Exception` by design (the filter must fail open, never break the bot). The phase-3c tests
+created a directory under `settings.work_dir`, which defaults to `/work`: creatable in the dev sandbox
+because it runs as **root**, not on the CI runner. There `os.makedirs` raised `PermissionError`, the
+handler swallowed it exactly as designed, and screening never ran at all — which made
+"a fast screen produces no edits" **trivially true**. Two of the tests were green on CI while proving
+nothing, and no local run could ever have shown it. The fix has two halves and both matter: point
+`work_dir` at `tmp_path` so the real path is exercised anywhere, **and** have the stage doubles record
+that they were called, so silence is only accepted when there was something to be silent about.
+Generalise it: a fail-open code path converts *any* environment difference into a passing test, so
+`root`-vs-not, a missing binary, or an unwritable directory can all hide behind it. This is the class
+of bug CI exists to find, and the reason the runner must not be assumed to resemble the dev box.
 
 **CI:** `.github/workflows/tests.yml` — on every PR and on push to `main`, a clean `ubuntu-latest` runner
 does `pip install -r requirements-dev.txt && pytest -q` on **Python 3.12** (matching `docker/*.Dockerfile`,
