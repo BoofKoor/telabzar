@@ -12,13 +12,18 @@
 و پوششِ `_parse_spotify_embed` که تا امروز **صفر** بود، در حالی که از امروز
 تنها مسیرِ متادیتاست (APIِ رسمی برای ما بسته است — §۷).
 
-**مرزِ صداقتِ تستِ پارسر، صریح:** صفحهٔ واقعیِ `open.spotify.com` از محیطِ تست
-در دسترس نیست (پروکسی `CONNECT` را ۴۰۳ می‌کند)، پس فیکسچرها از روی **انتظارِ
-خودِ پارسر** ساخته شده‌اند نه از یک صفحهٔ ضبط‌شده. یعنی این تست‌ها ثابت **نمی‌کنند**
-که نامِ فیلدهای اسپاتیفای همین‌هاست؛ چیزی که ثابت می‌کنند رفتارِ خودمان است —
-مقاومت در برابر ورودیِ خراب، شکلِ خروجی، و اینکه album/year/isrc روی این مسیر
-همیشه خالی‌اند. اگر روزی صفحهٔ واقعی گرفته شد، همان باید جای این فیکسچرها را
-بگیرد؛ دستورش در CLAUDE.md §۷ آمده.
+**فیکسچرها حالا ضبطِ واقعی‌اند** (`tests/fixtures/`, دامپِ ۲۰۲۶-۰۸-۱۲ از مستر):
+یکی لینکِ تک‌ترک، یکی پلی‌لیست. نسخهٔ اولِ این فایل فیکسچرِ **ساختگی** داشت —
+از روی انتظارِ خودِ پارسر، چون اسپاتیفای از سندباکسِ تست مسدود است — و همان‌جا
+نوشته بودم که «عمداً چیزی دربارهٔ نامِ فیلدهای اسپاتیفای ثابت نمی‌کند». دقیقاً
+همان شکاف یک خرابیِ کامل را پنهان کرد: اسکیما عوض شده بود، پارسر همیشه `None`
+می‌داد، و `_spotify_scrape` بی‌صدا به oEmbed می‌افتاد که فقط عنوان دارد.
+
+**دو شکلِ هنرمند، هر دو زنده — هیچ‌کدام کهنه نیست:**
+    لینکِ تک‌ترک       → `artists: [{name}]`  (آرایه)
+    ترکِ داخلِ trackList → `subtitle`          (رشته)
+برداشتنِ `subtitle` به‌عنوان «پاکسازیِ کدِ کهنه» پلی‌لیست‌ها را می‌شکند؛
+`test_both_live_artist_shapes_are_supported` عمداً همان را می‌گیرد.
 """
 from __future__ import annotations
 
@@ -210,13 +215,16 @@ def _page(entity: dict) -> str:
             + "</script></body></html>")
 
 
-def _legacy_entity(title="Get Lucky", subtitle="Daft Punk", dur=369_000, **kw) -> dict:
-    """شکلِ **قدیمیِ** اسپاتیفای (`subtitle` + `coverArt`).
+def _entity_with_cover_art(title="Get Lucky", subtitle="Daft Punk", dur=369_000, **kw) -> dict:
+    """entityِ ساختگی با کاورِ شکلِ `coverArt.sources[]`.
 
-    برای یک ترک اثباتاً دیگر برنمی‌گردد؛ به‌عنوان fallback نگه داشته می‌شود چون
-    مسیرِ `trackList` (آلبوم/پلی‌لیست) هنوز روی اسکیمای امروز **تأیید نشده** و
-    نمونه‌اش را نداریم. هر تستی که این را می‌سازد دربارهٔ همان fallback است، نه
-    دربارهٔ رفتارِ امروزیِ اسپاتیفای.
+    **نامِ قبلیِ این تابع `_entity_with_cover_art` بود و گمراه‌کننده:** فقط `coverArt`
+    کهنه است (اسکیمای امروزِ ترک `visualIdentity.image[]` می‌دهد). خودِ
+    `subtitle` **زنده** است و شکلِ هنرمند در ترک‌های داخلِ `trackList`ِ
+    پلی‌لیست است — با دامپِ ۲۰۲۶-۰۸-۱۲ تأیید شد. برچسبِ «قدیمی» رویش خطرناک
+    بود، چون کسی می‌توانست به‌عنوانِ پاکسازی برش دارد و پلی‌لیست‌ها را بشکند.
+
+    این ساختگی است و فقط برای سنجشِ **مکانیزمِ** ارث‌بریِ کاور به کار می‌رود.
     """
     e = {"title": title, "subtitle": subtitle, "duration": dur,
          "coverArt": {"sources": [{"url": "http://small"}, {"url": "http://big"}]}}
@@ -321,45 +329,96 @@ def test_a_blind_reference_makes_every_same_titled_candidate_tie():
     assert D.reference_is_blind(blind) is True
 
 
-# ── شکلِ قدیمی: عمداً نگه داشته شده، چون مسیرِ trackList تأیید نشده ───────
-def test_the_legacy_shape_still_parses_as_a_fallback():
-    """اثباتاً دیگر برای یک ترک برنمی‌گردد؛ اگر آلبوم/پلی‌لیست هنوز این شکل را
-    بدهد نباید بشکند. این تست دربارهٔ **fallback** است، نه رفتارِ امروز."""
-    out = D._parse_spotify_embed(_page(_legacy_entity()), "track", 20)
-    t = out["tracks"][0]
-    assert (t["artist"], t["duration"], t["cover_url"]) == ("Daft Punk", 369, "http://big")
+# ── پلی‌لیست: مسیرِ `trackList`، **تأییدشده** روی اسکیمای امروز ───────────
+#
+# دامپِ ۲۰۲۶-۰۸-۱۲ نشان داد این شاخه هیچ‌وقت نشکسته بود — فقط لینکِ تک‌ترک خراب
+# بود. و یک تصحیحِ مهم: **`subtitle` کدِ کهنه نیست.** دو مسیر دو شکلِ متفاوتِ
+# هم‌زمان‌زنده دارند؛ برداشتنِ `subtitle` به‌عنوان «پاکسازیِ کد» پلی‌لیست‌ها را
+# می‌شکند.
+PLAYLIST_FIXTURE = ROOT / "tests" / "fixtures" / "spotify_embed_playlist.json"
 
 
-def test_a_playlist_page_parses_every_track_and_respects_the_cap():
-    """مسیرِ `trackList` — **روی اسکیمای امروز تأیید نشده** (نمونه‌اش را نداریم)."""
-    tl = [{"title": f"S{i}", "subtitle": "A", "duration": (100 + i) * 1000} for i in range(5)]
-    out = D._parse_spotify_embed(_page(_legacy_entity(title="PL", trackList=tl)), "playlist", 3)
-    assert [t["title"] for t in out["tracks"]] == ["S0", "S1", "S2"]
-    assert out["title"] == "PL"
+def playlist_page() -> str:
+    return ('<html><body><script id="__NEXT_DATA__" type="application/json">'
+            + PLAYLIST_FIXTURE.read_text(encoding="utf-8")
+            + "</script></body></html>")
 
 
-def test_a_track_falls_back_to_the_album_cover():
+def test_the_real_playlist_response_parses_every_track():
+    out = D._parse_spotify_embed(playlist_page(), "playlist", 20)
+    assert out, "پارسر روی پاسخِ واقعیِ پلی‌لیست چیزی برنگرداند"
+    assert [t["title"] for t in out["tracks"]] == \
+        ["Yare Dabestanie Man", "Soltane Ghalbha", "Jane Maryam", "Gole Sangam"]
+
+
+def test_a_playlist_track_gets_its_artist_from_the_string_subtitle():
+    """شکلِ زندهٔ این مسیر: `subtitle` **رشته** است، نه آرایه."""
+    out = D._parse_spotify_embed(playlist_page(), "playlist", 20)
+    assert [t["artist"] for t in out["tracks"]][:2] == ["Fereydoon Foroughi", "Aref"]
+
+
+def test_playlist_durations_are_milliseconds_too():
+    """۲۱۶۱۳۷ms = ۳:۳۶ و ۳۱۰۹۷۳ms = ۵:۱۱ — پس رفعِ `round` هر دو مسیر را می‌گیرد."""
+    out = D._parse_spotify_embed(playlist_page(), "playlist", 20)
+    assert [t["duration"] for t in out["tracks"]] == [216, 254, 311, 290]
+
+
+def test_the_playlist_cap_is_respected():
+    out = D._parse_spotify_embed(playlist_page(), "playlist", 2)
+    assert [t["title"] for t in out["tracks"]] == ["Yare Dabestanie Man", "Soltane Ghalbha"]
+
+
+def test_both_live_artist_shapes_are_supported():
+    """گاردِ صریح: **هر دو** شکل زنده‌اند و هیچ‌کدام نباید حذف شود.
+
+    لینکِ تک‌ترک `artists: [{name}]` می‌دهد؛ ترکِ داخلِ پلی‌لیست `subtitle`ِ
+    رشته‌ای. اگر روزی کسی `subtitle` را به‌عنوان کدِ کهنه بردارد، این تست
+    می‌افتد — که همان هدفش است.
+    """
+    single = D._parse_spotify_embed(real_page(), "track", 20)["tracks"][0]
+    in_list = D._parse_spotify_embed(playlist_page(), "playlist", 20)["tracks"][2]
+    assert single["artist"] == "Mohammad Nouri", "شکلِ آرایه‌ای شکست"
+    assert in_list["artist"] == "Mohammad Nouri", "شکلِ رشته‌ایِ subtitle شکست"
+    # و هر دو باید مرجعِ کاملی بسازند، وگرنه matcher روی همان ترک کور می‌شود
+    assert not D.reference_is_blind(single) and not D.reference_is_blind(in_list)
+
+
+def test_a_playlist_track_has_no_cover_of_its_own():
+    """در دامپِ واقعی، آیتم‌های trackList کاورِ اختصاصی ندارند.
+
+    کاورِ سطحِ مجموعه در آن دامپ گزارش نشد، پس این‌جا ادعایی رویش نمی‌کنیم —
+    فقط این‌که نبودنش پارس را نمی‌شکند. (مکانیزمِ ارث‌بریِ کاور جدا تست می‌شود.)
+    """
+    out = D._parse_spotify_embed(playlist_page(), "playlist", 20)
+    assert all(t["cover_url"] is None for t in out["tracks"])
+
+
+def test_a_track_inherits_the_collection_cover_when_there_is_one():
+    """مکانیزمِ ارث‌بری، مستقل از اینکه اسپاتیفای کدام کلید را می‌دهد."""
     tl = [{"title": "S", "subtitle": "A", "duration": 1000}]
-    out = D._parse_spotify_embed(_page(_legacy_entity(title="ALB", trackList=tl)), "album", 20)
+    out = D._parse_spotify_embed(_page(_entity_with_cover_art(title="ALB", trackList=tl)), "album", 20)
     assert out["tracks"][0]["cover_url"] == "http://big"
 
 
 def test_a_list_of_artists_becomes_one_string():
-    """شکلِ امروز `artists: [{name}]` است — همان حالتِ چندهنرمندی که باگِ `ft`
-    رویش نامزدِ درست را می‌انداخت. شکلِ قدیمیِ `subtitle`ِ لیستی هم پشتیبانی می‌شود."""
+    """چند هنرمند روی لینکِ تک‌ترک — همان حالتی که باگِ `ft` رویش نامزدِ درست را
+    می‌انداخت.
+
+    (نسخهٔ قبلی نیمهٔ دومی داشت که `subtitle`ِ **لیستی** را می‌سنجید. حذف شد:
+    هیچ دامپی چنین شکلی نشان نداده — پلی‌لیست `subtitle`ِ رشته‌ای می‌دهد و
+    تک‌ترک آرایهٔ `artists`. قفل‌کردنِ شکلی که ندیده‌ایم همان تلهٔ فیکسچرِ
+    ساختگی است.)
+    """
     modern = _page({"title": "X", "artists": [{"name": "Daft Punk"},
                                               {"name": "Pharrell Williams"}], "duration": 1000})
     assert D._parse_spotify_embed(modern, "track", 20)["tracks"][0]["artist"] == \
-        "Daft Punk, Pharrell Williams"
-    legacy = _page(_legacy_entity(subtitle=[{"name": "Daft Punk"}, {"name": "Pharrell Williams"}]))
-    assert D._parse_spotify_embed(legacy, "track", 20)["tracks"][0]["artist"] == \
         "Daft Punk, Pharrell Williams"
 
 
 def test_tracks_with_no_title_are_dropped():
     tl = [{"title": "Good", "subtitle": "A", "duration": 1000},
           {"title": "", "subtitle": "A", "duration": 1000}]
-    out = D._parse_spotify_embed(_page(_legacy_entity(trackList=tl)), "album", 20)
+    out = D._parse_spotify_embed(_page(_entity_with_cover_art(trackList=tl)), "album", 20)
     assert [t["title"] for t in out["tracks"]] == ["Good"]
 
 

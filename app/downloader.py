@@ -919,7 +919,9 @@ def _embed_track(title: str | None, subtitle, cover: str | None, dur_ms,
     (`_duration_reject`) **هر** نامزدی را رد می‌کند — خرابیِ بی‌صدا از همان جنسی
     که این پارسر را هفته‌ها مرده نگه داشت. تست واحدش را قفل می‌کند.
     """
-    if isinstance(subtitle, list):  # شکلِ امروز: [{"name": …}, …]
+    # دو شکل، **هر دو زنده**: لینکِ تک‌ترک آرایهٔ `[{"name": …}, …]` می‌دهد و
+    # ترکِ داخلِ `trackList`ِ پلی‌لیست یک رشتهٔ ساده. هیچ‌کدام کهنه نیست.
+    if isinstance(subtitle, list):
         subtitle = ", ".join(x.get("name", "") if isinstance(x, dict) else str(x) for x in subtitle)
     # `round` نه `int`: بریدن هر مدتی را تا یک ثانیه **کم** می‌کند (۳۱۰۹۷۳ms →
     # ۳۱۰ به‌جای ۳۱۱)، و آن یک ثانیه روی `_time_match` حدودِ ۱۰ واحد می‌ارزد،
@@ -956,13 +958,22 @@ def _parse_spotify_embed(html: str, kind: str, max_tracks: int) -> dict | None:
     title = entity.get("title") or entity.get("name") or ""
     tl = entity.get("trackList") or []
     if kind == "track" or not tl:
-        # شکلِ امروز `artists: [{name}]`؛ `subtitle` شکلِ قدیمی است و اگر باشد مقدم.
+        # لینکِ **تک‌ترک**: هنرمند در `artists: [{name}]` است.
         artists = entity.get("subtitle") or entity.get("artists")
         tracks = [_embed_track(title, artists, _embed_cover(entity),
                                entity.get("duration"), _embed_year(entity))]
     else:
-        # مسیرِ آلبوم/پلی‌لیست: **تأیید نشده** روی اسکیمای امروز (نمونه‌اش را
-        # نداریم). عمداً دست‌نخورده مانده تا اگر هنوز `trackList` می‌دهند نشکند.
+        # مسیرِ آلبوم/پلی‌لیست — **تأییدشده روی اسکیمای امروز** (دامپِ ۲۰۲۶-۰۸-۱۲،
+        # پلی‌لیستِ ۱۰۰تایی). این شاخه هیچ‌وقت نشکسته بود؛ فقط لینکِ تک‌ترک خراب بود.
+        #
+        # ⚠ **`subtitle` کدِ کهنه نیست — شکلِ زندهٔ همین مسیر است.** دو مسیر دو شکلِ
+        # متفاوت دارند و هر دو فعلی‌اند: ترکِ تکی `artists[].name` (آرایه) می‌دهد و
+        # ترکِ داخلِ `trackList` یک `subtitle`ِ **رشته‌ای**. هر «پاکسازیِ کدِ کهنه»
+        # که `subtitle` را بردارد، پلی‌لیست‌ها را می‌شکند.
+        #
+        # ترک‌های داخلِ `trackList` کاورِ اختصاصی ندارند، پس کاورِ سطحِ مجموعه
+        # به همه‌شان می‌رسد. `playabilityReason` (مثلاً `COUNTRY_RESTRICTED`) هم
+        # آن‌جا هست و برای ما بی‌اثر است، چون فایل را از یوتیوب می‌گیریم.
         alb_cover = _embed_cover(entity)
         alb_year = _embed_year(entity)
         tracks = [_embed_track(it.get("title") or it.get("name"),
