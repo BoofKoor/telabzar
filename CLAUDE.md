@@ -181,7 +181,7 @@ image also installs **Deno** (yt-dlp JS runtime) + ffmpeg. See `docs/telegram-ap
 - Downloader: `DL_MAX_COOKIE_TRIES`, `DL_EXIT_COOLDOWN_MIN`, `DOWNLOADER_ENABLED`, `DL_ALLOW_UNKNOWN`, `DL_RICH_POSTS`, `PROXY_URL`, `COOKIES_DIR`, `POT_PROVIDER_URL`, `DL_POT_ENABLED`, `DL_DEFAULT_UX`, `DL_MAX_SIZE_MB`, `DL_MAX_DURATION_MIN`, `DL_DAILY_COUNT`, `DL_DAILY_MB`, `DL_CONCURRENCY`, `DL_COOLDOWN_SEC`, `DL_OP_DAILY_MIN`, `DL_MIN_FREE_GB`, `DL_DIRECT_ENABLED`, `DL_DIRECT_MAX_MB`, `DL_SPONSORBLOCK`, `DL_SUBS`, `COBALT_URL`, `COBALT_API_KEY`.
 - Adult-content filter (all runtime-tunable, panel group «🔞 فیلترِ محتوای بزرگسال»): `SAFETY_ENABLED`, `SAFETY_SCAN_PIXELS`, `SAFETY_THRESHOLD` (percent), `SAFETY_VIDEO_FRAMES`, `SAFETY_NOTIFY_ADMIN`, `SAFETY_STRIKES` (`0` = off) + the panel-only `safety_block_domains` / `safety_allow_domains` lists.
 - Session pool (all runtime-tunable, panel group «🧬 سهمیهٔ استخرِ سشن»): `COOKIE_ALERT_MIN`, `CK_CAP_INSTAGRAM`, `CK_CAP_YOUTUBE`, `CK_CAP_TWITTER`, `CK_CAP_TIKTOK`, `CK_CAP_DEFAULT` (hourly uses per account, `0` = uncapped), `CK_MIN_GAP_SEC`, `CK_WARMUP_DAYS`, `CK_WARMUP_PCT`, `CK_COOLDOWN_MIN`, `CK_RATE_COOLDOWN_MIN`, `CK_INVALID_AT`.
-- Spotify: `SPOTIFY_ENABLED`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_META`, `SPOTIFY_MAX_TRACKS`, `SPOTIFY_SOURCE`, `SPOTIFY_MATCH_MIN`, `SPOTIFY_YT_FALLBACK`.
+- Spotify: `SPOTIFY_ENABLED`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_META`, `SPOTIFY_MAX_TRACKS`, `SPOTIFY_SOURCE`, `SPOTIFY_MATCH_MIN`, `SPOTIFY_YT_FALLBACK`. **`SPOTIFY_CLIENT_ID`/`SECRET` stay empty on purpose** — see the "Spotify Web API is closed to us" gotcha in §7 before spending time trying to obtain them.
 - Panel: `ADMIN_PORT`, `ADMIN_BASE`, `ADMIN_SECRET`.
 - Nodes — master side (one-time WG setup): `NODE_SECRET` (HMAC key for join tokens; falls back to `BOT_TOKEN`), `WG_INTERFACE` (`wg0`), `WG_SUBNET` (`10.51.0.0/24`), `WG_MASTER_IP` (`10.51.0.1`), `WG_MASTER_PUBKEY`, `WG_ENDPOINT` (`host:51820`), `WG_CONFIG_PATH` (`/etc/wireguard/wg0.conf`), and the internal addresses handed to nodes (`NODE_REDIS_URL`, `NODE_POSTGRES_DSN`, `NODE_API_BASE`, `NODE_POT_PROVIDER_URL`, `NODE_GATEWAY_URL` — all on the master's WG IP; the last is the master gateway a gateway node reverse-proxies to).
 - Nodes — node side (set by `node/install.sh`, not by humans): `NODE_ROLE` (presence = "I am a node" → `is_local=False` + heartbeat), `NODE_ID`, `NODE_NAME`.
@@ -299,6 +299,27 @@ usable accounts drop below `cookie_alert_min`.
 - **Cross-process settings staleness**: `settings_store` is read-through Redis (durable copy in Postgres), NOT an in-process TTL cache — so a panel change is seen instantly by bot **and** worker. Reading `settings.X` directly bypasses this and silently ignores the panel.
 - **yt-dlp deps**: needs Deno (JS runtime) + `bgutil-pot-provider` for YouTube PO tokens. The pot plugin can crash yt-dlp → toggle `DL_POT_ENABLED` off and there is a retry-without-pot path. Datacenter IPs get blocked → route via `PROXY_URL` (your own clean exit).
 - **Spotify/Apple are DRM**: never downloaded directly — metadata is resolved then matched to a YouTube recording. Accurate matching needs `ytmusicapi` **installed in the download-worker image** and a proxy that can reach `music.youtube.com`; otherwise it falls back to raw `ytsearch` (less accurate). `SPOTIFY_SOURCE=youtube` forces the fallback.
+- **The Spotify Web API is closed to us — design for the embed page, and stop looking for a key.**
+  `spotify_resolve()` has two paths: the official API when `spotify_client_id`+`spotify_client_secret`
+  are set, else scraping the public `/embed` page. **The API path is not available to this project and
+  will not be**, decided 2026-08-12 by the operator against Spotify's February 2026 platform changes:
+  using the Web API now requires the app owner to hold a **Spotify Premium** account, Development mode
+  is capped at one Client ID and five users, Spotify is moving away from Client Credentials for
+  metadata at all, and extended quota is granted only to organisations with ~250k monthly users. None
+  of those are things a self-hosted bot can satisfy. So the API path stays in the code (it costs
+  nothing and works for anyone who *can* satisfy them) but **no design may depend on it**.
+  The consequence is concrete and shapes the matcher: the embed page yields **title, artist, duration,
+  cover only** — `_embed_track()` hardcodes `album=""`/`year=""` and `isrc=None`
+  (`downloader.py:868`), and `_parse_spotify_embed` only ever passes title/subtitle/cover/duration
+  into it (`:890-892`). Therefore **ISRC is permanently unavailable in production**, which makes two
+  pieces of `_gather_candidates`/`_match_score` dead in practice: the ISRC catalogue search
+  (`:1490-1494`) and the `isrc_hit` **+20** bonus (`:1359-1360`) — the strongest signal the scorer has.
+  What is left to match on is **name (0.40), artist (0.25), duration (0.27)**; the album component
+  (0.08) is always `None` too, so those three re-normalise over 0.92. The only remaining
+  "this is the official recording" signal is `art_track` **+6** for YouTube Music `songs` results.
+  Anyone tuning the matcher should start from that three-signal reality, not from the weights as
+  written. Also worth knowing: `_parse_spotify_embed` has **no test coverage at all**, and it is now
+  the only metadata path that will ever run.
 - **A session is an identity, not a file: cookie + exit IP + User-Agent, always together.**
   Instagram treats the IP as identity, so moving one session between exits is the fastest route to a
   checkpoint. Each account carries `node_id` (pinned exit), `proxy` and `user_agent` in its meta;
