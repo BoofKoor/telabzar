@@ -53,6 +53,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       WEBHOOK_HOST: http://bot:8080
+      # ربات هم کوکی **می‌نویسد**: پیستِ کوکی از داخلِ تلگرام
+      # (`routers/admin.py` → `cookies._save_cookie`) و حذفِ فایل. بدونِ این دو
+      # خط، آن مسیر به همان پوشه‌ای که پنل و ورکرِ دانلود می‌خوانند نمی‌رسید.
+      COOKIES_DIR: /cookies
     depends_on:
       local-bot-api:
         condition: service_started
@@ -63,6 +67,7 @@ services:
     volumes:
       # فایل‌های دانلودشده توسط سرور محلی (خواندن مسیرِ لوکال)
       - tg-bot-api-data:/var/lib/telegram-bot-api:ro
+      - ./cookies:/cookies     # نوشتنی — همان پوشهٔ پنل (ورکرِ دانلود :ro می‌خواند)
     expose:
       - "8080"
 
@@ -137,6 +142,15 @@ services:
     volumes:
       - tg-bot-api-data:/var/lib/telegram-bot-api:ro  # خواندن ورودی
       - work-data:/work                               # خروجیِ موقتِ پردازش
+      # کشِ مدل‌ها. ایمیج فقط whisperِ `base` را پیش‌کش می‌کند، ولی پنل پنج مدل
+      # می‌دهد؛ مدلِ بزرگ‌تر در زمانِ اجرا دانلود می‌شود و بدونِ این ولوم در لایهٔ
+      # نوشتنیِ کانتینر می‌ماند، یعنی **با هر `telabzar update` دوباره** دانلود
+      # می‌شد (large-v3 حدودِ ۳ گیگابایت، وسطِ جابِ کاربر و با اشغالِ اسلات).
+      # ولومِ نام‌دار روی دایرکتوریِ پرِ ایمیج، بارِ اول محتوای ایمیج را داخلش
+      # کپی می‌کند، پس `base`ِ پیش‌کش‌شده از دست نمی‌رود. تلهٔ همراهش: از آن به
+      # بعد ولوم دیگر با ایمیج به‌روز نمی‌شود — اگر روزی مدلِ پیش‌کش عوض شد،
+      # ولوم باید دستی پاک شود.
+      - model-cache:/opt/models/hf
     # سخت‌سازی: بدونِ ارتقای امتیاز و بدونِ قابلیت‌های لینوکس (ffmpeg/python لازم ندارند)
     security_opt:
       - no-new-privileges:true
@@ -228,6 +242,7 @@ services:
       - ALL
 
 volumes:
+  model-cache:
   tg-bot-api-data:
   pg-data:
   redis-data:

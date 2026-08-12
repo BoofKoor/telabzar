@@ -1526,6 +1526,7 @@ async def download_spotify(url: str, workdir: str, opts: dict,
     n = len(tracks)
     results: list[tuple[str, dict, str | None]] = []
     last_err: Exception | None = None
+    dropped = age_blocked = 0        # برای نام‌بردنِ علتِ درست وقتی چیزی نمی‌ماند
     for i, tr in enumerate(tracks):
         if cancel is not None and await cancel():
             raise ProcessingCancelled()
@@ -1543,6 +1544,7 @@ async def download_spotify(url: str, workdir: str, opts: dict,
         if not target:  # نه نامزدی رد شد نه چیزی برای fallback ماند
             if not yt_fallback:  # این ترک را رد کن، اشتباه نفرست
                 last_err = RuntimeError(f"no confident match: {query}")
+                dropped += 1
                 continue
             target = f"ytsearch1:{query}"  # آخرین‌چاره (وقتی هیچ نامزدی نبود)
 
@@ -1558,7 +1560,7 @@ async def download_spotify(url: str, workdir: str, opts: dict,
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             # pot-provider می‌تواند yt-dlp را بیندازد → یک‌بار بدونِ pot؛ وگرنه این ترک را رد کن
-            if opts.get("pot_provider"):
+            if opts.get("pot_provider") and not isinstance(exc, AgeRestricted):
                 try:
                     path, yinfo, _thumb = await download_ytdlp(
                         target, tdir, "audio", {**opts, "pot_provider": None}, progress=_p, cancel=cancel)
@@ -1566,14 +1568,25 @@ async def download_spotify(url: str, workdir: str, opts: dict,
                     raise
                 except Exception as exc2:  # noqa: BLE001
                     last_err = exc2
+                    dropped += 1
+                    age_blocked += isinstance(exc2, AgeRestricted)
                     continue
             else:
+                dropped += 1
+                age_blocked += isinstance(exc, AgeRestricted)
                 continue
         cover_path = await _fetch_cover(tr.get("cover_url"), tdir)
         info = {"duration": tr.get("duration") or yinfo.get("duration"),
                 "sp": {**tr, "cover_path": cover_path}}
         results.append((path, info, None))
     if not results:
+        # اگر **همهٔ** ترک‌های افتاده را گیتِ سنی انداخته، علت را درست نام ببر.
+        # `run_download` این استثنا را به پیامِ «محتوای غیرمجاز» نگاشت می‌کند؛
+        # بدونِ این، کاربر «no YouTube match» می‌گرفت که علت را اشتباه می‌گوید.
+        # شرط عمداً «همهٔ افتاده‌ها» است نه «همهٔ ترک‌ها»: اگر یکی سنی بود و یکی
+        # نامزد نداشت، پیامِ عمومی همچنان درست‌تر است.
+        if age_blocked and age_blocked == dropped:
+            raise AgeRestricted(f"spotify: all {age_blocked} track(s) are age-restricted")
         # علتِ واقعیِ شکستِ دانلودِ یوتیوب را بالا بده (bot-check/pot/…) تا تشخیص ممکن شود
         raise RuntimeError("spotify: no YouTube match — "
                            + (str(last_err)[:220] if last_err else "search returned nothing"))
