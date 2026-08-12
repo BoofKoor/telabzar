@@ -254,20 +254,32 @@ async def note_spend(redis, name: str | None) -> None:
         pass
 
 
-async def _over_budget(redis, name: str, meta: dict, now: int,
-                       lim: Limits | None = None) -> bool:
-    """آیا این اکانت سهمیهٔ ساعتی‌اش را تمام کرده یا خیلی زود دوباره صدا زده می‌شود؟"""
+def over_budget(meta: dict, used: int, last: int, now: int,
+                lim: Limits | None = None) -> bool:
+    """نسخهٔ **همگام**: سهمیهٔ ساعتی تمام شده یا خیلی زود دوباره صدا زده می‌شود؟
+
+    مثلِ `hourly_cap`/`budget_of`، ریاضی عمداً sync است و ورودی‌هایش یک‌بار
+    دسته‌ای خوانده می‌شوند — همان الگویی که `Limits` برایش ساخته شد: تنها بخشِ
+    ناهمگام یک‌بار در هر عملیات اجرا می‌شود، نه یک‌بار به‌ازای هر اکانت.
+    """
     lim = lim or default_limits()
     cap = budget_of(meta, now, lim)
-    if cap and await usage(redis, name, now) >= cap:
+    if cap and used >= cap:
         return True
     if lim.min_gap <= 0:
         return False
+    return bool(last and now - last < lim.min_gap)
+
+
+async def _over_budget(redis, name: str, meta: dict, now: int,
+                       lim: Limits | None = None) -> bool:
+    """پوششِ تکیِ `over_budget` — برای فراخوان‌هایی که دسته‌ای نمی‌خوانند."""
+    lim = lim or default_limits()
     try:
         last = int(await redis.get(_CK_LAST + name) or 0)
     except Exception:  # noqa: BLE001
         last = 0
-    return bool(last and now - last < lim.min_gap)
+    return over_budget(meta, await usage(redis, name, now), last, now, lim)
 
 # ── دسته‌بندیِ خطا ───────────────────────────────────────────────
 # شمارندهٔ «۳ خطای پشتِ‌هم = باطل» خام بود: یک محدودیتِ نرخ (که یعنی *ما* تند رفتیم)
@@ -400,13 +412,18 @@ async def list_names(redis) -> tuple[list[str], bool]:
 
 
 async def status_of(redis, name: str, meta: dict | None = None,
-                    lim: Limits | None = None) -> str:
+                    lim: Limits | None = None, cooldown: int | None = None) -> str:
+    """وضعیتِ اکانت. `cooldown` = ثانیهٔ باقی‌مانده اگر از قبل خوانده شده باشد
+    (مسیرِ دسته‌ای)؛ `None` یعنی خودت از Redis بپرس (مسیرِ تکیِ قدیمی)."""
     meta = meta if meta is not None else await get_meta(redis, name)
     if meta.get("disabled"):
         return DISABLED
     if meta.get("frozen"):     # چک‌پوینت خورده — تا دخالتِ انسان استفاده نمی‌شود
         return FROZEN
-    if redis is not None:
+    if cooldown is not None:
+        if cooldown > 0:
+            return COOLDOWN
+    elif redis is not None:
         try:
             if await redis.exists(_CK_CD + name):
                 return COOLDOWN
@@ -425,25 +442,80 @@ async def status_of(redis, name: str, meta: dict | None = None,
     return HEALTHY
 
 
+async def _mget(redis, keys: list[str]) -> list:
+    """یک رفت‌وبرگشت به‌جای N تا. روی خطا فهرستِ None برمی‌گرداند (رفتارِ قبلی)."""
+    if redis is None or not keys:
+        return [None] * len(keys)
+    try:
+        return list(await redis.mget(keys))
+    except Exception:  # noqa: BLE001
+        return [None] * len(keys)
+
+
+def _int(v) -> int:
+    """مقدارِ Redis → عدد، با ۰ روی هر چیزِ نامعتبر.
+
+    نسخهٔ تکی (`usage`) کلِ خواندن را در try داشت، پس یک مقدارِ خرابِ کلید فقط
+    ۰ می‌داد؛ در مسیرِ دسته‌ای همان `int()` بیرونِ try می‌افتاد و `pick()` را
+    می‌ترکاند. تفاوتِ ریزی که با جابه‌جاییِ خواندن‌ها به‌راحتی جا می‌ماند.
+    """
+    try:
+        return int(v or 0)
+    except (ValueError, TypeError):
+        return 0
+
+
+async def get_metas(redis, names: list[str]) -> dict[str, dict]:
+    """متای همهٔ اکانت‌ها با **یک** `MGET` (به‌جای یک `GET` برای هرکدام)."""
+    out = {n: _blank_meta(n) for n in names}
+    for n, raw in zip(names, await _mget(redis, [_CK_META + n for n in names])):
+        if raw:
+            try:
+                out[n].update(json.loads(raw))
+            except (ValueError, TypeError):
+                pass
+    return out
+
+
+async def cooldowns(redis, names: list[str]) -> dict[str, int]:
+    """نامِ اکانت → ثانیهٔ باقی‌ماندهٔ کول‌داون (۰ = نیست)، با **یک** pipeline.
+
+    `TTL` روی کلیدِ نبوده `-2` می‌دهد، پس همین یک فرمان جای **هر دو**ی
+    `EXISTS` (برای وضعیت) و `TTL` (برای نمایشِ پنل) را می‌گیرد.
+    """
+    if redis is None or not names:
+        return {n: 0 for n in names}
+    try:
+        pipe = redis.pipeline()
+        for n in names:
+            pipe.ttl(_CK_CD + n)
+        res = await pipe.execute()
+    except Exception:  # noqa: BLE001
+        return {n: 0 for n in names}
+    return {n: (t if isinstance(t, int) and t > 0 else 0) for n, t in zip(names, res)}
+
+
 async def accounts(redis, platform: str | None = None,
                    lim: Limits | None = None) -> list[dict]:
-    """همهٔ اکانت‌ها با وضعیت (برای پنل). اگر platform داده شود، فیلتر می‌شود."""
+    """همهٔ اکانت‌ها با وضعیت (برای پنل). اگر platform داده شود، فیلتر می‌شود.
+
+    خواندن‌ها **دسته‌ای‌اند**: قبلاً به‌ازای هر اکانت یک `GET` متا + یک `EXISTS`
+    کول‌داون (+ یک `TTL` اگر در کول‌داون بود) می‌رفت. روی مستر بی‌اهمیت بود، ولی
+    روی نودِ دانلود هرکدام یک رفت‌وبرگشتِ WireGuard است و `pick()` داخلِ حلقهٔ
+    چرخشِ کوکی صدا زده می‌شود، پس ضرب می‌شد.
+    """
     lim = lim or await load_limits()
     names, _local = await list_names(redis)
+    metas = await get_metas(redis, names)
+    if platform:
+        names = [n for n in names if metas[n].get("platform") == platform]
+    cds = await cooldowns(redis, names)
     out: list[dict] = []
     for n in names:
-        meta = await get_meta(redis, n)
-        if platform and meta.get("platform") != platform:
-            continue
-        st = await status_of(redis, n, meta, lim)
-        cd = 0
-        if redis is not None and st == COOLDOWN:
-            try:
-                ttl = await redis.ttl(_CK_CD + n)
-                cd = ttl if ttl and ttl > 0 else 0
-            except Exception:  # noqa: BLE001
-                cd = 0
-        out.append({**meta, "name": n, "status": st, "cooldown": cd})
+        meta = metas[n]
+        st = await status_of(redis, n, meta, lim, cooldown=cds.get(n, 0))
+        out.append({**meta, "name": n, "status": st,
+                    "cooldown": cds.get(n, 0) if st == COOLDOWN else 0})
     return out
 
 
@@ -491,18 +563,31 @@ async def pick(redis, platform: str, exclude: set[str] | None = None,
     exclude = exclude or set()
     lim = lim or await load_limits()   # یک‌بار برای کلِ انتخاب (نه per-account)
     now = int(time.time())
+    pool = await accounts(redis, platform, lim)
+
+    # نامزدها را **قبل** از خواندنِ سهمیه فیلتر کن، بعد مصرف/آخرین‌استفادهٔ همان‌ها
+    # را با دو `MGET` بگیر. قبلاً به‌ازای هر اکانت دو `GET` جدا می‌رفت.
+    cands = [a for a in pool
+             if a["name"] not in exclude
+             and a["status"] not in (COOLDOWN, DISABLED, FROZEN)
+             and a["status"] in _USE_ORDER
+             and not (str(a.get("node_id") or "") and node_id
+                      and str(a.get("node_id")) != node_id)]
+    used: dict[str, int] = {}
+    lasts: dict[str, int] = {}
+    if cands and not ignore_budget:
+        cnames = [a["name"] for a in cands]
+        for n, v in zip(cnames, await _mget(redis, [_hour_key(n, now) for n in cnames])):
+            used[n] = _int(v)
+        for n, v in zip(cnames, await _mget(redis, [_CK_LAST + n for n in cnames])):
+            lasts[n] = _int(v)
+
     ranked: list[tuple[int, int, int, str]] = []
-    for a in await accounts(redis, platform, lim):
-        if a["name"] in exclude or a["status"] in (COOLDOWN, DISABLED, FROZEN):
-            continue
-        try:
-            rank = _USE_ORDER.index(a["status"])
-        except ValueError:
-            continue
+    for a in cands:
         pinned = str(a.get("node_id") or "")
-        if pinned and node_id and pinned != node_id:
-            continue                       # هویتِ این اکانت به خروجیِ دیگری بسته است
-        if not ignore_budget and await _over_budget(redis, a["name"], a, now, lim):
+        rank = _USE_ORDER.index(a["status"])
+        if not ignore_budget and over_budget(a, used.get(a["name"], 0),
+                                             lasts.get(a["name"], 0), now, lim):
             continue
         # اکانتِ پین‌شده به همین خروجی مقدم است (هویتِ پایدار = عمرِ بیشتر)
         affinity = 0 if (pinned and pinned == node_id) else 1
