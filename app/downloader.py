@@ -1622,7 +1622,7 @@ def _match_score(cand: dict, track: dict) -> float:
         # ولی اگر مدتِ **خودِ ترک** نامعلوم باشد، عمداً به حذفِ مؤلفه برمی‌گردیم.
         # دلیلش رتبه‌بندی **نیست** — آن‌جا هر دو راه یکی‌اند، چون وقتی همهٔ
         # نامزدها یک وزن دارند تزریقِ ۵۰ تبدیلی یکنواست. دلیل **مقایسه‌پذیریِ
-        # امتیاز بینِ ترک‌هاست**: `spotify_match_min` یک عددِ سراسری است که روی
+        # امتیاز بینِ ترک‌هاست**: `match_min` یک عددِ سراسری است که روی
         # همهٔ ترک‌ها اعمال می‌شود، پس اگر مقیاسِ امتیاز از ترکی به ترکِ دیگر
         # جابه‌جا شود، آستانه دیگر یک چیزِ ثابت را نمی‌سنجد و کالیبره‌کردنش
         # بی‌معنا می‌شود. تزریقِ ۵۰ وقتی هیچ اطلاعاتی نداریم دقیقاً همین کار را
@@ -1950,17 +1950,17 @@ async def download_spotify(url: str, workdir: str, opts: dict,
     # credential اختیاری است: با آن از API (کامل‌تر)، بدونِ آن از صفحهٔ عمومیِ embed.
     cid = opts.get("spotify_client_id") or ""
     secret = opts.get("spotify_client_secret") or ""
-    max_tracks = int(opts.get("spotify_max_tracks") or 20)
+    max_tracks = int(opts.get("match_max_tracks") or 20)
     resolved = await spotify_resolve(url, cid, secret, max_tracks, proxy=opts.get("proxy"))
     tracks = resolved["tracks"]
     if not tracks:
         raise RuntimeError("spotify: no tracks found")
-    source = (opts.get("spotify_source") or "ytmusic").lower()
+    source = (opts.get("match_source") or "ytmusic").lower()
     try:
-        min_score = float(opts.get("spotify_match_min") or 55)
+        min_score = float(opts.get("match_min") or 55)
     except (TypeError, ValueError):
         min_score = 55.0
-    yt_fallback = opts.get("spotify_yt_fallback", True)
+    yt_fallback = opts.get("match_yt_fallback", True)
     n = len(tracks)
     results: list[tuple[str, dict, str | None]] = []
     last_err: Exception | None = None

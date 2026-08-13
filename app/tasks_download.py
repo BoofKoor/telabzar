@@ -335,10 +335,10 @@ async def _opts(redis, platform: str, workdir: str | None = None,
         "cobalt_key": settings.cobalt_api_key or None,
         "spotify_client_id": await settings_store.get_str("spotify_client_id", settings.spotify_client_id),
         "spotify_client_secret": await settings_store.get_str("spotify_client_secret", settings.spotify_client_secret),
-        "spotify_max_tracks": await settings_store.get_int("spotify_max_tracks", settings.spotify_max_tracks),
-        "spotify_source": await settings_store.get_str("spotify_source", settings.spotify_source),
-        "spotify_match_min": await settings_store.get_int("spotify_match_min", settings.spotify_match_min),
-        "spotify_yt_fallback": await settings_store.get_bool("spotify_yt_fallback", settings.spotify_yt_fallback),
+        "match_max_tracks": await settings_store.get_int("match_max_tracks", settings.match_max_tracks),
+        "match_source": await settings_store.get_str("match_source", settings.match_source),
+        "match_min": await settings_store.get_int("match_min", settings.match_min),
+        "match_yt_fallback": await settings_store.get_bool("match_yt_fallback", settings.match_yt_fallback),
     }
 
 
@@ -871,7 +871,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                     # نهایی از اسپاتیفای باشد (روشن) یا از یوتیوب بماند (پیش‌فرض/خاموش).
                     paths = await D.download_spotify(url, workdir, opts,
                                                      progress=_progress, cancel=_cancelled)
-                    if await settings_store.get_bool("spotify_meta", settings.spotify_meta):
+                    if await settings_store.get_bool("match_meta", settings.match_meta):
                         paths = await _apply_spotify_meta(paths)
                 else:
                     try:
