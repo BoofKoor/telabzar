@@ -126,9 +126,10 @@ class Settings(BaseSettings):
     cobalt_url: str = ""           # نمونهٔ self-hostedِ Cobalt به‌عنوان fallback؛ خالی=خاموش
     cobalt_api_key: str = ""       # کلیدِ API نمونهٔ Cobalt (در صورتِ نیاز)
     # ── پلتفرم‌های DRMدار (متادیتا از API + تطبیقِ صوت روی یوتیوب) ──
-    spotify_enabled: bool = True       # پردازشِ لینکِ اسپاتیفای (نیازمندِ client id/secret)
+    spotify_enabled: bool = True       # پردازشِ لینکِ اسپاتیفای
     spotify_client_id: str = ""        # از پنل ست می‌شود (اپِ رایگانِ Spotify Developer)
     spotify_client_secret: str = ""    # از پنل ست می‌شود
+    apple_enabled: bool = True         # پردازشِ لینکِ اپل‌موزیک (lookupِ عمومی، بی‌کلید)
     # ── ماچر: مشترکِ هر پلتفرمی که هدفش را **ما** انتخاب می‌کنیم ──
     # تا امروز `spotify_*` نام داشتند؛ آن نام دیگر صادق نیست چون همین‌ها رفتارِ
     # اپل را هم تعیین می‌کنند. مقدارِ ذخیره‌شدهٔ قدیمی خودکار مهاجرت می‌کند

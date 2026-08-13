@@ -87,10 +87,11 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "safety_allow_domains": ("str", ""),   # استثنا (رفعِ مثبتِ کاذب)
     "dl_sponsorblock": ("str", settings.dl_sponsorblock),
     "dl_subs": ("bool", settings.dl_subs),
-    # ── اسپاتیفای ──
+    # ── پلتفرم‌های DRMدار (اسپاتیفای/اپل) ──
     "spotify_enabled": ("bool", settings.spotify_enabled),
     "spotify_client_id": ("str", settings.spotify_client_id),
     "spotify_client_secret": ("str", settings.spotify_client_secret),
+    "apple_enabled": ("bool", settings.apple_enabled),
     # ── ماچر (مشترکِ هر پلتفرمی که هدفش را ما انتخاب می‌کنیم) ──
     # این پنج کلید تا امروز `spotify_*` نام داشتند و آن نام دیگر صادق نیست:
     # همین‌ها رفتارِ اپل را هم تعیین می‌کنند. مهاجرت خودکار است، ببین `_RENAMED`.

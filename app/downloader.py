@@ -41,16 +41,21 @@ _MEDIA_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".m4v",
 _GALLERY_PLATFORMS = {"instagram", "pinterest"}
 # پلتفرم‌های صوتیِ تک‌استریم: منوی کیفیت بی‌معنی است → همیشه quick-grab.
 # spotify هم صوتی است (تطبیق روی یوتیوب) → بی‌منوی کیفیت.
-AUDIO_PLATFORMS = {"soundcloud", "bandcamp", "spotify"}
+AUDIO_PLATFORMS = {"soundcloud", "bandcamp", "spotify", "apple"}
 # پلتفرم‌های استریمِ DRM‌دار که مستقیم دانلود نمی‌شوند → متادیتا از API + تطبیقِ یوتیوب.
 #
-# **هر پلتفرمِ تازه‌ای که هدفش را *ما* انتخاب می‌کنیم باید این‌جا اضافه شود**
-# (اپل‌موزیک نامزدِ بعدی است). این مجموعه فقط `engine_for` را تعیین نمی‌کند؛
-# `dl_cache` هم از آن می‌خواند و دو چیزِ باربر را رویش سوار کرده: نسخه‌دارکردنِ
-# کلیدِ کش (تا تغییرِ ماچر جوابِ کهنه را باطل کند) و ردِ fallbackِ کلیدِ legacy.
-# پلتفرمی که این‌جا نباشد هیچ‌کدام را ارث نمی‌برد و بی‌صدا جوابِ قدیمی را
-# برای همیشه سرو می‌کند — همان دردی که ۳۴ ردیفِ اسپاتیفای را دستی پاک کردنی کرد.
-_MATCH_PLATFORMS = {"spotify"}
+# **هر پلتفرمِ تازه‌ای که هدفش را *ما* انتخاب می‌کنیم باید این‌جا اضافه شود.**
+# این مجموعه فقط `engine_for` را تعیین نمی‌کند؛ `dl_cache` هم از آن می‌خواند و
+# دو چیزِ باربر را رویش سوار کرده: نسخه‌دارکردنِ کلیدِ کش (تا تغییرِ ماچر جوابِ
+# کهنه را باطل کند) و ردِ fallbackِ کلیدِ legacy. پلتفرمی که این‌جا نباشد
+# هیچ‌کدام را ارث نمی‌برد و بی‌صدا جوابِ قدیمی را برای همیشه سرو می‌کند — همان
+# دردی که ۳۴ ردیفِ اسپاتیفای را دستی پاک کردنی کرد.
+#
+# اپل از روزِ اول این‌جاست، پس هیچ ردیفِ کهنه‌ای از دورانِ `platform='other'`
+# (وقتی لینکِ اپل به yt-dlp می‌رفت و می‌شکست) نمی‌تواند سرو شود: کلیدْ نسخه‌دار
+# است و `get_cached` برای این پلتفرم‌ها اصلاً سراغِ کلیدِ legacy نمی‌رود. یعنی
+# برخلافِ استقرارِ اسپاتیفای، این تغییر `DELETE` نمی‌خواهد.
+_MATCH_PLATFORMS = {"spotify", "apple"}
 # میزبان‌های داخلی که هرگز نباید دانلود شوند (دفاعِ پایهٔ SSRF)
 _BLOCK_HOSTS = {"localhost", "metadata.google.internal", "169.254.169.254"}
 _DNS_TTL = 60.0            # ثانیه — عمرِ کشِ resolve (درِ ورودی مسیرِ داغِ ربات است)
@@ -64,7 +69,8 @@ PLATFORM_LABELS = {
     "tiktok": "تیک‌تاک", "pinterest": "پینترست", "soundcloud": "ساندکلاود",
     "aparat": "آپارات", "vimeo": "ویمئو", "twitch": "توییچ",
     "dailymotion": "دیلی‌موشن", "bandcamp": "بندکمپ", "reddit": "ردیت",
-    "streamable": "استریمبل", "spotify": "اسپاتیفای", "other": "عمومی / سایر",
+    "streamable": "استریمبل", "spotify": "اسپاتیفای", "apple": "اپل موزیک",
+    "other": "عمومی / سایر",
 }
 # برچسبِ انگلیسیِ پلتفرم‌ها (برای پیامِ کاربرِ en).
 PLATFORM_LABELS_EN = {
@@ -72,7 +78,8 @@ PLATFORM_LABELS_EN = {
     "tiktok": "TikTok", "pinterest": "Pinterest", "soundcloud": "SoundCloud",
     "aparat": "Aparat", "vimeo": "Vimeo", "twitch": "Twitch",
     "dailymotion": "Dailymotion", "bandcamp": "Bandcamp", "reddit": "Reddit",
-    "streamable": "Streamable", "spotify": "Spotify", "other": "the site",
+    "streamable": "Streamable", "spotify": "Spotify", "apple": "Apple Music",
+    "other": "the site",
 }
 # پلتفرم‌های شناخته‌شده (برای متریکِ per-host؛ «other» شناخته‌شده نیست).
 KNOWN_PLATFORMS = tuple(k for k in PLATFORM_LABELS if k != "other")
@@ -120,6 +127,13 @@ def describe_link(url: str, platform: str, lang: str = "fa") -> str:
         if kind == "playlist":
             return "پلی‌لیستِ اسپاتیفای" if fa else "a Spotify playlist"
         return "آهنگِ اسپاتیفای" if fa else "a Spotify track"
+    if platform == "apple":
+        kind, _aid, _sf = apple_id(url)
+        if kind == "album":
+            return "آلبومِ اپل موزیک" if fa else "an Apple Music album"
+        if kind == "playlist":
+            return "پلی‌لیستِ اپل موزیک" if fa else "an Apple Music playlist"
+        return "آهنگِ اپل موزیک" if fa else "an Apple Music track"
     label = platform_label(platform, lang)
     if platform == "other":
         return "لینک" if fa else "a link"
@@ -181,13 +195,21 @@ def platform_of(url: str) -> str:
         return "streamable"
     if "spotify.com" in host or host == "spotify":  # open.spotify.com و spotify: URI
         return "spotify"
+    # `music.apple.com` و `geo.music.apple.com` (لینکِ ریدایرکتِ اپ) و
+    # `itunes.apple.com`ِ قدیمی — همه یک پلتفرم‌اند.
+    if "music.apple.com" in host or "itunes.apple.com" in host:
+        return "apple"
     return "other"
 
 
 def engine_for(url: str, platform: str | None = None) -> str:
     p = platform or platform_of(url)
     if p in _MATCH_PLATFORMS:
-        return "spotify"       # متادیتا از API + تطبیقِ یوتیوب
+        # **نامِ خودِ پلتفرم**، نه رشتهٔ ثابتِ `"spotify"`. برای اسپاتیفای
+        # خروجی بیت‌به‌بیت همان قبلی است؛ تفاوت فقط این است که اپل حالا
+        # `"apple"` می‌گیرد به‌جای اینکه «اسپاتیفا» صدا زده شود. مصرف‌کننده‌ها
+        # باید `engine in _MATCH_PLATFORMS` را بسنجند، نه برابریِ رشته‌ای.
+        return p               # متادیتا از API + تطبیقِ یوتیوب
     return "gallerydl" if p in _GALLERY_PLATFORMS else "ytdlp"
 
 
@@ -788,6 +810,52 @@ def spotify_id(url: str) -> tuple[str | None, str | None]:
     return (m.group(1), m.group(2)) if m else (None, None)
 
 
+# اپل‌موزیک: `music.apple.com/<storefront>/<kind>/<slug>/<id>` با `?i=<trackid>`ِ اختیاری.
+# storefront اختیاری است چون بعضی لینک‌های کوتاه ندارندش؛ slug هم همیشه نیست.
+# شناسهٔ پلی‌لیست **عددی نیست** (`pl.u-…`)، پس الگو نقطه و خط‌تیره را می‌پذیرد.
+_APPLE_RE = re.compile(
+    r"(?:music|itunes)\.apple\.com/(?:([a-z]{2})/)?"
+    r"(album|song|music-video|playlist|artist)/(?:[^/?#]+/)?([A-Za-z0-9][\w.\-]*)", re.I)
+_APPLE_I_RE = re.compile(r"[?&]i=(\d+)")
+
+
+def apple_id(url: str) -> tuple[str | None, str | None, str | None]:
+    """(kind, id, storefront) برای لینکِ اپل‌موزیک. kind ∈ track/album/playlist.
+
+    **`?i=` بر آخرین بخشِ مسیر مقدم است، و این تلهٔ اصلیِ این پلتفرم است.**
+    دکمهٔ Share در اپِ اپل همیشه فرمِ آلبوم می‌دهد:
+
+        music.apple.com/us/album/faryaad-feat-karim-fakour/305568683?i=305568690&ls
+
+    شناسهٔ داخلِ مسیر (`305568683`) **آلبوم** است و شناسهٔ ترک در `?i=` نشسته.
+    پارسری که آخرین بخشِ مسیر را بردارد موجودیتِ اشتباه lookup می‌کند و — چون
+    `lookup` برای آن یک ردیفِ `collection` برمی‌گرداند نه ترک — کاربر بی‌دلیل
+    «پشتیبانی نمی‌شود» می‌گیرد. سنجیده‌شده روی همان لینکِ واقعی.
+
+    `&ls` و هر پارامترِ دیگری بی‌مقدارند و تحمل می‌شوند.
+
+    storefront (`/us/`, `/gb/`) معادلِ `intl-fa`ِ اسپاتیفاست: **از کلیدِ کش
+    بیرون می‌ماند** چون شناسه سراسری است (`country=gb` همان ترک را داد)، ولی
+    به‌عنوان `&country=` به lookup داده می‌شود تا ترکی که در فروشگاهِ پیش‌فرض
+    نیست هم resolve شود.
+    """
+    m = _APPLE_RE.search(url or "")
+    if not m:
+        return (None, None, None)
+    storefront, path_kind, path_id = m.group(1), m.group(2).lower(), m.group(3)
+    sf = storefront.lower() if storefront else None
+    i = _APPLE_I_RE.search(url or "")
+    if i:                            # لینکِ آلبوم که در واقع یک **ترک** را نشان می‌کند
+        return ("track", i.group(1), sf)
+    if path_kind in ("song", "music-video"):
+        return ("track", path_id, sf)
+    if path_kind == "album":
+        return ("album", path_id, sf)
+    if path_kind == "playlist":
+        return ("playlist", path_id, sf)
+    return (None, None, sf)          # artist/… — موجودیتی نیست که دانلود شود
+
+
 async def _spotify_token(client_id: str, secret: str) -> str:
     import aiohttp
     async with aiohttp.ClientSession() as s:
@@ -1321,6 +1389,170 @@ async def spotify_resolve(url: str, client_id: str = "", secret: str = "", max_t
         except Exception as exc:  # noqa: BLE001  — API خطا داد → برگرد به اسکرَیپِ عمومی
             log.info("spotify API failed (%s); falling back to public embed", str(exc)[:120])
     return await _spotify_scrape(url, max_tracks, proxy=proxy)
+
+
+# ── اپل‌موزیک ──────────────────────────────────────────────────────
+# مثلِ اسپاتیفای DRM است و مستقیم دانلود نمی‌شود: متادیتا از APIِ عمومیِ
+# `itunes.apple.com/lookup` (رایگان، بی‌احراز، ~۱٫۵ کیلوبایت JSONِ تمیز) و بعد
+# تطبیق روی یوتیوب با همان ماچرِ مشترک.
+#
+# **صفحهٔ وبِ اپل عمداً اسکرَیپ نمی‌شود:** ۱۳۱ کیلوبایت پوسته است، `__NEXT_DATA__`
+# ندارد و فقط `application/ld+json` و `serialized-server-data` دارد. API قاطعانه
+# برنده است و تنها مسیرِ ماست.
+_ITUNES_LOOKUP = "https://itunes.apple.com/lookup"
+
+# براکتی که محتوایش **با** نشانهٔ feat شروع می‌شود — و نه هیچ براکتِ دیگری.
+#
+# `with` عمداً در فهرست **نیست**، اندازه‌گیری‌شده: با آن «Song (With Strings)»
+# هم پاک می‌شد و «Strings» هنرمند حساب می‌شد، در حالی که آن نشانهٔ تنظیم است نه
+# اعتبارِ مهمان. «Song (Live with the Orchestra)» بی‌خطر است چون محتوایش با
+# `Live` شروع می‌شود، پس ریسک فقط `with`ِ **آغازین** بود.
+_APPLE_FEAT_RE = re.compile(r"\s*[\(\[]\s*(?:feat|ft|featuring)\b\.?\s*([^)\]]*)[\)\]]", re.I)
+
+
+def _split_feat_title(track_name: str, artist_name: str) -> tuple[str, str]:
+    """(عنوانِ پاک‌شده, هنرمندان) — اپل مهمان را در **عنوان** می‌گذارد، نه در artistName.
+
+    اسپاتیفای هر دو هنرمند را در `artists[]` می‌دهد و عنوان را تمیز نگه می‌دارد؛
+    اپل برعکس عمل می‌کند:
+
+        trackName  = "Faryaad (feat. Karim Fakour)"   ← مهمان این‌جاست
+        artistName = "Anoushirvan Rohani"             ← و این‌جا نیست
+
+    **چرا این فقط یک نکتهٔ آراستگی نیست:** با مهمانِ پنهان در عنوان،
+    `_artist_contradiction` خلعِ‌سلاح می‌شود. آن قاعده «جاافتاده **و** اضافه»
+    می‌خواهد، و وقتی مرجع فقط یک هنرمند دارد هیچ‌وقت «جاافتاده» نمی‌شود — پس
+    نامزدی که خوانندهٔ **دیگری** را ادعا می‌کند از گیت رد می‌شود. اندازه‌گیری‌شده
+    روی همین ترک: نامزدِ خوانندهٔ غلط ۹۶٫۹۴ می‌گرفت و Art Trackِ **درست** ۹۶٫۰۴،
+    یعنی رتبه وارونه می‌شد؛ با استخراج، درست به ۱۰۶٫۰۰ می‌رسد و غلط **کاملاً رد**
+    می‌شود. همان باگِ جایگزینیِ خواننده که قاعدهٔ تناقض برای گرفتنش ساخته شد.
+
+    **اپل ثابت‌قدم نیست** — «Get Lucky» هر سه هنرمند را در `artistName` می‌گذارد
+    و عنوانش تمیز است. پس هر دو شکل تحمل می‌شوند و تکراری ساخته نمی‌شود
+    (مقایسه با `_norm`، پس اختلافِ حروف/فاصله هم تکراری شمرده می‌شود).
+
+    **پاک‌سازیِ عنوان جراحی است، نه «پرانتزها را بردار».** سنجیده‌شده که
+    `[Daft Punk Remix]`, `(Radio Edit)`, `(Live)` و `[Extended Mix]` دست‌نخورده
+    می‌مانند و `_version_markers` هنوز می‌بیندشان — وگرنه پاک‌سازی دقیقاً همان
+    چیزی را نابود می‌کرد که جریمهٔ نسخه برای گرفتنش هست. دو سودِ سنجیده‌شده:
+    `_search_queries` دوباره **دو** شکل می‌سازد (با مهمانِ پنهان فقط یکی
+    می‌ساخت، چون `arts[0] == arts[-1]` — و آن شکلِ دوم همان چیزی است که برای
+    موسیقیِ ایرانی خواننده را پیدا می‌کند)، و کانالِ جریمهٔ کاذبِ
+    «(feat. Session Band)» بسته می‌شود.
+    """
+    names = [a.strip() for a in _ARTIST_SPLIT_RE.split(artist_name or "") if a.strip()]
+    seen = {_norm(a) for a in names}
+    for blob in _APPLE_FEAT_RE.findall(track_name or ""):
+        for g in _ARTIST_SPLIT_RE.split(blob):
+            g = g.strip()
+            if g and _norm(g) not in seen:
+                seen.add(_norm(g))
+                names.append(g)
+    return _APPLE_FEAT_RE.sub("", track_name or "").strip(), ", ".join(names)
+
+
+class MatchFailed(RuntimeError):
+    """هیچ نامزدی برای این ترک نماند (نه روی YT Music، نه ytsearch).
+
+    **زیرکلاسِ `RuntimeError` است، عمداً** — هر `except RuntimeError`ی که از قبل
+    وجود دارد دقیقاً مثلِ قبل رفتار می‌کند (همان ترفندِ `ProcessingTimeout`).
+    وجودش برای این است که `run_download` بتواند با `isinstance` تصمیم بگیرد
+    به‌جای گشتن دنبالِ رشتهٔ «spotify» در متنِ خطا — قاعدهٔ §۷: «تقصیر را به
+    متنِ خطا نسپار». متن با افزودنِ اپل عوض شد؛ نوعِ استثنا نه.
+    """
+
+
+class AppleUnsupported(Exception):
+    """لینکِ اپل هست ولی موجودیتش هنوز پشتیبانی نمی‌شود (آلبوم/پلی‌لیست/هنرمند).
+
+    عمداً استثنای جداست تا `run_download` پیامِ **صریحِ** «هنوز پشتیبانی
+    نمی‌شود» بدهد. جوابِ غلطِ بی‌صدا بدترین گزینه است — همان درسِ سقوطِ خاموشِ
+    oEmbed که پارسرِ اسپاتیفای را هفته‌ها مرده نگه داشت.
+    """
+
+
+async def _itunes_row(track_id: str, country: str | None, proxy: str | None = None) -> dict | None:
+    """یک ردیفِ lookup، یا None. **همه‌جا `.get()` — هیچ‌جا اندیس.**
+
+    سه شکلِ خرابیِ سنجیده‌شده، و هر سه این‌جا پوشش دارد:
+
+    * `resultCount == 0` → `results` خالی؛ `results[0]` `IndexError` می‌دهد.
+    * ردیفِ **collection** (لینکِ آلبوم) نه `kind` دارد نه `trackId` نه
+      `trackName`؛ به‌جایشان `amgArtistId` و `copyright`.
+    * کلیدهای اختیاری روی ترکِ **واقعی** هم غایب‌اند — یکی از ترک‌های سنجیده‌شده
+      اصلاً `collectionArtistName` ندارد.
+
+    گاردِ `wrapperType`/`kind` با `[]` هم اتفاقاً نمی‌ترکد، چون `and` کوتاه‌مدار
+    است و `wrapperType` اول سنجیده می‌شود — ولی همین یعنی سلامتش به **ترتیبِ
+    ارزیابی** بند است، و ترتیبِ ارزیابی چیزی نیست که باربر بماند.
+    """
+    import aiohttp
+    q = f"?id={track_id}&entity=song" + (f"&country={country}" if country else "")
+    timeout = aiohttp.ClientTimeout(total=25)
+    async with aiohttp.ClientSession(timeout=timeout) as s:
+        async with s.get(_ITUNES_LOOKUP + q, proxy=_http_proxy(proxy)) as r:
+            if r.status != 200:
+                # `country=zz` روی مستر **HTTP 400** داد، نه resultCountِ صفر —
+                # پس صداکننده باید هم استثنا/کدِ بد را ببیند و هم نتیجهٔ خالی را.
+                raise RuntimeError(f"itunes lookup HTTP {r.status}")
+            body = await r.text()
+    try:
+        data = json.loads(body)
+    except ValueError as exc:
+        raise RuntimeError("itunes lookup returned non-JSON") from exc
+    rows = data.get("results") or []
+    return rows[0] if rows else None
+
+
+async def apple_resolve(url: str, max_tracks: int = 20, proxy: str | None = None) -> dict:
+    """لینکِ اپل‌موزیک → {kind, title, tracks[]} با همان شکلِ دیکشنریِ اسپاتیفای.
+
+    فقط **لینکِ ترک** (فازِ A). آلبوم و پلی‌لیست `AppleUnsupported` می‌دهند: ترک‌های
+    یک آلبوم `&entity=song` روی شناسهٔ آلبوم می‌خواهند که شکلِ پاسخِ دیگری دارد و
+    بدونِ دامپِ واقعی نوشتنی نیست، و شناسهٔ پلی‌لیست اصلاً عددی نیست (`pl.u-…`)
+    پس بعید است lookupِ عددی حلش کند. حدس زدن ممنوع — فازِ B.
+
+    `isrc` عمداً `None` است و **باگ نیست**: تنها مصرف‌کننده‌اش
+    (`_gather_candidates`) پشتِ `if isrc:` است و آن مسیر برای اسپاتیفای هم هرگز
+    در تولید شلیک نمی‌کند؛ به تگِ فایل هم نوشته نمی‌شود. کلید حاضر و `None`
+    می‌ماند تا شکلِ دیکشنری با مسیرِ اسپاتیفای یکی بماند.
+    """
+    kind, aid, storefront = apple_id(url)
+    if not kind or not aid:
+        raise RuntimeError("unsupported apple music link")
+    if kind != "track":
+        raise AppleUnsupported(kind)
+    try:
+        row = await _itunes_row(aid, storefront, proxy=proxy)
+    except RuntimeError:
+        row = None                       # HTTP 400/غیرِJSON → با فروشگاهِ پیش‌فرض دوباره
+    if row is None and storefront:
+        # تلاشِ دوم **بدونِ** country. دو حالت را می‌پوشاند: storefrontِ نامعتبر
+        # (که ۴۰۰ می‌دهد، سنجیده‌شده روی `zz`) و — **فرض، نه مشاهده** — ترکی که
+        # در آن فروشگاه نیست. حالتِ دوم هنوز دیده نشده؛ `jp` نتیجه داد.
+        row = await _itunes_row(aid, None, proxy=proxy)
+    if row is None:
+        raise RuntimeError(f"apple: no such track ({aid})")
+    if row.get("wrapperType") != "track" or row.get("kind") != "song":
+        raise AppleUnsupported(str(row.get("collectionType") or row.get("wrapperType") or "?"))
+    title, artist = _split_feat_title(row.get("trackName") or "", row.get("artistName") or "")
+    ms = row.get("trackTimeMillis")
+    track = {
+        "title": title,
+        "artist": artist,
+        # `collectionArtistName` عمداً استفاده **نمی‌شود** — هنرمندِ آلبوم است نه
+        # ترک («Daft Punk» در برابرِ هر سه)، پس به‌عنوان هنرمند مهمان‌ها را
+        # بی‌صدا می‌انداخت.
+        "album": row.get("collectionName") or "",
+        "year": str(row.get("releaseDate") or "")[:4],
+        "cover_url": row.get("artworkUrl100"),
+        "duration": round((ms or 0) / 1000) or None,
+        "isrc": None,
+    }
+    if reference_is_blind(track):
+        log.warning("apple: reference for %s has neither artist nor duration — "
+                    "the matcher will rank on title alone", url)
+    return {"kind": "track", "title": title, "tracks": [track][:max_tracks]}
 
 
 async def _fetch_cover(url: str | None, dest_dir: str) -> str | None:
@@ -1939,22 +2171,41 @@ async def _gather_candidates(track: dict, opts: dict, source: str) -> list[dict]
     return cands
 
 
-async def download_spotify(url: str, workdir: str, opts: dict,
-                           progress=None, cancel=None) -> list[tuple[str, dict, str | None]]:
-    """هر ترکِ اسپاتیفای را با تطبیق روی یوتیوب دانلود می‌کند → لیستِ (path, info, thumb).
+async def _resolve_reference(url: str, opts: dict) -> dict:
+    """متادیتای مرجع، از resolverِ همان پلتفرم. تنها جایی که دو پلتفرم فرق دارند.
 
-    info['sp'] متادیتای اسپاتیفای (title/artist/album/year/cover_path) را حمل می‌کند تا
+    هرچه بعد از این می‌آید — ساختِ کوئری، جمعِ نامزد، رتبه‌بندی، دانلود، تگ —
+    مشترک است، چون هر دو resolver **یک شکلِ دیکشنری** می‌دهند.
+    """
+    platform = platform_of(url)
+    if platform == "apple":
+        return await apple_resolve(url, int(opts.get("match_max_tracks") or 20),
+                                   proxy=opts.get("proxy"))
+    # credential اختیاری است: با آن از API (کامل‌تر)، بدونِ آن از صفحهٔ عمومیِ embed.
+    return await spotify_resolve(url, opts.get("spotify_client_id") or "",
+                                 opts.get("spotify_client_secret") or "",
+                                 int(opts.get("match_max_tracks") or 20),
+                                 proxy=opts.get("proxy"))
+
+
+async def download_matched(url: str, workdir: str, opts: dict,
+                           progress=None, cancel=None) -> list[tuple[str, dict, str | None]]:
+    """ترکِ یک پلتفرمِ DRMدار را با تطبیق روی یوتیوب دانلود می‌کند → (path, info, thumb).
+
+    **نامش تا امروز `download_spotify` بود و دیگر درست نبود:** همین تابع حالا
+    اپل‌موزیک را هم می‌برد، و تنها تفاوتِ دو پلتفرم یک فراخوانیِ resolver است
+    (`_resolve_reference`). نامی که دیگر صادق نیست بعداً هزینه می‌دهد — همان
+    درسی که کلیدهای `spotify_*`ِ ماچر را به `match_*` رساند.
+
+    info['sp'] متادیتای مرجع (title/artist/album/year/cover_path) را حمل می‌کند تا
     tasks_download در صورتِ روشن‌بودنِ کلیدِ متادیتا، تگ/کاور را بازنویسی کند.
     کوکی/پروکسی/pot از opts همان مالِ یوتیوب است (دانلودِ واقعی از یوتیوب انجام می‌شود).
     """
-    # credential اختیاری است: با آن از API (کامل‌تر)، بدونِ آن از صفحهٔ عمومیِ embed.
-    cid = opts.get("spotify_client_id") or ""
-    secret = opts.get("spotify_client_secret") or ""
     max_tracks = int(opts.get("match_max_tracks") or 20)
-    resolved = await spotify_resolve(url, cid, secret, max_tracks, proxy=opts.get("proxy"))
+    resolved = await _resolve_reference(url, opts)
     tracks = resolved["tracks"]
     if not tracks:
-        raise RuntimeError("spotify: no tracks found")
+        raise MatchFailed("no tracks found")
     source = (opts.get("match_source") or "ytmusic").lower()
     try:
         min_score = float(opts.get("match_min") or 55)
@@ -2039,10 +2290,10 @@ async def download_spotify(url: str, workdir: str, opts: dict,
         # شرط عمداً «همهٔ افتاده‌ها» است نه «همهٔ ترک‌ها»: اگر یکی سنی بود و یکی
         # نامزد نداشت، پیامِ عمومی همچنان درست‌تر است.
         if age_blocked and age_blocked == dropped:
-            raise AgeRestricted(f"spotify: all {age_blocked} track(s) are age-restricted")
+            raise AgeRestricted(f"all {age_blocked} track(s) are age-restricted")
         # علتِ واقعیِ شکستِ دانلودِ یوتیوب را بالا بده (bot-check/pot/…) تا تشخیص ممکن شود
-        raise RuntimeError("spotify: no YouTube match — "
-                           + (str(last_err)[:220] if last_err else "search returned nothing"))
+        raise MatchFailed("no YouTube match — "
+                          + (str(last_err)[:220] if last_err else "search returned nothing"))
     return results
 
 

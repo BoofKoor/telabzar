@@ -31,7 +31,7 @@ from .cards import message_media_id, send_card, update_card
 # و `engine_for` هم از همان می‌خواند — فهرستِ دومی این‌جا ساخته نمی‌شود، وگرنه دو
 # کپیِ دست‌نویس واگرا می‌شدند. حلقهٔ import نیست: `downloader` هیچ ارجاعی به
 # `dl_cache` ندارد (تست `test_no_import_cycle` همین را نگه می‌دارد).
-from .downloader import _MATCH_PLATFORMS, platform_of, spotify_id
+from .downloader import _MATCH_PLATFORMS, apple_id, platform_of, spotify_id
 from .models import DownloadCache, File
 
 log = logging.getLogger("telabzar.dlcache")
@@ -77,6 +77,15 @@ def _cache_url(url: str) -> str:
     kind, sid = spotify_id(u)
     if kind and sid:
         return f"sp:{kind}:{sid}"   # kind را نگه می‌دارد تا ترک و پلی‌لیست قاتی نشوند
+    # اپل‌موزیک: همان استدلال، با یک تفاوتِ باربر — **storefront از کلید بیرون
+    # می‌ماند**. سنجیده‌شده که شناسه سراسری است (`country=gb` همان ترک را داد و
+    # فقط قیمت/ارز/لینک‌ها عوض شدند)، پس `us/…/123` و `gb/…/123` باید یک ردیف
+    # باشند — دقیقاً همان چیزی که `intl-fa`ِ اسپاتیفای بود. و `?i=` تعیین‌کننده
+    # است: `apple_id` ترکِ داخلِ لینکِ آلبوم را برمی‌گرداند، وگرنه دو ترکِ متفاوتِ
+    # یک آلبوم روی **یک** کلید می‌نشستند و فایلِ غلط سرو می‌شد.
+    kind, aid, _sf = apple_id(u)
+    if kind and aid:
+        return f"am:{kind}:{aid}"
     try:
         p = urlsplit(u)
     except ValueError:

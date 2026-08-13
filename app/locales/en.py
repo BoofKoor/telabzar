@@ -201,6 +201,10 @@ MESSAGES: dict[str, str] = {
         "(Spotify works without any setup; for more reliability an admin can set a "
         "<code>Client ID</code>/<code>Secret</code> in the panel.)"
     ),
+    "dl_apple_entity": (
+        "🍎 For now I only take <b>single-track</b> Apple Music links — not albums or playlists.\n"
+        "Share the song itself (not the album) from the Apple app; its link carries <code>?i=</code>."
+    ),
     "dl_retry_account": "Trying another account",
     "dl_almost": "Final moments — almost there",
     "dl_uploading": "📤 Sending it to you…",
