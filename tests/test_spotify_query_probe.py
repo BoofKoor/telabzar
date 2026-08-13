@@ -142,15 +142,23 @@ def test_a_version_marker_is_flagged_because_hits_cannot_see_it(P):
 
 
 def test_the_marker_check_uses_word_boundaries(P):
-    """`Delivery`/`Recovery`/`Sessions` نباید نشانهٔ نسخه بشمارند.
+    """`Delivery`/`Oliver`/`Discovery`/`Recovery` نباید نشانهٔ نسخه بشمارند.
 
-    `_BAD_KW` در تولید **زیررشته‌ای** تطبیق می‌خورد و همین برخوردها را دارد
-    (اندازه‌گیری‌شده). ابزارِ تشخیص نباید همان تله را تکرار کند.
+    اینها زیررشته‌های تصادفی‌اند و مرزِ کلمه ردشان می‌کند.
+
+    **`Sessions of Love` عمداً از این فهرست برداشته شد.** نسخهٔ اولِ این تست
+    آن را «نباید» می‌دانست، چون طراحیِ آن لحظه مرزِ کلمهٔ **خالی** بود و جمع را
+    نمی‌گرفت. اندازه‌گیریِ بعدی آن طراحی را رد کرد (مرزِ خالی ۱۰ نشانهٔ واقعی
+    مثلِ «Abbey Road Sessions» را گم می‌کرد)، پس `sessions` حالا صورتِ صریح است
+    و «Sessions of Love» جریمه می‌گیرد. این ابهامِ واقعی است و **تازه نیست**:
+    `session`ِ مفرد از قبل در `_BAD_KW` بود، پس «Session of Love» امروز هم
+    جریمه می‌خورد. جمعش رفتار را هم‌شکل می‌کند، نه بدتر.
     """
-    for t in ["Delivery", "Oliver Twist", "Discovery", "Recovery", "Sessions of Love"]:
+    for t in ["Delivery", "Oliver Twist", "Discovery", "Recovery", "Nine Lives"]:
         assert P.version_markers(t) == [], f"{t!r} اشتباهاً نشانهٔ نسخه شمرده شد"
     assert P.version_markers("Faryad (Live)") == ["live"]
     assert P.version_markers("Faryad (Remastered)") == [], "remaster جزوِ _BAD_KW نیست"
+    assert P.version_markers("Abbey Road Sessions") == ["session"], "جمع باید نشانه باشد"
 
 
 def test_describe_identifies_a_candidate_unambiguously(P):
