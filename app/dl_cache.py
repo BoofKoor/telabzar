@@ -31,7 +31,7 @@ from .cards import message_media_id, send_card, update_card
 # و `engine_for` هم از همان می‌خواند — فهرستِ دومی این‌جا ساخته نمی‌شود، وگرنه دو
 # کپیِ دست‌نویس واگرا می‌شدند. حلقهٔ import نیست: `downloader` هیچ ارجاعی به
 # `dl_cache` ندارد (تست `test_no_import_cycle` همین را نگه می‌دارد).
-from .downloader import _MATCH_PLATFORMS, platform_of
+from .downloader import _MATCH_PLATFORMS, platform_of, spotify_id
 from .models import DownloadCache, File
 
 log = logging.getLogger("telabzar.dlcache")
@@ -61,6 +61,22 @@ def _cache_url(url: str) -> str:
         m = rx.search(u)
         if m:
             return f"{prefix}:{m.group(1)}"
+    # اسپاتیفای: شناسهٔ ترک/آلبوم/پلی‌لیست محتوا را کامل تعیین می‌کند، پس مسیرِ
+    # زبانی و کوئری بی‌اهمیت‌اند — همان استدلالِ `yt:`/`ig:` بالا. از `spotify_id`
+    # استفاده می‌شود نه الگوی تازه، تا دو کپی واگرا نشوند.
+    #
+    # **چه چیزی را رفع می‌کند، اندازه‌گیری‌شده:** `intl-fa/track/X` و
+    # `intl-de/track/X` امروز کلیدِ **متفاوتی** از `track/X` می‌گیرند، و
+    # اسپاتیفای همین مسیرِ زبانی را به کاربرِ غیرِانگلیسی می‌دهد؛ و پارامترهای
+    # اشتراکِ ناشناخته مثلِ `?go=1&nd=1` هم کلید را جدا می‌کردند. سه کلید → یک کلید.
+    #
+    # **چه چیزی را رفع نمی‌کند، چون خراب نبود:** `?si=…` که اپِ اسپاتیفای موقعِ
+    # Copy link می‌گذارد از قبل درست کش می‌شد — `si` عضوِ `_DROP_PARAMS` است، پس
+    # هر توکنِ تصادفی به یک کلید می‌رسید. فرضِ «کشِ اسپاتیفای هرگز hit نمی‌خورد»
+    # با اجرا رد شد.
+    kind, sid = spotify_id(u)
+    if kind and sid:
+        return f"sp:{kind}:{sid}"   # kind را نگه می‌دارد تا ترک و پلی‌لیست قاتی نشوند
     try:
         p = urlsplit(u)
     except ValueError:
