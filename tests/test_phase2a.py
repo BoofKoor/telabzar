@@ -9,6 +9,7 @@ import asyncio
 import gc
 import inspect
 import os
+import pathlib
 import subprocess
 import zipfile
 from pathlib import Path
@@ -25,6 +26,33 @@ REPO = Path(__file__).resolve().parents[1]
 _HAS_7Z = any(os.access(os.path.join(d, "7z"), os.X_OK)
               for d in os.environ.get("PATH", "").split(os.pathsep) if d)
 needs_7z = pytest.mark.skipif(not _HAS_7Z, reason="7z روی PATH لازم است")
+
+
+def test_the_7z_gate_is_not_dead_weight():
+    """نگهبانِ خودِ گیت — همان چیزی که مارکرِ ffmpeg دارد و این نداشت.
+
+    `needs_7z` تنها تستی را گیت می‌کند که رفتارِ path-traversalِ **خودِ 7-Zip**
+    را پین می‌کند، و گاردِ `archive_extract` روی همان رفتار حساب می‌کند. اگر آن
+    تست حذف شود، گیت بی‌صدا از هیچ‌چیز محافظت نمی‌کند — دقیقاً همان اتفاقی که
+    برای مارکرِ ffmpeg از ۲۰۲۶-۰۷ تا فاز ۲ب افتاد و ماه‌ها کسی نفهمید.
+
+    عمداً **گامِ CI نیست**: `needs_7z` یک `skipif` است نه مارکرِ قابلِ انتخاب،
+    پس `pytest -m` سراغش نمی‌رود. حضورِ خودِ باینری را گامِ
+    «prove 7z is present» در workflow ثابت می‌کند؛ این تست فقط می‌گوید گیت
+    چیزی برای گیت‌کردن دارد.
+
+    **با AST شمرده می‌شود نه با regex.** نسخهٔ اولِ همین تست زیررشته‌ای بود و
+    `@needs_7z`ِ داخلِ **همین داکس‌استرینگ** را می‌شمرد، پس با برداشتنِ دکوراتور
+    هم سبز می‌ماند — vacuous بود. سومین بارِ همین تله در یک سشن.
+    """
+    tree = ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+    decorated = [n.name for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and any(isinstance(d, ast.Name) and d.id == "needs_7z"
+                         for d in n.decorator_list)]
+    assert decorated, (
+        "صفر تستِ دکوراتورِ `needs_7z` دارد — یا تستِ استخراجِ آرشیو حذف شده یا "
+        "گیت بی‌اثر شده؛ در هر دو حالت رفتارِ 7-Zip دیگر پین نیست")
 
 
 def test_the_guard_checks_a_path_boundary_not_a_string_prefix():
