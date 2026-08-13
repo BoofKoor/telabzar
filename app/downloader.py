@@ -1476,7 +1476,29 @@ def _name_match(track: dict, cand: dict) -> float:
 
 
 def _artist_match(track: dict, cand: dict) -> float | None:
-    """میانگینِ وزن‌دارِ تطبیقِ هنرمندان (هنرمندِ اصلی مهم‌تر). None اگر شواهدی نبود."""
+    """چقدر از **ادعاهای نامزد** با هنرمندانِ مرجع پشتیبانی می‌شود. None اگر شواهدی نبود.
+
+    **فرمولِ قبلی برای هر هنرمندِ مرجع بهترین شباهت را می‌گرفت و اولی را ۰٫۶
+    وزن می‌داد، و آن یک باگ بود نه یک نکتهٔ وزنی.** اسپاتیفای برای موسیقیِ
+    کلاسیکِ ایرانی آهنگساز را اول فهرست می‌کند، پس «اولی» آهنگساز است نه
+    خواننده — و خواننده چیزی است که ضبط را می‌شناساند. اندازه‌گیری‌شده: وقتی
+    یوتیوب فقط خواننده را فهرست می‌کند (حالتِ **رایج**) ضبطِ درست `[16.7, 100]`
+    می‌گرفت یعنی ۵۰٫۰، و ضبطِ غلط (همان آهنگساز، خوانندگانِ دیگر) ۶۸٫۰ — یعنی
+    این مؤلفه فعالانه ضبطِ **غلط** را ۱۸ نمره ترجیح می‌داد.
+
+    حالا میانگین روی هنرمندانِ **نامزد** گرفته می‌شود: «آیا هرکسی که نامزد
+    ادعا می‌کند در مرجع پشتیبانی می‌شود؟» روی پنج فرمولِ سنجیده‌شده تنها این و
+    یک ترکیبِ ملایم‌تر هر دو شرط را داشتند (بستنِ معکوس‌شدگی **و** نگه‌داشتنِ
+    فهرستِ زیرمجموعه)، و این یکی حاشیهٔ بهتری داد: **۱۰۰٫۰ در برابرِ ۵۳٫۵**
+    (۴۶٫۵) در برابرِ ۲۳٫۲. مفهومش هم با نیمهٔ «اضافه»ی `_artist_contradiction`
+    یکی است، پس دو تکه هم‌خوان‌اند.
+
+    **فهرستِ زیرمجموعه جریمه نمی‌شود:** یوتیوب که فقط `Daft Punk` را از سه
+    هنرمند می‌نویسد ۱۰۰ می‌گیرد، چون همان یک ادعا کاملاً پشتیبانی می‌شود. این
+    عمدی است — هر قاعدهٔ پوشش‌محور Art Trackِ **درست** را رد می‌کرد.
+    **هزینهٔ پذیرفته‌شده:** مهمانِ اضافه‌ای که یوتیوب فهرست می‌کند از ۱۰۰ به
+    ۷۲٫۷ می‌افتد، که همچنان خیلی بالاتر از ۵۳٫۵ِ ضبطِ غلط است.
+    """
     ta = _track_artists(track)
     ca = _cand_artists(cand)
     if not ta:
@@ -1487,10 +1509,61 @@ def _artist_match(track: dict, cand: dict) -> float | None:
     nc = [_norm(x) for x in ca if x]
     if not nc:
         return None
-    scores = [max(_ratio(_norm(a), c) for c in nc) for a in ta]
-    main = scores[0]
-    rest = scores[1:]
-    return main * 0.6 + (sum(rest) / len(rest)) * 0.4 if rest else main
+    nt = [_norm(a) for a in ta]
+    return sum(max(_ratio(c, a) for a in nt) for c in nc) / len(nc)
+
+
+# آستانهٔ «این دو نام یک نفرند» برای قاعدهٔ تناقض. ۴۵ روی ۱۵ جفتِ رومی‌سازیِ
+# یک هنرمند سنجیده شد: ۱۴ تا رد می‌شوند (۵۷٫۱ تا ۹۷٫۸). تنها شکست
+# `Ebi`↔`Ebrahim Hamedi` (۳۵٫۳) است که رومی‌سازی نیست بلکه **نامِ هنری در
+# برابرِ نامِ شناسنامه‌ای** است — ردهٔ مسئلهٔ دیگری که شباهتِ fuzzy حلش نمی‌کند.
+_ARTIST_SAME_MIN = 45.0
+
+
+def _artist_contradiction(track: dict, cand: dict) -> bool:
+    """نامزد **کسِ دیگری** را ادعا می‌کند؟ (جاافتاده **و** اضافه)
+
+    ویژگیِ تفکیک‌کننده «چند هنرمند می‌خوانند» نیست، این است که آیا نامزد هم
+    یکی از هنرمندانِ مرجع را جا انداخته **و** هم کسی را آورده که در مرجع نیست.
+    فهرستِ **زیرمجموعه** — یوتیوب که فقط خوانندهٔ اصلی را می‌نویسد — تناقض
+    نیست، و همین است که هر قاعدهٔ پوشش‌محور را باطل می‌کند: آن‌ها Art Trackِ
+    درستِ «Get Lucky» را وقتی یوتیوب فقط `Daft Punk` را فهرست کرده رد می‌کردند.
+
+    اندازه‌گیری‌شده ۸ از ۸ سناریو. گیتِ عددیِ قبلی ۷ از ۸ بود و آن یک شکست
+    دقیقاً **جایگزینیِ خواننده** است (`Anoushirvan Rohani, Maziar, Kari` با
+    am=۶۸ از گیت رد می‌شد) — همان باگی که کاربر گزارش کرد.
+    """
+    ta = [_norm(a) for a in _track_artists(track)]
+    ca = [_norm(c) for c in _cand_artists(cand) if c]
+    if not ta or not ca:
+        return False
+    missing = any(all(_ratio(a, c) < _ARTIST_SAME_MIN for c in ca) for a in ta)
+    extra = any(all(_ratio(c, a) < _ARTIST_SAME_MIN for a in ta) for c in ca)
+    return missing and extra
+
+
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def _dominant_script(s: str | None) -> str:
+    """«latn» / «other» / «none» — با شمارشِ حرف، نه بازهٔ هاردکدِ یک زبان.
+
+    عمداً عمومی است: سیریلیک و کاتاکانا هم مثلِ فارسی «other» می‌شوند، پس این
+    منطق به یک زبانِ خاص گره نمی‌خورد. رقم و نگارش شمرده نمی‌شوند، وگرنه
+    `"311"` در برابرِ `"٣١١"` خطِ متفاوت به‌نظر می‌رسید.
+    """
+    s = unicodedata.normalize("NFKC", s or "")
+    latn = len(_LATIN_RE.findall(s))
+    other = sum(1 for ch in s if ch.isalpha() and not _LATIN_RE.match(ch))
+    if not latn and not other:
+        return "none"
+    return "latn" if latn >= other else "other"
+
+
+def _scripts_differ(a: str | None, b: str | None) -> bool:
+    """هر دو حرف دارند و در دو خطِ متفاوت‌اند؟ («نامعلوم» تفاوت نیست.)"""
+    sa, sb = _dominant_script(a), _dominant_script(b)
+    return sa != "none" and sb != "none" and sa != sb
 
 
 def _album_match(track: dict, cand: dict) -> float | None:
@@ -1583,22 +1656,87 @@ def _explicit_artist(cand: dict) -> bool:
     return bool(isinstance(cand.get("artists"), list) and cand.get("artists"))
 
 
+_NAME_MIN = 45.0     # زیرِ این، عنوان آشکارا ربطی ندارد
+_ARTIST_MIN = 40.0   # کفِ عددیِ هنرمند، در کنارِ قاعدهٔ تناقض
+
+
+def _name_gate_exempt(track: dict, cand: dict) -> bool:
+    """گیتِ نام معاف شود؟ — فقط وقتی عنوان‌ها دو خط دارند **و هنرمند سالم است**.
+
+    اولین اندازه‌گیریِ این ایده روی نامزدِ **کاملاً** فارسی‌نویس بود و آن‌جا هم
+    نام و هم هنرمند صفر می‌شوند (امتیازِ کل ۳۵٫۳ در برابرِ ۱۰۶ برای رومی‌شده)،
+    یعنی معافیت no-op بود و فقط نامزدِ بی‌ربط وارد می‌کرد. ولی حالتِ **مخلوط**
+    واقعاً وجود دارد و از دادهٔ خودمان آمد — نامزدی با عنوانِ `'قطعه فریاد'`
+    (فارسی) و هنرمندِ `'Anushiravan Ruhani'` (لاتین): هنرمند ۸۸٫۹ است و
+    **تنها** چیزی که می‌کشدش گیتِ نام است. با معافیت به ۶۱٫۶ می‌رسد که از
+    آستانهٔ ۵۵ رد می‌شود.
+
+    پس شرط سه‌تایی است: خطِ **عنوان** متفاوت، خطِ **هنرمند** یکی، و امتیازِ
+    هنرمند به‌قدرِ کافی قوی. هنرمندِ حدس‌زده‌شده از کانال (`ytsearch`) معاف
+    نمی‌شود، چون آن‌جا خودِ نامِ هنرمند هم شاهدِ محکمی نیست.
+    """
+    if not _scripts_differ(track.get("title"), cand.get("title")):
+        return False
+    if not _explicit_artist(cand):
+        return False
+    ta, ca = _track_artists(track), _cand_artists(cand)
+    if not ta or not ca:
+        return False
+    # **این‌جا عمداً خطِ نامِ هنرمند چک نمی‌شود، فقط امتیازش.** نسخهٔ اول یک
+    # `_scripts_differ` روی نامِ هنرمند هم داشت، و سابوتاژ نشان داد هم زیادی
+    # است و هم در تنها حالتی که واقعاً به آن می‌رسد **غلط** است: امتیازِ هنرمند
+    # خودش دقیقاً همان چیزی را می‌سنجد که آن چک ادعا می‌کرد (قابلِ مقایسه بودن)،
+    # پس برای نامزدِ کاملاً فارسی‌نویس شرطِ `am >= 45` خودش کار را می‌کند
+    # (امتیاز ۰٫۰)؛ و برای فهرستِ **دوزبانهٔ** `'هایده Haydeh'` در برابرِ مرجعِ
+    # فارسی، خط «متفاوت» شمرده می‌شد در حالی که هنرمند واقعاً می‌خواند
+    # (اندازه‌گیری‌شده ۵۸٫۸) — یعنی آن چک تطبیقِ درست را رد می‌کرد.
+    am = _artist_match(track, cand)
+    return am is not None and am >= _ARTIST_SAME_MIN
+
+
+def match_confidence_note(track: dict, cand: dict) -> str | None:
+    """اگر این تطبیق روی سیگنالِ کمتری نشسته، توضیحش را برگردان، وگرنه None.
+
+    معافیتِ خط نباید **بی‌صدا** ادامه بدهد: وقتی عنوان قابلِ مقایسه نیست،
+    انتخاب فقط روی هنرمند و مدت انجام شده و سیستم باید بداند. مصرف‌کنندهٔ
+    کاربری‌اش همان کارِ آستانه/هشدار است که هنوز ساخته نشده؛ امروز
+    `download_spotify` لاگِ هشدار می‌دهد — همان الگویی که `reference_is_blind`
+    دارد.
+    """
+    if _name_match(track, cand) < _NAME_MIN and _name_gate_exempt(track, cand):
+        return ("عنوان در خطِ متفاوتی است و قابلِ مقایسه نبود؛ "
+                "انتخاب فقط روی نامِ هنرمند و مدت انجام شد")
+    return None
+
+
 def _rank_candidates(candidates: list[dict], track: dict) -> list[tuple[float, dict]]:
     """نامزدها را می‌سنجد و از بهترین به بدترین مرتب می‌کند؛ گیت‌های سختِ نام/مدت/هنرمند.
 
     گیتِ هنرمند فقط وقتی نامزد فهرستِ صریحِ هنرمند دارد اعمال می‌شود (تا «خوانندهٔ
     اشتباه» رد شود)؛ برای نتایجِ ytsearch که هنرمند از کانال حدس زده شده، اعمال نمی‌شود.
+
+    گیتِ هنرمند **دو نیمه** دارد: `_artist_contradiction` (که جایگزینیِ خواننده
+    را می‌گیرد و گیتِ عددی از دستش می‌داد) و کفِ عددیِ قبلی که به‌عنوان لایهٔ
+    دومِ ارزان نگه داشته شده.
+
+    امتیازِ نامِ نامزدِ معاف‌شده **جایگزین نمی‌شود** و همان مقدارِ پایینِ واقعی
+    می‌ماند. اندازه‌گیری‌شده: جایگزینی با یک مقدارِ خنثی، هدف و طعمه را به یک
+    اندازه بالا می‌برد پس هیچ تفکیکی نمی‌خرد، و در عوض آستانه را ضعیف می‌کند —
+    طعمهٔ «همان آهنگساز، عنوانِ فارسیِ دیگر، +۲۰ ثانیه» با مقدارِ واقعی روی
+    ۳۶٫۲ می‌ماند (زیرِ آستانه) و با خنثیِ ۵۰ به ۵۵٫۹ می‌رسد و رد می‌شود.
     """
     scored: list[tuple[float, dict]] = []
     for c in candidates:
         if not _cand_url(c):
             continue
-        if _name_match(track, c) < 45:   # عنوان آشکارا ربطی ندارد
-            continue
+        if _name_match(track, c) < _NAME_MIN and not _name_gate_exempt(track, c):
+            continue                     # عنوان آشکارا ربطی ندارد
         if _duration_reject(c, track):   # طولِ آشکارا متفاوت (لایو/اکستندد)
             continue
+        if _artist_contradiction(track, c):  # صراحتاً کسِ دیگری را ادعا می‌کند
+            continue
         am = _artist_match(track, c)
-        if _explicit_artist(c) and am is not None and am < 40:  # صراحتاً خوانندهٔ دیگری
+        if _explicit_artist(c) and am is not None and am < _ARTIST_MIN:
             continue
         scored.append((_match_score(c, track), c))
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -1840,6 +1978,14 @@ async def download_spotify(url: str, workdir: str, opts: dict,
         best = ranked[0][1] if ranked and ranked[0][0] >= min_score else None
         if best is None and yt_fallback and ranked:
             best = ranked[0][1]  # بهترینِ موجود (حتی زیرِ آستانه) — بهتر از گرفتنِ خامِ اول
+        # معافیتِ خطِ عنوان نباید بی‌صدا بماند: اگر برنده روی سیگنالِ کمتری
+        # انتخاب شده (عنوان در خطِ دیگری بود و قابلِ مقایسه نبود)، همان‌جا
+        # هشدار بده — همان الگوی `reference_is_blind` در `_spotify_scrape`.
+        if best is not None:
+            note = match_confidence_note(tr, best)
+            if note:
+                log.warning("spotify match with reduced signal — %r → %s: %s",
+                            tr.get("title"), _cand_url(best), note)
         target = _cand_url(best) if best else None
         if not target:  # نه نامزدی رد شد نه چیزی برای fallback ماند
             if not yt_fallback:  # این ترک را رد کن، اشتباه نفرست
