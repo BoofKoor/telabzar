@@ -178,7 +178,7 @@ def test_no_import_cycle_between_dl_cache_and_downloader():
     """`downloader` نباید `dl_cache` را import کند، وگرنه حلقه می‌شود.
 
     با **AST** خوانده می‌شود نه تطبیقِ رشته: نسخهٔ اولِ این تست زیررشته‌ای بود و
-    کامنتِ خودم را در `downloader.py:46` می‌گرفت که اسمِ `dl_cache` را می‌برد —
+    کامنتِ خودم را در `downloader.py` می‌گرفت (کامنتِ کنارِ `_MATCH_PLATFORMS`) که اسمِ `dl_cache` را می‌برد —
     دقیقاً همان تلهٔ «کامنتِ خودم را گرفت» که ۲۰۲۶-۰۸-۱۰ ثبت شده.
     """
     import ast

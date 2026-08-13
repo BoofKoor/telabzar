@@ -27,7 +27,7 @@ from aiogram.types import InputMediaPhoto, InputMediaVideo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .cards import message_media_id, send_card, update_card
-# `_MATCH_PLATFORMS` تنها منبعِ «هدف را ما انتخاب می‌کنیم» است (`downloader.py:46`)
+# `_MATCH_PLATFORMS` تنها منبعِ «هدف را ما انتخاب می‌کنیم» است (`downloader.py:53`)
 # و `engine_for` هم از همان می‌خواند — فهرستِ دومی این‌جا ساخته نمی‌شود، وگرنه دو
 # کپیِ دست‌نویس واگرا می‌شدند. حلقهٔ import نیست: `downloader` هیچ ارجاعی به
 # `dl_cache` ندارد (تست `test_no_import_cycle` همین را نگه می‌دارد).
