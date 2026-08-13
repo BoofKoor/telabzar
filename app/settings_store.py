@@ -14,6 +14,7 @@ import logging
 
 import redis.asyncio as aioredis
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from .config import settings
 from .db import Sessionmaker
@@ -168,25 +169,50 @@ class SettingsStore:
         old = _RENAMED[key]
         val = await self.get(old)                 # `old` در `_RENAMED` نیست → بی‌بازگشت
         if val is None:
-            try:                                   # چیزی برای مهاجرت نبود → negative-cache
-                await self.r.set(_PREFIX + key, _MISSING)
-            except Exception:  # noqa: BLE001
-                pass
+            # **این‌جا عمداً negative-cache نوشته نمی‌شود.** پروسهٔ دیگری ممکن است
+            # همین لحظه مهاجرت را تمام کرده و `cfg:<key>` را روی مقدارِ واقعی
+            # گذاشته باشد؛ نوشتنِ `_MISSING` رویش آن مقدار را **بی‌صدا و ماندگار**
+            # دفن می‌کند (کلیدِ منفی TTL ندارد) و ادمین بی‌آنکه بفهمد به پیش‌فرض
+            # برمی‌گردد. هزینه‌اش یک `GET`ِ اضافهٔ Redis روی هر خواندنِ کلیدِ
+            # تنظیم‌نشده است — که با حذفِ `_RENAMED` صفر می‌شود.
             return None
         log.warning("settings: migrating %r → %r (value %r). Remove the _RENAMED entry once "
                     "every deployment has started on this code.", old, key, val)
-        await self.set(key, val)
-        await self.reset(old)
+        try:
+            await self.set(key, val)
+            await self.reset(old)
+        except Exception:  # noqa: BLE001  — پروسهٔ دیگری زودتر رسید؛ مقدار یکی است
+            log.info("settings: %r was migrated concurrently by another process", key)
         return val
 
     async def set(self, key: str, value: str) -> None:
-        async with Sessionmaker() as s:
-            row = (await s.execute(select(Setting).where(Setting.key == key))).scalar_one_or_none()
-            if row is None:
-                s.add(Setting(key=key, value=value))
-            else:
-                row.value = value
-            await s.commit()
+        """نوشتنِ override — **مقاوم در برابرِ رقابتِ INSERT**.
+
+        «اول SELECT بعد INSERT» یک check-then-actِ کلاسیک است: دو پروسه که
+        هم‌زمان یک کلیدِ **تازه** بنویسند، هر دو `row is None` می‌بینند و دومی با
+        `UNIQUE constraint failed: settings.key` می‌ترکد. تا امروز عملاً بی‌خطر
+        بود چون تنها نویسنده پنل بود (یک پروسه، نرخِ پایین) — ولی مهاجرتِ
+        `_RENAMED` این را به مسیرِ **هر** پروسه سرِ اولین خواندن تبدیل کرد، و
+        بعد از یک `telabzar update` همه با هم بالا می‌آیند. با اجرا بازتولید شد،
+        نه با استدلال: دو `get_int` هم‌زمان → `IntegrityError`.
+
+        دورِ دوم به‌جای INSERT به UPDATE می‌رسد، چون ردیف حالا هست.
+        """
+        for last in (False, True):
+            try:
+                async with Sessionmaker() as s:
+                    row = (await s.execute(
+                        select(Setting).where(Setting.key == key))).scalar_one_or_none()
+                    if row is None:
+                        s.add(Setting(key=key, value=value))
+                    else:
+                        row.value = value
+                    await s.commit()
+                break
+            except IntegrityError:
+                if last:
+                    raise
+                log.info("settings: %r was created concurrently; retrying as an update", key)
         try:
             await self.r.set(_PREFIX + key, value)  # همهٔ پروسه‌ها فوراً می‌بینند
         except Exception:  # noqa: BLE001

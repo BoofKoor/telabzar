@@ -13,6 +13,7 @@ DBِ واقعی (SQLiteِ درون‌حافظه‌ای) و Redisِ واقعیِ 
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import pytest
@@ -126,3 +127,61 @@ def test_every_panel_row_is_a_real_runtime_key():
     for _title, rows in GROUPS:
         for key, _label, _hint in rows:
             assert key in S.RUNTIME_KEYS, f"ردیفِ پنلِ {key!r} کلیدِ زمانِ‌اجرا نیست"
+
+
+# ── رقابت: بعد از `telabzar update` همهٔ پروسه‌ها با هم بالا می‌آیند ──────────
+async def test_two_processes_migrating_at_once_do_not_crash(store, redis):
+    """bot و download-worker هم‌زمان اولین خواندن را می‌زنند.
+
+    پیش از رفع این **می‌ترکید**، نه اینکه بی‌صدا خراب شود:
+    `IntegrityError: UNIQUE constraint failed: settings.key` — چون `set()` اول
+    SELECT می‌کرد و بعد INSERT، و هر دو پروسه `row is None` می‌دیدند. با اجرا
+    پیدا شد نه با خواندن. `get()` در مسیرِ داغِ `_dl_opts` است، پس این یعنی
+    شکستِ دانلود.
+    """
+    st, maker = store
+    other = S.SettingsStore(redis)                 # «پروسهٔ» دوم، همان DB و همان Redis
+    await _seed(maker, "spotify_match_min", "70")
+    got = await asyncio.gather(st.get_int("match_min", 55), other.get_int("match_min", 55))
+    assert got == [70, 70]
+    assert await _rows(maker) == {"match_min": "70"}
+    assert await st.get_int("match_min", 55) == 70
+
+
+async def test_a_late_reader_does_not_bury_the_migrated_value(store, redis):
+    """پروسهٔ دومی که «چیزی برای مهاجرت نیست» می‌بیند نباید کشِ کلیدِ تازه را خراب کند.
+
+    نسخهٔ اول در آن شاخه `_MISSING` می‌نوشت. کلیدِ منفی TTL ندارد، پس مقدارِ
+    تازه‌مهاجرت‌کردهٔ ادمین **ماندگار** دفن می‌شد — دقیقاً همان سقوطِ خاموشی که
+    این مهاجرت برای جلوگیری از آن نوشته شد.
+
+    **درهم‌آمیزی مجبور می‌شود، نه انتظار کشیده** (قاعدهٔ §۶): پنجره باریک است —
+    خواندنِ DBِ پروسهٔ دوم باید **پیش از** `set()`ِ اولی بیفتد و `get(old)`ش
+    **پس از** `reset()`ِ اولی. نسخهٔ اولِ همین تست دو `get` پشتِ‌هم می‌زد و
+    هرگز به آن شاخه نمی‌رسید (پس از مهاجرت ردیفِ DB هست و مسیرِ عادی جواب
+    می‌دهد) — سابوتاژ نشان داد که برای آن ادعا **vacuous** بود. این‌جا پروسهٔ
+    دوم دقیقاً در همان نقطه گذاشته می‌شود.
+    """
+    st, maker = store
+    other = S.SettingsStore(redis)
+    await _seed(maker, "spotify_meta", "on")
+    assert await st.get_bool("match_meta", False) is True     # پروسهٔ اول مهاجرت را تمام کرد
+    assert await redis.get("cfg:match_meta") == "on"
+
+    # پروسهٔ دوم: DB را قبل از `set()`ِ اولی خالی دیده بود، و حالا که به سراغِ
+    # نامِ قدیمی می‌رود دیگر نیست. این همان لحظهٔ clobber است.
+    assert await other._migrate_renamed("match_meta") is None
+    assert await redis.get("cfg:match_meta") == "on", "کشِ کلیدِ تازه نباید _MISSING شود"
+    assert await st.get_bool("match_meta", False) is True     # مقدارِ ادمین سرِ جایش
+
+
+async def test_two_concurrent_writes_of_a_new_key_do_not_crash(store, redis):
+    """باگِ **نهفتهٔ** خودِ `set()` — مهاجرت فقط قابلِ‌دسترسش کرد.
+
+    تا امروز بی‌خطر بود چون تنها نویسنده پنل بود؛ حالا هر پروسه‌ای سرِ بالا آمدن
+    می‌نویسد.
+    """
+    st, maker = store
+    other = S.SettingsStore(redis)
+    await asyncio.gather(st.set("match_min", "60"), other.set("match_min", "60"))
+    assert await _rows(maker) == {"match_min": "60"}
