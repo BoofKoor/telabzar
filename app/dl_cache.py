@@ -27,6 +27,11 @@ from aiogram.types import InputMediaPhoto, InputMediaVideo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .cards import message_media_id, send_card, update_card
+# `_MATCH_PLATFORMS` تنها منبعِ «هدف را ما انتخاب می‌کنیم» است (`downloader.py:46`)
+# و `engine_for` هم از همان می‌خواند — فهرستِ دومی این‌جا ساخته نمی‌شود، وگرنه دو
+# کپیِ دست‌نویس واگرا می‌شدند. حلقهٔ import نیست: `downloader` هیچ ارجاعی به
+# `dl_cache` ندارد (تست `test_no_import_cycle` همین را نگه می‌دارد).
+from .downloader import _MATCH_PLATFORMS, platform_of
 from .models import DownloadCache, File
 
 log = logging.getLogger("telabzar.dlcache")
@@ -70,8 +75,33 @@ def _cache_url(url: str) -> str:
     return urlunsplit(("", host, path, query, ""))  # اسکیم و فرگمنت بی‌اهمیت‌اند
 
 
+# نسخهٔ منطقِ **تطبیق**. فقط برای پلتفرم‌هایی که هدف را خودمان انتخاب می‌کنیم
+# (`downloader._MATCH_PLATFORMS`) واردِ کلید می‌شود. بالا بردنش ردیف‌های آن
+# پلتفرم‌ها را کنار می‌گذارد بدونِ اینکه به بقیهٔ کش دست بزند.
+#
+# **چرا سراسری نیست:** کش `file_id` نگه می‌دارد نه بایت، پس ردیفِ کهنه پهنای‌باند
+# خرج نمی‌کند — فایلِ **غلط** تحویل می‌دهد. و برای لینکِ یوتیوب چیزی برای غلط
+# بودن نیست: شناسهٔ کش‌شده دقیقاً همان است که URL نام می‌برد و هیچ تصمیمی از ما
+# در آن نیست. نسخهٔ سراسری ردیف‌های سالم را برای مشکلی که هرگز نداشتند دور
+# می‌ریخت.
+#
+# **بالا بردنش دستی است، و یک تست جلوی کهنه‌شدنش را می‌گیرد:**
+# `tests/test_spotify_match_fingerprint.py` رفتارِ ماچر **و** خروجیِ پارسر را
+# روی فیکسچرِ ثابت هش می‌کند و پین نگه می‌دارد، پس هر تغییری که جواب را عوض کند
+# تست را می‌شکند و نویسنده مجبور می‌شود آگاهانه این عدد را ببرد بالا.
+_MATCH_VERSION = 1
+
+
+def _we_choose_the_target(url: str) -> bool:
+    """این پلتفرم را ما به یوتیوب تطبیق می‌دهیم (یعنی جواب به منطقِ ما بند است)؟"""
+    return platform_of(url or "") in _MATCH_PLATFORMS
+
+
 def cache_key(url: str, selector: str) -> str:
-    return hashlib.sha1(f"{_cache_url(url)}\n{selector}".encode()).hexdigest()[:64]
+    base = f"{_cache_url(url)}\n{selector}"
+    if _we_choose_the_target(url):
+        base = f"{base}\nm{_MATCH_VERSION}"
+    return hashlib.sha1(base.encode()).hexdigest()[:64]
 
 
 def _legacy_key(url: str, selector: str) -> str:
@@ -85,6 +115,14 @@ async def get_cached(session: AsyncSession, url: str, selector: str) -> Download
     row = await session.get(DownloadCache, key)
     if row is not None:
         return row
+    # **برای پلتفرم‌های تطبیقی fallbackِ legacy رد می‌شود، وگرنه کلِ نسخه‌دارکردن
+    # بی‌اثر است.** اندازه‌گیری‌شده: برای URLِ اسپاتیفای `cache_key` و
+    # `_legacy_key` **از قبل** متفاوت‌اند (`_cache_url` اسکیم را می‌ریزد)، پس
+    # مسیر این بود: کلیدِ نسخه‌دار → miss → اصابت روی ردیفِ خامِ کهنه → مهاجرت
+    # به کلیدِ نو → همان جوابِ غلط، این‌بار زیرِ کلیدِ تازه. یعنی بمپِ نسخه صفر
+    # اثر داشت و بدتر: ردیفِ کهنه را «تازه» می‌کرد.
+    if _we_choose_the_target(url):
+        return None
     old = _legacy_key(url, selector)
     if old == key:
         return None
