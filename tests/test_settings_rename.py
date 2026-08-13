@@ -24,8 +24,14 @@ from app.models import Base, Setting
 
 
 @pytest.fixture
-async def store(redis, monkeypatch):
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+async def store(redis, monkeypatch, tmp_path):
+    # **فایل، نه `:memory:`** — و این تفاوت باعثِ نتیجهٔ گمراه‌کننده شده بود.
+    # SQLAlchemy برای SQLiteِ حافظه‌ای یک اتصالِ مشترک نگه می‌دارد، پس چند
+    # session هم‌زمان روی همان اتصال multiplex می‌شوند و اصلاً رقابتِ واقعی
+    # مدل نمی‌شود: اندازه‌گیری روی `:memory:` می‌گفت «۲ نویسنده سالم، ۴ خراب»
+    # در حالی که روی فایل نسخهٔ retry‌دار **از همان ۲ هم** می‌شکند. هر تستِ
+    # رقابتی که DB لازم دارد باید اتصالِ جدا داشته باشد.
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'settings.db'}")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -175,13 +181,22 @@ async def test_a_late_reader_does_not_bury_the_migrated_value(store, redis):
     assert await st.get_bool("match_meta", False) is True     # مقدارِ ادمین سرِ جایش
 
 
-async def test_two_concurrent_writes_of_a_new_key_do_not_crash(store, redis):
+@pytest.mark.parametrize("writers", [2, 4, 8, 16])
+async def test_concurrent_writes_of_a_new_key_do_not_crash(store, redis, writers):
     """باگِ **نهفتهٔ** خودِ `set()` — مهاجرت فقط قابلِ‌دسترسش کرد.
 
-    تا امروز بی‌خطر بود چون تنها نویسنده پنل بود؛ حالا هر پروسه‌ای سرِ بالا آمدن
-    می‌نویسد.
+    تا امروز بی‌خطر بود چون تنها نویسنده پنل بود؛ حالا هر پروسه‌ای سرِ بالا
+    آمدن می‌نویسد.
+
+    **چند نویسنده، عمداً.** نسخهٔ اولِ رفع یک «دوباره SELECT/INSERT» بود و روی
+    هارنسِ `:memory:` سالم به‌نظر می‌رسید؛ روی DBِ فایل‌محور (اتصالِ جدا برای هر
+    session) **از همان دو نویسنده هم** می‌شکست. مسیرِ دوم حالا `UPDATE`ِ مستقیم
+    است — تعارض خودش ثابت می‌کند ردیف هست — که روی کلیدِ یکتا نمی‌تواند تعارض
+    بدهد.
     """
     st, maker = store
-    other = S.SettingsStore(redis)
-    await asyncio.gather(st.set("match_min", "60"), other.set("match_min", "60"))
+    others = [S.SettingsStore(redis) for _ in range(writers - 1)]
+    await asyncio.gather(st.set("match_min", "60"),
+                         *[o.set("match_min", "60") for o in others])
     assert await _rows(maker) == {"match_min": "60"}
+    assert await st.get_int("match_min", 55) == 60

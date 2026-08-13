@@ -14,6 +14,7 @@ import logging
 
 import redis.asyncio as aioredis
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 
 from .config import settings
@@ -196,23 +197,38 @@ class SettingsStore:
         بعد از یک `telabzar update` همه با هم بالا می‌آیند. با اجرا بازتولید شد،
         نه با استدلال: دو `get_int` هم‌زمان → `IntegrityError`.
 
-        دورِ دوم به‌جای INSERT به UPDATE می‌رسد، چون ردیف حالا هست.
+        **مسیرِ دوم یک `UPDATE`ِ مستقیم است، نه تکرارِ همان عملیات.** تعارض خودش
+        ثابت می‌کند ردیف حالا هست، و `UPDATE` روی کلیدِ یکتا اصلاً نمی‌تواند
+        تعارض بدهد — یعنی تلاشِ دوم **قطعی** است، نه وابسته به اینکه commitِ
+        برنده پیش از SELECTِ ما رسیده باشد یا نه.
+
+        **صداقتِ اندازه‌گیری:** روی DBِ فایل‌محور و ۲۰ اجرا به‌ازای هر حالت، «یک
+        retry» هم ۲۰/۲۰ می‌شود؛ پس تفاوتِ این دو در این مقیاس **سنجیده‌نشدنی**
+        است و انتخابِ `UPDATE` بر پایهٔ ساختار است نه عدد. آنچه عدد نشان می‌دهد
+        خودِ باگ است: بی‌محافظت ۱/۲۰ در n=2 و ۰/۲۰ در n=8.
+        (هشدار برای هر سنجشِ بعدی: روی `sqlite+aiosqlite:///:memory:` اصلاً
+        رقابت مدل نمی‌شود — SQLAlchemy یک اتصالِ مشترک نگه می‌دارد — و اولین
+        اندازه‌گیریِ همین رفع را گمراه کرد.)
+
+        **فقط `IntegrityError` گرفته می‌شود** — `except Exception` این‌جا خطای
+        واقعیِ دیتابیس (اتصال، قفل، اسکیما) را پنهان می‌کرد و نوشتنِ ازدست‌رفته را
+        به سکوت تبدیل می‌کرد. مسیرِ دوم خودش هیچ چیزی نمی‌گیرد: اگر آن هم بشکند،
+        خطای واقعی است و باید بالا برود.
         """
-        for last in (False, True):
-            try:
-                async with Sessionmaker() as s:
-                    row = (await s.execute(
-                        select(Setting).where(Setting.key == key))).scalar_one_or_none()
-                    if row is None:
-                        s.add(Setting(key=key, value=value))
-                    else:
-                        row.value = value
-                    await s.commit()
-                break
-            except IntegrityError:
-                if last:
-                    raise
-                log.info("settings: %r was created concurrently; retrying as an update", key)
+        try:
+            async with Sessionmaker() as s:
+                row = (await s.execute(
+                    select(Setting).where(Setting.key == key))).scalar_one_or_none()
+                if row is None:
+                    s.add(Setting(key=key, value=value))
+                else:
+                    row.value = value
+                await s.commit()
+        except IntegrityError:
+            log.info("settings: %r was created concurrently; writing it as an update", key)
+            async with Sessionmaker() as s:
+                await s.execute(sa_update(Setting).where(Setting.key == key).values(value=value))
+                await s.commit()
         try:
             await self.r.set(_PREFIX + key, value)  # همهٔ پروسه‌ها فوراً می‌بینند
         except Exception:  # noqa: BLE001
