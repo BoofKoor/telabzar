@@ -48,7 +48,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 #                            مقدارِ زیر را با عددی که تست چاپ می‌کند عوض کن.
 #   • عوض شدن ناخواسته بود → باگ را رفع کن، این عدد را دست نزن.
 # ─────────────────────────────────────────────────────────────────────────────
-_FINGERPRINT = "943a6186749d76ab"
+_FINGERPRINT = "7d38598886db25f5"
 
 
 def _r(v):
@@ -73,6 +73,8 @@ JANE = {"title": "Jane Maryam", "artist": "Mohammad Nouri", "duration": 311}
 COHEN = {"title": "Hallelujah", "artist": "Leonard Cohen", "duration": 275}
 EBI = {"title": "Shabe Nasimi", "artist": "Ebi", "duration": 300}
 NO_DUR = {"title": "Faryad", "artist": "Anoushirvan Rohani, Haydeh", "duration": None}
+# مرجعی که خودش `(feat. X)` در عنوان دارد — شکلی که اپل رایجش کرد.
+FEAT = {"title": "Faryad (feat. Haydeh)", "artist": "Anoushirvan Rohani", "duration": 311}
 
 CASES: list[tuple[str, dict, list[dict]]] = [
     ("faryad", FARYAD, [
@@ -100,6 +102,18 @@ CASES: list[tuple[str, dict, list[dict]]] = [
         cand("nodur", "Faryad", ["Anoushirvan Rohani", "Haydeh"], None),
         cand("exact", "Faryad", ["Anoushirvan Rohani", "Haydeh"], 311),
         cand("off3", "Faryad", ["Anoushirvan Rohani", "Haydeh"], 314),
+    ]),
+    # عنوانِ **feat‌دار** در مسیرِ مشترک. اپل مهمان را همیشه در عنوان می‌گذارد و
+    # `_split_feat_title` آن را در `apple_resolve` بیرون می‌کشد — یعنی هرگز به
+    # این‌جا نمی‌رسد (با اجرا سنجیده شد: صفر فراخوانی از مسیرِ اسپاتیفای، و
+    # فینگرپرینتِ پیش و پس از کارِ اپل بیت‌به‌بیت یکی ماند). ولی فینگرپرینت
+    # فقط به‌اندازهٔ پوششِ فیکسچرش قوی است: بدونِ این کیس، اگر روزی استخراج به
+    # کدِ مشترک منتقل شود این تست ساکت می‌ماند. حالا نمی‌ماند.
+    ("feat_in_title", FEAT, [
+        cand("fr", "Faryad (feat. Haydeh)", ["Anoushirvan Rohani", "Haydeh"], 311),
+        cand("fc", "Faryad", ["Anoushirvan Rohani"], 311),
+        # براکتِ نشانه کنارِ براکتِ feat: هر دو باید دیده شوند
+        cand("fl", "Faryad (feat. Haydeh) [Live]", ["Anoushirvan Rohani", "Haydeh"], 311),
     ]),
     # مسیرِ حذفِ مؤلفه: مدتِ **خودِ ترک** نامعلوم → مؤلفه حذف می‌شود، نه ۵۰ تزریق
     ("track_no_duration", NO_DUR, [
@@ -166,11 +180,24 @@ def fingerprint() -> str:
 def test_the_chain_still_produces_the_pinned_answer():
     got = fingerprint()
     assert got == _FINGERPRINT, (
-        "\n\nخروجیِ زنجیرهٔ تطبیق عوض شده (ماچر یا پارسر).\n"
-        "اگر عوض شدن **مطلوب** بود:\n"
-        "  ۱) `dl_cache._MATCH_VERSION` را یکی ببر بالا (وگرنه کشِ اسپاتیفای "
-        "جوابِ قبلی را سرو می‌کند)\n"
-        "  ۲) این خط را در همین فایل عوض کن:\n\n"
+        "\n\nخروجیِ زنجیرهٔ تطبیق عوض شده (ماچر یا پارسر).\n\n"
+        "**اول تشخیص بده کدام‌یک — نسخهٔ کش فقط برای یکی‌شان است، و این را\n"
+        "با حدس تشخیص نده. روالِ دقیق:**\n\n"
+        "  ۱) کیس‌های تازه‌ای که در همین تغییر به `CASES` (یا فیکسچرِ پارسر)\n"
+        "     اضافه کرده‌ای را **موقتاً بردار**.\n"
+        "  ۲) هش را دوباره حساب کن.\n"
+        "  ۳) اگر با مقدارِ **پین‌شدهٔ قبلی** یکی شد → فقط پوشش رشد کرده،\n"
+        "     رفتار دست‌نخورده است: عدد را عوض کن و `_MATCH_VERSION` را\n"
+        "     **بالا نبر** (بالا بردنش ردیف‌های سالمِ کش را برای مشکلی که\n"
+        "     ندارند دور می‌ریزد و یک `DELETE` بی‌دلیل به استقرار می‌چسباند).\n"
+        "  ۴) اگر **یکی نشد** → پاسخِ کیسی که از قبل بود عوض شده، یعنی تغییرِ\n"
+        "     رفتار — **حتی اگر در همان کامیت کیس هم اضافه کرده باشی**. آن‌وقت\n"
+        "     `dl_cache._MATCH_VERSION` را یکی ببر بالا و آن استقرار یک\n"
+        "     `DELETE FROM download_cache WHERE platform IN (…)` می‌خواهد.\n\n"
+        "  ⚠ گامِ ۱ حذف‌شدنی نیست: «کیس اضافه کردم» به‌تنهایی هیچ چیزی را ثابت\n"
+        "     نمی‌کند، چون یک کامیت می‌تواند هم‌زمان کیس اضافه کند **و** رفتار را\n"
+        "     عوض کند، و آن‌وقت هش عوض می‌شود به دو دلیل که از بیرون یکی به‌نظر\n"
+        "     می‌رسند.\n\n"
         f'        _FINGERPRINT = "{got}"\n\n'
         "اگر عوض شدن **ناخواسته** بود: باگ را رفع کن و این عدد را دست نزن.\n")
 
@@ -197,6 +224,13 @@ def test_the_fixture_covers_every_signal_the_matcher_uses():
         "ترکِ بی‌مدت (مسیرِ حذفِ مؤلفه) نیست"
     # مسیرِ اسکریپتِ مخلوط، صریح
     assert per["mixed"]["exempt"] is True and per["allfa"]["exempt"] is False
+    # عنوانِ feat‌دار در **مرجع** و در **نامزد** — بدونِ این، انتقالِ استخراجِ
+    # feat به کدِ مشترک این فینگرپرینت را تکان نمی‌داد.
+    assert any("feat" in t["title"].lower() for _n, t, _cs in CASES), \
+        "مرجعی با عنوانِ feat‌دار نیست"
+    assert any("feat" in c["title"].lower() for _n, _t, cs in CASES for c in cs), \
+        "نامزدی با عنوانِ feat‌دار نیست"
+    assert per["fl"]["markers"] == ["live"], "نشانهٔ نسخه کنارِ براکتِ feat باید دیده شود"
 
 
 def test_the_parser_half_reads_a_real_recorded_dump():

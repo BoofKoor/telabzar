@@ -258,7 +258,7 @@ async def test_the_pipeline_now_reaches_the_recording_the_old_query_missed(monke
 async def test_the_last_resort_ytsearch_uses_the_new_shape(monkeypatch, tmp_path):
     """وقتی هیچ نامزدی نماند، `ytsearch1:` نباید شکلِ مردهٔ کامایی را بفرستد.
 
-    کوئری دو جا ساخته می‌شد (`_gather_candidates` و `download_spotify`)، پس
+    کوئری دو جا ساخته می‌شد (`_gather_candidates` و `download_matched`)، پس
     عوض‌کردنِ یکی، آخرین‌چاره را روی همان شکلی می‌گذاشت که اثباتاً هدف را
     نمی‌آورد.
     """
@@ -279,7 +279,7 @@ async def test_the_last_resort_ytsearch_uses_the_new_shape(monkeypatch, tmp_path
     monkeypatch.setattr(D, "download_ytdlp", fake_dl)
 
     with pytest.raises(RuntimeError):
-        await D.download_spotify("https://open.spotify.com/track/x", str(tmp_path), {})
+        await D.download_matched("https://open.spotify.com/track/x", str(tmp_path), {})
 
     assert seen == ["ytsearch1:Anoushirvan Rohani Faryad"], f"هدفِ آخرین‌چاره: {seen}"
     assert f"ytsearch1:{DEAD_COMMA}" not in seen

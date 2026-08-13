@@ -226,7 +226,7 @@ async def _spotify(monkeypatch, tmp_path, outcomes: list[str]):
     برمی‌گرداند: `age` (ردِ گیتِ سنی) · `fail` (شکستِ عادی) · `ok` (موفق).
 
     فقط دو تابعِ **بیرونی** جایگزین می‌شوند — resolveِ اسپاتیفای (شبکه) و
-    `download_ytdlp` (زیرفرایند). خودِ حلقهٔ `download_spotify` واقعی است، چون
+    `download_ytdlp` (زیرفرایند). خودِ حلقهٔ `download_matched` واقعی است، چون
     همان چیزی است که تست دربارهٔ آن ادعا دارد.
     """
     from app import downloader as D
@@ -265,13 +265,13 @@ async def test_an_all_age_restricted_playlist_says_so(monkeypatch, tmp_path):
     """قلبِ موردِ ۱۰: قبلاً «no YouTube match» می‌گرفت که علت را اشتباه می‌گفت."""
     D = await _spotify(monkeypatch, tmp_path, ["age", "age"])
     with pytest.raises(D.AgeRestricted):
-        await D.download_spotify("https://open.spotify.com/playlist/x", str(tmp_path), {})
+        await D.download_matched("https://open.spotify.com/playlist/x", str(tmp_path), {})
 
 
 async def test_a_mixed_playlist_still_delivers_the_rest_silently(monkeypatch, tmp_path):
     """رفتارِ عمدی و بدونِ تغییر: ترکِ سنی بی‌صدا می‌افتد، بقیه تحویل می‌شوند."""
     D = await _spotify(monkeypatch, tmp_path, ["age", "ok"])
-    out = await D.download_spotify("https://open.spotify.com/playlist/x", str(tmp_path), {})
+    out = await D.download_matched("https://open.spotify.com/playlist/x", str(tmp_path), {})
     assert len(out) == 1, "ترکِ سالم باید تحویل شود"
 
 
@@ -280,6 +280,6 @@ async def test_a_mix_of_age_and_ordinary_failures_keeps_the_generic_message(
     """شرط «همهٔ افتاده‌ها سنی بودند» است، نه «یکی سنی بود»."""
     D = await _spotify(monkeypatch, tmp_path, ["age", "fail"])
     with pytest.raises(RuntimeError) as ei:
-        await D.download_spotify("https://open.spotify.com/playlist/x", str(tmp_path), {})
+        await D.download_matched("https://open.spotify.com/playlist/x", str(tmp_path), {})
     assert not isinstance(ei.value, D.AgeRestricted)
     assert "no YouTube match" in str(ei.value)

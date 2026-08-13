@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import ast
+
 import pathlib
 import re
 import subprocess
@@ -118,3 +120,41 @@ _OPERATIONAL_KEYS = {
 def test_operationally_critical_keys_are_documented():
     missing = _OPERATIONAL_KEYS - _example_keys()
     assert not missing, f"کلیدِ عملیاتیِ مستندنشده: {sorted(missing)}"
+
+
+# ── ردهٔ کورِ «فقط روی CI می‌افتد» ───────────────────────────────
+_ADMIN_ONLY = ("app.admin_web", "cryptography", "jinja2")
+
+
+def test_no_test_imports_a_module_the_ci_runner_does_not_have():
+    """هیچ تستی نباید چیزی را import کند که فقط در `requirements-admin.txt` است.
+
+    **این گارد از یک شکستِ واقعیِ CI درآمد، نه از احتیاط.** یک تست
+    `from app.admin_web import GROUPS` می‌کرد و محلی سبز بود چون سندباکسِ توسعه
+    `cryptography` نصب داشت؛ روی رانرِ تمیز `ModuleNotFoundError` داد و PR را
+    قرمز کرد. `requirements-dev.txt` عمداً استکِ پنل را ندارد، پس «محلی سبز
+    است» درباره‌اش هیچ چیزی ثابت نمی‌کند — همان ردهٔ خطایی که با `7z` و با
+    هارنسِ `:memory:` هم خوردیم.
+
+    راهِ درست از قبل در ریپو بود: سورس را با AST بخوان، import نکن
+    (`tests/test_phase2a._func_src`). این تست همان قاعده را اجباری می‌کند، و
+    چون **کشف‌محور** است شاملِ هر تستِ تازه‌ای هم می‌شود.
+
+    عمداً روی `tests/` است نه `app/`: خودِ پنل باید این‌ها را import کند.
+    """
+    offenders = []
+    for path in sorted((ROOT / "tests").rglob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            mods = []
+            if isinstance(node, ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                mods = [node.module]
+            for m in mods:
+                if any(m == a or m.startswith(a + ".") for a in _ADMIN_ONLY):
+                    offenders.append(f"{path.name}:{node.lineno} → {m}")
+    assert not offenders, (
+        "این‌ها روی رانرِ CI موجود نیستند و فقط آن‌جا می‌افتند:\n  "
+        + "\n  ".join(offenders)
+        + "\nسورس را با AST بخوان (نمونه: tests/test_phase2a._func_src).")

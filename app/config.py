@@ -125,16 +125,21 @@ class Settings(BaseSettings):
     dl_subs: bool = False          # جاسازیِ زیرنویسِ خودکار (en+fa) در ویدیو
     cobalt_url: str = ""           # نمونهٔ self-hostedِ Cobalt به‌عنوان fallback؛ خالی=خاموش
     cobalt_api_key: str = ""       # کلیدِ API نمونهٔ Cobalt (در صورتِ نیاز)
-    # ── اسپاتیفای (متادیتا از API + تطبیقِ صوت روی یوتیوب) ──
-    spotify_enabled: bool = True       # پردازشِ لینکِ اسپاتیفای (نیازمندِ client id/secret)
+    # ── پلتفرم‌های DRMدار (متادیتا از API + تطبیقِ صوت روی یوتیوب) ──
+    spotify_enabled: bool = True       # پردازشِ لینکِ اسپاتیفای
     spotify_client_id: str = ""        # از پنل ست می‌شود (اپِ رایگانِ Spotify Developer)
     spotify_client_secret: str = ""    # از پنل ست می‌شود
-    spotify_meta: bool = False         # خاموش=متادیتا از یوتیوب · روشن=متادیتا از اسپاتیفای
-    spotify_max_tracks: int = 20       # سقفِ تعدادِ ترک در هر آلبوم/پلی‌لیست
+    apple_enabled: bool = True         # پردازشِ لینکِ اپل‌موزیک (lookupِ عمومی، بی‌کلید)
+    # ── ماچر: مشترکِ هر پلتفرمی که هدفش را **ما** انتخاب می‌کنیم ──
+    # تا امروز `spotify_*` نام داشتند؛ آن نام دیگر صادق نیست چون همین‌ها رفتارِ
+    # اپل را هم تعیین می‌کنند. مقدارِ ذخیره‌شدهٔ قدیمی خودکار مهاجرت می‌کند
+    # (`settings_store._RENAMED`).
+    match_meta: bool = False           # خاموش=متادیتا از یوتیوب · روشن=از پلتفرمِ مبدأ
+    match_max_tracks: int = 20         # سقفِ تعدادِ ترک در هر آلبوم/پلی‌لیست
     # منبعِ تطبیق: ytmusic = کاتالوگِ «songs»ی YouTube Music (دقیق، پیش‌فرض) · youtube = ytsearchِ خام
-    spotify_source: str = "ytmusic"
-    spotify_match_min: int = 55        # حداقلِ امتیازِ تطبیق (۰..۱۰۰)؛ زیرش = تطبیقِ نامطمئن
-    spotify_yt_fallback: bool = True   # اگر نامزدی از آستانه رد نشد: ytsearch1 (روشن) یا ردِ ترک (خاموش)
+    match_source: str = "ytmusic"
+    match_min: int = 55                # حداقلِ امتیازِ تطبیق (۰..۱۰۰)؛ زیرش = تطبیقِ نامطمئن
+    match_yt_fallback: bool = True     # اگر نامزدی از آستانه رد نشد: بهترینِ موجود (روشن) یا ردِ ترک (خاموش)
 
     # ── نودهای توزیع‌شده (master/node روی WireGuard) — فاز N ──
     # نقشِ این پروسه اگر «نود» باشد (روی سرورِ نود ست می‌شود؛ روی مستر خالی است).

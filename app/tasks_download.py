@@ -87,7 +87,7 @@ def _is_cookie_error(msg: str, platform: str | None = None) -> bool:
 # یوتیوب بدونِ لاگین ~۳۰۰ ویدیو در ساعت می‌دهد (با لاگین ~۲۰۰۰). پس چسباندنِ کوکی به
 # **هر** دانلود فقط اکانت را می‌سوزاند بدونِ اینکه لازم باشد. این پلتفرم‌ها اول ناشناس
 # تلاش می‌شوند و کوکی تنها وقتی می‌آید که خودِ سرویس بخواهد.
-_ANON_FIRST = {"youtube", "spotify", "tiktok", "pinterest", "other"}
+_ANON_FIRST = {"youtube", "spotify", "apple", "tiktok", "pinterest", "other"}
 
 
 # خطاهایی که قطعاً دربارهٔ **خودِ محتوا** هستند، نه اکانت. فقط این‌ها چرخش را
@@ -207,8 +207,8 @@ async def _warn_cookieless(redis, bot, platform: str, node: str) -> None:
 
 
 def _cookie_platform(platform: str) -> str:
-    """اسپاتیفای دانلودِ واقعی را از یوتیوب می‌گیرد → کوکیِ یوتیوب لازم است، نه اسپاتیفای."""
-    return "youtube" if platform == "spotify" else platform
+    """پلتفرمِ ماچ‌شونده دانلودِ واقعی را از یوتیوب می‌گیرد → کوکیِ یوتیوب لازم است."""
+    return "youtube" if platform in D._MATCH_PLATFORMS else platform
 
 
 async def _next_cookie(redis, platform: str, workdir: str | None,
@@ -335,10 +335,10 @@ async def _opts(redis, platform: str, workdir: str | None = None,
         "cobalt_key": settings.cobalt_api_key or None,
         "spotify_client_id": await settings_store.get_str("spotify_client_id", settings.spotify_client_id),
         "spotify_client_secret": await settings_store.get_str("spotify_client_secret", settings.spotify_client_secret),
-        "spotify_max_tracks": await settings_store.get_int("spotify_max_tracks", settings.spotify_max_tracks),
-        "spotify_source": await settings_store.get_str("spotify_source", settings.spotify_source),
-        "spotify_match_min": await settings_store.get_int("spotify_match_min", settings.spotify_match_min),
-        "spotify_yt_fallback": await settings_store.get_bool("spotify_yt_fallback", settings.spotify_yt_fallback),
+        "match_max_tracks": await settings_store.get_int("match_max_tracks", settings.match_max_tracks),
+        "match_source": await settings_store.get_str("match_source", settings.match_source),
+        "match_min": await settings_store.get_int("match_min", settings.match_min),
+        "match_yt_fallback": await settings_store.get_bool("match_yt_fallback", settings.match_yt_fallback),
     }
 
 
@@ -589,9 +589,12 @@ async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int
 _SP_NAME_RE = re.compile(r'[\\/:*?"<>|\x00]+')
 
 
-async def _apply_spotify_meta(
+async def _apply_match_meta(
         paths: list[tuple[str, dict, str | None]]) -> list[tuple[str, dict, str | None]]:
-    """کلیدِ متادیتا روشن → تگ/کاورِ نهایی را با متادیتای اسپاتیفای بازنویسی می‌کند.
+    """کلیدِ متادیتا روشن → تگ/کاورِ نهایی را با متادیتای پلتفرمِ مبدأ بازنویسی می‌کند.
+
+    مبدأ اسپاتیفای یا اپل است؛ کلیدِ `info['sp']` به‌عمد دست‌نخورده ماند چون
+    شکلِ دیکشنری هر دو یکی است و تغییرش فقط churn بود.
 
     خروجی: مسیرِ تازهٔ تگ‌خورده با نامِ «هنرمند - آهنگ». اگر نشد، فایلِ اصلی
     (متادیتای یوتیوب) نگه داشته می‌شود. تلگرام عنوان/هنرمند/کاور را از همین تگ می‌خواند.
@@ -784,8 +787,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
         # تیک‌زنِ پس‌زمینه هیچ‌وقت «قفل‌شده» به‌نظر نمی‌رسد — چه yt-dlp که درصد می‌دهد،
         # چه gallery-dl که نمی‌دهد (فقط اسپینر + زمان). نزدیکِ پایان → «لحظه‌های آخر».
         plabel = D.platform_label(platform, lang)
-        # اسپاتیفای دانلودِ واقعی ندارد؛ روی یوتیوب تطبیق می‌دهد → برچسبِ گویاتر
-        fetch_label = t(lang, "dl_matching") if engine == "spotify" else t(lang, "dl_fetching")
+        # پلتفرمِ ماچ‌شونده دانلودِ واقعی ندارد؛ روی یوتیوب تطبیق می‌دهد → برچسبِ گویاتر
+        fetch_label = (t(lang, "dl_matching") if engine in D._MATCH_PLATFORMS
+                       else t(lang, "dl_fetching"))
         narr = {"label": fetch_label, "pct": None, "eta": None}
         nstart = time.monotonic()
 
@@ -866,13 +870,13 @@ async def run_download(ctx: dict, payload: dict) -> None:
                     files, gallery_caption = await D.download_gallerydl(
                         url, workdir, opts, progress=_progress, cancel=_cancelled)
                     paths = [(p, {}, None) for p in files]
-                elif engine == "spotify":
-                    # متادیتا از اسپاتیفای + تطبیق روی یوتیوب؛ کلیدِ متادیتا تعیین می‌کند تگ/کاورِ
-                    # نهایی از اسپاتیفای باشد (روشن) یا از یوتیوب بماند (پیش‌فرض/خاموش).
-                    paths = await D.download_spotify(url, workdir, opts,
+                elif engine in D._MATCH_PLATFORMS:
+                    # متادیتا از پلتفرمِ مبدأ + تطبیق روی یوتیوب؛ کلیدِ متادیتا تعیین می‌کند تگ/کاورِ
+                    # نهایی از مبدأ باشد (روشن) یا از یوتیوب بماند (پیش‌فرض/خاموش).
+                    paths = await D.download_matched(url, workdir, opts,
                                                      progress=_progress, cancel=_cancelled)
-                    if await settings_store.get_bool("spotify_meta", settings.spotify_meta):
-                        paths = await _apply_spotify_meta(paths)
+                    if await settings_store.get_bool("match_meta", settings.match_meta):
+                        paths = await _apply_match_meta(paths)
                 else:
                     try:
                         path, info, thumb = await D.download_ytdlp(url, workdir, selector, opts,
@@ -928,6 +932,17 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 pol = await safety.load_policy()
                 await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
                                  payload.get("tg_user_id") or 0, "age_limit:18", url)
+                await _metric(redis, platform, ok=False)
+                return
+            except D.AppleUnsupported:
+                # لینکِ اپل هست ولی آلبوم/پلی‌لیست است. **قبل از شاخهٔ چرخش**،
+                # به همان دلیلِ `AgeRestricted`: اکانتِ بعدی هم همین را می‌گیرد،
+                # پس چرخش کلِ استخرِ کوکیِ یوتیوب را برای لینکی می‌سوزاند که
+                # هیچ‌وقت کار نمی‌کند — دقیقاً همان «یک URLِ خراب کلِ استخر را
+                # می‌خورد» که §۷ دربارهٔ خطاهای غیرِکوکی هشدار می‌دهد. هیچ
+                # اکانتی هم مقصر نیست، پس ضربه‌ای ثبت نمی‌شود.
+                await _stop_ticker()
+                await _edit(bot, chat_id, status_mid, t(lang, "dl_apple_entity"))
                 await _metric(redis, platform, ok=False)
                 return
             except Exception as exc:  # noqa: BLE001
@@ -989,11 +1004,16 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 await _edit(bot, chat_id, status_mid,
                             t(lang, "dl_direct_too_large",
                               mb=-(-dl_err.size // (1024 * 1024)), cap=direct_cap))
-            elif platform == "spotify" and D.is_youtube_botcheck(msg, "youtube"):
-                # تطبیقِ اسپاتیفای از یوتیوب دانلود می‌کند؛ اگر یوتیوب bot-check داد، راهنمای کوکی
+            elif platform in D._MATCH_PLATFORMS and D.is_youtube_botcheck(msg, "youtube"):
+                # ماچ از یوتیوب دانلود می‌کند؛ اگر یوتیوب bot-check داد، راهنمای کوکی
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
-            elif platform == "spotify" and any(
-                    k in low for k in ("spotify", "could not read link", "no youtube", "no tracks", "blocked")):
+            elif platform in D._MATCH_PLATFORMS and (
+                    isinstance(dl_err, D.MatchFailed)
+                    or any(k in low for k in ("could not read link", "no tracks", "blocked",
+                                              "unsupported", "no such track"))):
+                # **`isinstance` مقدم بر تطبیقِ رشته است، عمداً.** «تقصیر را به
+                # متنِ خطا نسپار» (§۷): متن عوض می‌شود، نوعِ استثنا نه. نشانه‌های
+                # رشته‌ای فقط برای خطاهای resolver مانده‌اند که RuntimeErrorِ ساده‌اند.
                 await _edit(bot, chat_id, status_mid,
                             t(lang, "dl_spotify_setup") + f"\n<code>{escape(msg[:200])}</code>")
             elif D.is_youtube_botcheck(msg, platform):

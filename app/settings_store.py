@@ -10,12 +10,18 @@
 """
 from __future__ import annotations
 
+import logging
+
 import redis.asyncio as aioredis
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
+from sqlalchemy.exc import IntegrityError
 
 from .config import settings
 from .db import Sessionmaker
 from .models import Setting
+
+log = logging.getLogger("telabzar.settings")
 
 _PREFIX = "cfg:"
 _MISSING = "\x00"  # نشانهٔ negative-cache: «در DB نیست → از پیش‌فرضِ env استفاده کن»
@@ -83,15 +89,38 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "safety_allow_domains": ("str", ""),   # استثنا (رفعِ مثبتِ کاذب)
     "dl_sponsorblock": ("str", settings.dl_sponsorblock),
     "dl_subs": ("bool", settings.dl_subs),
-    # ── اسپاتیفای ──
+    # ── پلتفرم‌های DRMدار (اسپاتیفای/اپل) ──
     "spotify_enabled": ("bool", settings.spotify_enabled),
     "spotify_client_id": ("str", settings.spotify_client_id),
     "spotify_client_secret": ("str", settings.spotify_client_secret),
-    "spotify_meta": ("bool", settings.spotify_meta),
-    "spotify_max_tracks": ("int", settings.spotify_max_tracks),
-    "spotify_source": ("str", settings.spotify_source),
-    "spotify_match_min": ("int", settings.spotify_match_min),
-    "spotify_yt_fallback": ("bool", settings.spotify_yt_fallback),
+    "apple_enabled": ("bool", settings.apple_enabled),
+    # ── ماچر (مشترکِ هر پلتفرمی که هدفش را ما انتخاب می‌کنیم) ──
+    # این پنج کلید تا امروز `spotify_*` نام داشتند و آن نام دیگر صادق نیست:
+    # همین‌ها رفتارِ اپل را هم تعیین می‌کنند. مهاجرت خودکار است، ببین `_RENAMED`.
+    "match_meta": ("bool", settings.match_meta),
+    "match_max_tracks": ("int", settings.match_max_tracks),
+    "match_source": ("str", settings.match_source),
+    "match_min": ("int", settings.match_min),
+    "match_yt_fallback": ("bool", settings.match_yt_fallback),
+}
+
+# نامِ قدیمیِ هر کلیدِ تغییرِنام‌داده. **fallback نیست، مهاجرت است** — و تفاوت
+# مهم است: fallbackِ خالص یعنی پنل مقدارِ پیش‌فرض را نشان می‌دهد در حالی که
+# مقدارِ مؤثر چیزِ دیگری است، و ذخیره از آن نمای غلط همان دادهٔ واقعی را پاک
+# می‌کند (دقیقاً همان چیزی که `/buttons` یک‌بار کرد). پس اولین خواندن مقدار را
+# زیرِ نامِ تازه می‌نویسد و نامِ قدیمی را حذف می‌کند؛ از آن به بعد مسیر عادی است.
+#
+# ⚠ **نقطهٔ حذفِ این نگاشت:** بعد از اینکه هر استقرارِ زنده‌ای یک‌بار با این کد
+# بالا آمده باشد (یعنی دیگر هیچ ردیفِ `spotify_*`ی از این پنج‌تا در جدولِ
+# `settings` نمانده)، این دیکشنری و شاخهٔ `get()` باید **حذف** شوند. تا وقتی
+# این‌جاست، هر خواندنِ miss یک خواندنِ اضافه دارد. بدونِ نوشتنِ این نقطه، خودش
+# می‌شد همان fallbackِ خاموشِ ماندگار.
+_RENAMED: dict[str, str] = {
+    "match_meta": "spotify_meta",
+    "match_max_tracks": "spotify_max_tracks",
+    "match_source": "spotify_source",
+    "match_min": "spotify_match_min",
+    "match_yt_fallback": "spotify_yt_fallback",
 }
 
 # کلیدهایی با مقادیرِ مجازِ محدود (اعتبارسنجیِ /admin).
@@ -104,7 +133,7 @@ ENUM_VALUES: dict[str, tuple[str, ...]] = {
     "dl_ux_instagram": ("probe", "quick", ""),
     "dl_ux_twitter": ("probe", "quick", ""),
     "dl_ux_tiktok": ("probe", "quick", ""),
-    "spotify_source": ("ytmusic", "youtube"),
+    "match_source": ("ytmusic", "youtube"),
 }
 
 
@@ -123,20 +152,83 @@ class SettingsStore:
         async with Sessionmaker() as s:
             row = (await s.execute(select(Setting).where(Setting.key == key))).scalar_one_or_none()
         val = row.value if row is not None else None
+        if val is None and key in _RENAMED:
+            return await self._migrate_renamed(key)
         try:
             await self.r.set(_PREFIX + key, _MISSING if val is None else val)
         except Exception:  # noqa: BLE001  — کشِ Redis اختیاری است
             pass
         return val
 
+    async def _migrate_renamed(self, key: str) -> str | None:
+        """مقدارِ ذخیره‌شده زیرِ نامِ قدیمی را به نامِ تازه منتقل می‌کند (یک‌بار).
+
+        روی `log.warning` می‌نشیند نه `info`: انتقالِ خاموش به مسیرِ دیگر همان
+        الگویی است که پارسرِ اسپاتیفای را هفته‌ها مرده نگه داشت. اگر این خط را
+        دیدی یعنی مهاجرت هنوز تمام نشده و `_RENAMED` هنوز حذف‌شدنی نیست.
+        """
+        old = _RENAMED[key]
+        val = await self.get(old)                 # `old` در `_RENAMED` نیست → بی‌بازگشت
+        if val is None:
+            # **این‌جا عمداً negative-cache نوشته نمی‌شود.** پروسهٔ دیگری ممکن است
+            # همین لحظه مهاجرت را تمام کرده و `cfg:<key>` را روی مقدارِ واقعی
+            # گذاشته باشد؛ نوشتنِ `_MISSING` رویش آن مقدار را **بی‌صدا و ماندگار**
+            # دفن می‌کند (کلیدِ منفی TTL ندارد) و ادمین بی‌آنکه بفهمد به پیش‌فرض
+            # برمی‌گردد. هزینه‌اش یک `GET`ِ اضافهٔ Redis روی هر خواندنِ کلیدِ
+            # تنظیم‌نشده است — که با حذفِ `_RENAMED` صفر می‌شود.
+            return None
+        log.warning("settings: migrating %r → %r (value %r). Remove the _RENAMED entry once "
+                    "every deployment has started on this code.", old, key, val)
+        try:
+            await self.set(key, val)
+            await self.reset(old)
+        except Exception:  # noqa: BLE001  — پروسهٔ دیگری زودتر رسید؛ مقدار یکی است
+            log.info("settings: %r was migrated concurrently by another process", key)
+        return val
+
     async def set(self, key: str, value: str) -> None:
-        async with Sessionmaker() as s:
-            row = (await s.execute(select(Setting).where(Setting.key == key))).scalar_one_or_none()
-            if row is None:
-                s.add(Setting(key=key, value=value))
-            else:
-                row.value = value
-            await s.commit()
+        """نوشتنِ override — **مقاوم در برابرِ رقابتِ INSERT**.
+
+        «اول SELECT بعد INSERT» یک check-then-actِ کلاسیک است: دو پروسه که
+        هم‌زمان یک کلیدِ **تازه** بنویسند، هر دو `row is None` می‌بینند و دومی با
+        `UNIQUE constraint failed: settings.key` می‌ترکد. تا امروز عملاً بی‌خطر
+        بود چون تنها نویسنده پنل بود (یک پروسه، نرخِ پایین) — ولی مهاجرتِ
+        `_RENAMED` این را به مسیرِ **هر** پروسه سرِ اولین خواندن تبدیل کرد، و
+        بعد از یک `telabzar update` همه با هم بالا می‌آیند. با اجرا بازتولید شد،
+        نه با استدلال: دو `get_int` هم‌زمان → `IntegrityError`.
+
+        **مسیرِ دوم یک `UPDATE`ِ مستقیم است، نه تکرارِ همان عملیات.** تعارض خودش
+        ثابت می‌کند ردیف حالا هست، و `UPDATE` روی کلیدِ یکتا اصلاً نمی‌تواند
+        تعارض بدهد — یعنی تلاشِ دوم **قطعی** است، نه وابسته به اینکه commitِ
+        برنده پیش از SELECTِ ما رسیده باشد یا نه.
+
+        **صداقتِ اندازه‌گیری:** روی DBِ فایل‌محور و ۲۰ اجرا به‌ازای هر حالت، «یک
+        retry» هم ۲۰/۲۰ می‌شود؛ پس تفاوتِ این دو در این مقیاس **سنجیده‌نشدنی**
+        است و انتخابِ `UPDATE` بر پایهٔ ساختار است نه عدد. آنچه عدد نشان می‌دهد
+        خودِ باگ است: بی‌محافظت ۱/۲۰ در n=2 و ۰/۲۰ در n=8.
+        (هشدار برای هر سنجشِ بعدی: روی `sqlite+aiosqlite:///:memory:` اصلاً
+        رقابت مدل نمی‌شود — SQLAlchemy یک اتصالِ مشترک نگه می‌دارد — و اولین
+        اندازه‌گیریِ همین رفع را گمراه کرد.)
+
+        **فقط `IntegrityError` گرفته می‌شود** — `except Exception` این‌جا خطای
+        واقعیِ دیتابیس (اتصال، قفل، اسکیما) را پنهان می‌کرد و نوشتنِ ازدست‌رفته را
+        به سکوت تبدیل می‌کرد. مسیرِ دوم خودش هیچ چیزی نمی‌گیرد: اگر آن هم بشکند،
+        خطای واقعی است و باید بالا برود.
+        """
+        try:
+            async with Sessionmaker() as s:
+                row = (await s.execute(
+                    select(Setting).where(Setting.key == key))).scalar_one_or_none()
+                if row is None:
+                    s.add(Setting(key=key, value=value))
+                else:
+                    row.value = value
+                await s.commit()
+        except IntegrityError:
+            log.info("settings: %r was created concurrently; writing it as an update", key)
+            async with Sessionmaker() as s:
+                await s.execute(sa_update(Setting).where(Setting.key == key).values(value=value))
+                await s.commit()
         try:
             await self.r.set(_PREFIX + key, value)  # همهٔ پروسه‌ها فوراً می‌بینند
         except Exception:  # noqa: BLE001
