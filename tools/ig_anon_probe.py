@@ -10,20 +10,35 @@
 سؤالِ دوم مهم‌تر از آن است که به‌نظر می‌رسد: یک URLِ امضاشده می‌تواند کاملاً
 سالم به‌نظر برسد و ۴۰۳ بدهد. «پارس شد» با «دانلود می‌شود» یکی نیست.
 
-**اجرا روی سرور:**
+**اجرا روی سرور — دو گام، و گامِ اول اختیاری نیست:**
 
-    cd ~/telabzar && git fetch origin claude/cookie-dependency-audit-9ioyzu \\
-      && git show origin/claude/cookie-dependency-audit-9ioyzu:tools/ig_anon_probe.py \\
-         | docker compose exec -T download-worker python - "<POST_URL>"
+    cd ~/telabzar && B=claude/cookie-dependency-audit-9ioyzu && git fetch origin $B
+
+    # ۱) ماژول را داخلِ کانتینر بگذار  ← بدونِ این، ImportError می‌گیری
+    git show origin/$B:app/instagram_anon.py \\
+      | docker compose exec -T download-worker sh -c 'cat > /srv/app/instagram_anon.py'
+
+    # ۲) ابزار را اجرا کن
+    git show origin/$B:tools/ig_anon_probe.py \\
+      | docker compose exec -T download-worker python - "<POST_URL>"
+
+**چرا گامِ اول لازم است** (و چرا این ابزار خودکفا نوشته **نشده**): ایمیجِ
+download-worker یک عکسِ فوریِ `app/` در زمانِ build است، پس هر ماژولِ **تازه**
+تا rebuildِ بعدی داخلش نیست — الگوی جاافتادهٔ `git show … | docker compose exec`
+فقط برای ابزارهایی کار می‌کند که ماژول‌های *موجود* را صدا می‌زنند (مثلِ
+`spotify_embed_dump.py` که `app.downloader` می‌خواهد). راهِ جایگزین این بود که
+نردبون این‌جا دوباره نوشته شود، ولی آن‌وقت ابزار یک **کپیِ** منطق را می‌سنجید نه
+تولید را — همان واگراییِ دو نسخهٔ دست‌نویس که §۷ دربارهٔ `remove_cookie_file`
+ثبت کرده. پس ماژولِ واقعی تزریق می‌شود و ابزار همان را اجرا می‌کند.
+(بعد از merge و یک `telabzar update` این گام دیگر لازم نیست.)
 
 با `--dump <dir>` پاسخِ **خام** را هم ذخیره می‌کند (برای فیکسچرِ تست):
 
     … | docker compose exec -T download-worker python - "<POST_URL>" --dump /work/igdump
     docker compose cp download-worker:/work/igdump ./igdump
 
-این ابزار در ایمیجِ داکر نیست و هیچ وابستگیِ تازه‌ای نمی‌خواهد: فقط aiohttp که
-`requirements-worker-dl.txt` از قبل دارد. کوکی هرگز نمی‌فرستد — نه خودش و نه
-ماژولی که صدا می‌زند.
+هیچ وابستگیِ تازه‌ای نمی‌خواهد: فقط aiohttp که `requirements-worker-dl.txt` از
+قبل دارد. کوکی هرگز نمی‌فرستد — نه خودش و نه ماژولی که صدا می‌زند.
 """
 from __future__ import annotations
 
@@ -47,6 +62,26 @@ def _fmt(n: int | None) -> str:
     return "?"
 
 
+async def _read_capped(content, cap: int) -> int:
+    """بایت‌های بدنه را تا سقفِ `cap` بشمار.
+
+    **یک `await content.read(n)` کافی نیست و این‌جا گزارشِ غلط داد.** خوانندهٔ
+    aiohttp «تا سقفِ n» می‌دهد، نه «دقیقاً n»: هرچه در بافر است برمی‌گرداند، پس
+    روی یک پاسخِ چندتکه‌ای عددی مثلِ `got=1B` چاپ می‌شد در حالی که status و
+    Content-Type و total درست بودند (اندازه‌گیری‌شده روی مستر).
+
+    چرا تا سقف و نه `read(-1)`: اگر سروری هدرِ Range را نادیده بگیرد و ۲۰۰ با
+    کلِ فایل بدهد، `read(-1)` یک ویدیوی چندمگابایتی را کامل می‌کشد — و این
+    ابزار قرار است **سنجشِ دسترسی** باشد نه دانلود.
+    """
+    total = 0
+    async for part in content.iter_chunked(16384):
+        total += len(part)
+        if total >= cap:
+            break
+    return total
+
+
 async def _range_get(session, url: str, opts) -> str:
     """یک range-GETِ کوچک → «HTTP <status> · <content-type> · <total size>»."""
     import aiohttp
@@ -56,7 +91,7 @@ async def _range_get(session, url: str, opts) -> str:
                                              **D._BROWSER_HEADERS},
                                proxy=D._http_proxy(opts.get("proxy")),
                                timeout=aiohttp.ClientTimeout(total=30)) as r:
-            chunk = await r.content.read(_RANGE_BYTES + 1)
+            got = await _read_capped(r.content, _RANGE_BYTES + 1)
             # Content-Range: bytes 0-65535/12345678  → حجمِ کلِ فایل
             total = None
             cr = r.headers.get("Content-Range", "")
@@ -64,9 +99,9 @@ async def _range_get(session, url: str, opts) -> str:
                 total = int(cr.rsplit("/", 1)[-1])
             elif r.headers.get("Content-Length", "").isdigit():
                 total = int(r.headers["Content-Length"])
-            ok = "✅" if r.status in (200, 206) and chunk else "❌"
+            ok = "✅" if r.status in (200, 206) and got else "❌"
             return (f"{ok} HTTP {r.status} · {r.headers.get('Content-Type')} · "
-                    f"total={_fmt(total)} · got={_fmt(len(chunk))}")
+                    f"total={_fmt(total)} · got={_fmt(got)}")
     except Exception as exc:                       # noqa: BLE001 — تشخیص است
         return f"❌ {type(exc).__name__}: {str(exc)[:110]}"
 
@@ -84,7 +119,20 @@ async def main(argv: list[str]) -> int:
 
     import aiohttp
     from app import downloader as D
-    from app import instagram_anon as IA
+    try:
+        from app import instagram_anon as IA
+    except ImportError as exc:
+        # ایمیجْ عکسِ فوریِ زمانِ build است، پس ماژولِ تازه داخلش نیست. خطای خامِ
+        # `cannot import name 'instagram_anon' from 'app'` علت را نمی‌گوید و
+        # وقت می‌گیرد؛ این‌جا دقیقاً دستورِ لازم چاپ می‌شود.
+        print(f"❌ {exc}\n\n"
+              "ماژول داخلِ کانتینر نیست (ایمیج در زمانِ build ساخته شده). یک‌بار بزن:\n\n"
+              "  B=claude/cookie-dependency-audit-9ioyzu\n"
+              "  git show origin/$B:app/instagram_anon.py \\\n"
+              "    | docker compose exec -T download-worker sh -c "
+              "'cat > /srv/app/instagram_anon.py'\n\n"
+              "بعد همین ابزار را دوباره اجرا کن. (پس از merge و `telabzar update` لازم نیست.)")
+        return 2
 
     # opts عمداً همان شکلی است که `tasks_download._opts()` می‌سازد — **با** یک
     # کوکیِ جعلی داخلش، تا اگر روزی این ماژول کوکی بفرستد، این‌جا دیده شود.

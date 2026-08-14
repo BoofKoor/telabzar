@@ -20,6 +20,7 @@ HTTP 200 دادند** و ساختارِ پارس‌شده‌شان یکسان ب
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import pathlib
@@ -386,6 +387,94 @@ async def test_a_url_without_a_shortcode_never_touches_the_network(server, point
     assert out.result is None and out.verdict == IA.V_UNSUPPORTED
     assert seen == [], "پروفایل حالتِ ناشناس نیست — نباید درخواستی برود"
     assert next(r for r in out.rungs if r.rung == "embed").reason == IA.R_BAD_URL
+
+
+# ── ۴) ابزارِ probe: گزارشی که گمراه کند از نبودِ گزارش بدتر است ─
+def _probe_tool():
+    """`tools/ig_anon_probe.py` را بارگذاری می‌کند (`tools/` پکیج نیست)."""
+    import importlib.util
+    path = pathlib.Path(__file__).resolve().parent.parent / "tools" / "ig_anon_probe.py"
+    spec = importlib.util.spec_from_file_location("ig_anon_probe", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+FIRST_CHUNK, REST_CHUNK = 2_000, 38_000
+BODY_LEN = FIRST_CHUNK + REST_CHUNK
+
+
+@pytest.fixture
+async def dribbling_server():
+    """بدنه را تکه‌تکه می‌فرستد، با یک **دروازه** وسطش.
+
+    نسخهٔ اولِ این فیکسچر فقط ۲۰ تکه پشتِ‌هم می‌نوشت و کنترلش شکست: روی
+    لوپ‌بک کلِ بدنه پیش از اولین `read` در بافر می‌نشیند، پس یک `read()` هم
+    همه‌اش را می‌گرفت و هارنس اصلاً مکانیزم را مدل نمی‌کرد. طبقِ قاعدهٔ §۶ —
+    «جایی که رقابت موضوع است، درهم‌آمیزی را **مجبور** کن، منتظرش نمان» —
+    سرور بعد از تکهٔ اول روی یک `Event` می‌ایستد تا تست بگوید ادامه بده.
+    """
+    gate = asyncio.Event()
+
+    async def handler(req: web.Request):
+        resp = web.StreamResponse(status=206, headers={
+            "Content-Type": "video/mp4",
+            "Content-Range": f"bytes 0-{BODY_LEN - 1}/9999999"})
+        await resp.prepare(req)
+        await resp.write(b"x" * FIRST_CHUNK)
+        if req.query.get("gate") == "closed":
+            await gate.wait()
+        await resp.write(b"x" * REST_CHUNK)
+        await resp.write_eof()
+        return resp
+
+    app = web.Application()
+    app.router.add_route("*", "/{tail:.*}", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    yield site._server.sockets[0].getsockname()[1], gate
+    gate.set()
+    await runner.cleanup()
+
+
+async def test_the_probe_counts_the_whole_capped_body_not_the_first_chunk(dribbling_server):
+    """روی مستر بعضی آیتم‌ها `got=1B` گزارش شد در حالی که status/Content-Type/total
+    درست بودند — یعنی ایرادِ **شمارشِ ابزار** بود نه دانلود.
+
+    `await content.read(n)` «تا سقفِ n» می‌دهد نه «دقیقاً n»: هرچه رسیده را
+    برمی‌گرداند. §۷ صریح است که تشخیصی که بتواند گمراه کند از نبودِ تشخیص بدتر
+    است (همان درسِ رتبهٔ کاذبِ `spotify_query_probe`).
+    """
+    import aiohttp
+    port, gate = dribbling_server
+    tool = _probe_tool()
+
+    async with aiohttp.ClientSession() as s:
+        # دروازه بسته → سرور بعد از تکهٔ اول ایستاده، پس یک `read` **فقط**
+        # می‌تواند همان تکه را ببیند. قطعی است، نه زمان‌محور.
+        async with s.get(f"http://127.0.0.1:{port}/x?gate=closed") as r:
+            single = len(await r.content.read(65536))
+        gate.set()
+        async with s.get(f"http://127.0.0.1:{port}/x") as r:
+            capped = await tool._read_capped(r.content, 65536)
+
+    assert single == FIRST_CHUNK, ("کنترل: اگر یک read کلِ بدنه را می‌داد، این "
+                                   "تست دربارهٔ هیچ‌چیز نبود")
+    assert capped == BODY_LEN
+
+
+async def test_the_probe_cap_stops_a_server_that_ignores_range(dribbling_server):
+    """کنترلِ معکوس: سقف باید واقعاً ببُرد، وگرنه ابزار به‌جای سنجشِ دسترسی یک
+    ویدیوی چندمگابایتی را کامل می‌کشد."""
+    import aiohttp
+    port, _gate = dribbling_server
+    tool = _probe_tool()
+    async with aiohttp.ClientSession() as s:
+        async with s.get(f"http://127.0.0.1:{port}/x") as r:
+            capped = await tool._read_capped(r.content, 5_000)
+    assert 5_000 <= capped < BODY_LEN
 
 
 async def test_an_injected_session_is_used_and_not_closed(server, point_at):
