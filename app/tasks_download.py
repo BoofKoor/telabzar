@@ -32,6 +32,7 @@ from . import cookies as ck
 from . import dl_active
 from . import dl_cache
 from . import downloader as D
+from . import instagram_anon as IGA
 from . import processing as P
 from . import safety
 from . import settings_store
@@ -337,6 +338,45 @@ async def _metric(redis, platform: str, ok: bool) -> None:
             await redis.expire(key, 172800)  # ۲ روز
     except Exception:  # noqa: BLE001
         pass
+
+
+async def _iganon_metric(redis, bucket: str) -> None:
+    """شمارندهٔ پاسِ ناشناسِ اینستاگرام — هم‌شکلِ `_metric`، انقضای ۲ روز.
+
+    شش سطل (`IGA.BUCKETS`). دو عددی که این‌ها می‌سازند و کلِ فاز ۲ را قضاوت
+    می‌کنند:
+
+    * «چند دانلودِ اینستاگرام هیچ کوکی‌ای لمس نکرد» = **فقط** `ok`.
+      `fetch_failed` عمداً بیرون است: آن‌جا resolve موفق بوده ولی بایت نیامده،
+      یعنی به مسیرِ کوکی افتاده‌ایم و کوکی سوخته.
+    * پوششِ **قابلِ‌دستیابی** = `ok / (ok+unsupported+blocked+network+fetch_failed)`
+      و پوششِ **کل** = `ok / مجموعِ شش‌تا`. دو عدد لازم است نه یکی، چون استوری
+      (`skipped`) هرگز قابلِ رفع نیست و ریختنش در مخرجْ عددی می‌سازد که هیچ‌وقت
+      بالا نمی‌رود.
+    """
+    if redis is None:
+        return
+    key = f"dlstat:iganon:{bucket}:{_today()}"
+    try:
+        n = await redis.incr(key)
+        if n == 1:
+            await redis.expire(key, 172800)  # ۲ روز، مثلِ `_metric`
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _ig_anon_pass(redis, url: str, workdir: str,
+                        progress, cancel) -> IGA.InstagramAnonFetch:
+    """پاسِ ناشناس + ثبتِ سطلِ تله‌متری. هیچ‌وقت به `cookies.py` دست نمی‌زند."""
+    cap_mb = await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb)
+    # `_opts` تنها سازندهٔ گزینه‌هاست (§۵)، پس همان را می‌سازیم — `cookie_path`
+    # عمداً داده نمی‌شود، هرچند خودِ ماژول هم کلیدِ `cookies` را نمی‌خواند.
+    opts = await _opts(redis, "instagram", workdir)
+    got = await IGA.download_anonymous(url, workdir, opts,
+                                       max_bytes=cap_mb * 1024 * 1024,
+                                       progress=progress, cancel=cancel)
+    await _iganon_metric(redis, got.bucket)
+    return got
 
 
 async def _opts(redis, platform: str, workdir: str | None = None,
@@ -880,7 +920,39 @@ async def run_download(ctx: dict, payload: dict) -> None:
             _anon_first(platform)
             and await settings_store.get_bool("dl_cookie_when_needed",
                                               settings.dl_cookie_when_needed))
-        while True:
+
+        # ── پاسِ ناشناسِ اینستاگرام — **قبل از هر انتخابِ کوکی** ──
+        # نقطهٔ اتصال عمداً این‌جاست و نه داخلِ `download_gallerydl`: تا رسیدن به
+        # موتور، `_next_cookie` از قبل `pick` کرده، `materialize` فایل را روی
+        # دیسکِ نود نوشته و `note_use` مهرِ فاصلهٔ حداقلی زده — هر سه بی‌بازگشت.
+        # گیت روی **شورت‌کد** است نه پلتفرم: `platform_of` برای استوری و پروفایل
+        # هم `instagram` می‌دهد، ولی آن‌ها حالتِ ناشناس ندارند.
+        #
+        # `anon_won` داخلِ حلقه **هرگز نوشته نمی‌شود**، پس `while not anon_won:`
+        # از داخلِ حلقه بایت‌به‌بایت همان `while True:`ِ قبلی است. `while paths is
+        # None:` عمداً ننوشته شد: `ck.mark_ok` (`cookies.py`) `get_meta`/`set_meta`
+        # را بدونِ `try` صدا می‌زند، پس یک خرابیِ Redis **بعد از** دانلودِ موفق
+        # می‌تواند با `paths`ِ ست‌شده به `except` بیفتد و آن فرم آن‌جا رفتار را
+        # عوض می‌کرد (تحویل به‌جای تلاشِ دوباره).
+        anon_won = False
+        if (engine == "gallerydl" and platform == "instagram"
+                and await settings_store.get_bool("dl_ig_anon_enabled",
+                                                  settings.dl_ig_anon_enabled)):
+            try:
+                got = await _ig_anon_pass(redis, url, workdir, _progress, _cancelled)
+            except P.ProcessingCancelled:
+                # هم‌شکلِ مسیرِ لغوِ داخلِ حلقه. `dl_active`/keepalive/کلیدِ cancel/
+                # workdir را `finally`ِ بیرونیِ همین تابع می‌بندد، پس این `return`
+                # چیزی نشت نمی‌دهد؛ تیکر در آن `finally` نیست و باید صریح بسته شود.
+                await _stop_ticker()
+                await _edit(bot, chat_id, status_mid, t(lang, "cancelled"))
+                return
+            if got.won:
+                paths, gallery_caption, anon_won = list(got.paths), got.caption, True
+                log.info("instagram anon: delivered %d item(s) without touching a cookie",
+                         len(paths))
+
+        while not anon_won:
             if anon:
                 cookie_name, cookie_path = None, None
             else:

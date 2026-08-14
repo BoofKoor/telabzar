@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     dl_rich_posts: bool = True     # پستِ چند‌عکسی را Rich Message بفرست (fallback: آلبوم)
     dl_cache_enabled: bool = True  # لینکِ تکراری آنی از file_idِ کش‌شده تحویل شود
     dl_cookie_when_needed: bool = True  # اول ناشناس؛ کوکی فقط وقتی سرویس بخواهد
+    # مسیرِ ناشناسِ اینستاگرام (`app/instagram_anon.py`): پیش از هر انتخابِ کوکی
+    # از صفحهٔ embed تلاش کن. پیش‌فرض **خاموش** است و این عمدی است — استقرار
+    # نباید هیچ رفتاری را عوض کند؛ روشن‌کردنش تصمیمِ جداگانه‌ای است که از پنل
+    # گرفته می‌شود و خاموش‌کردنش استقرارِ تازه نمی‌خواهد.
+    dl_ig_anon_enabled: bool = False
     proxy_url: str = ""            # egressِ تمیزِ خودت، مثل socks5h://host:1080 (خالی = مستقیم)
     # پیش‌فرض مطلق است، نه خالی: با رشتهٔ خالی `os.path.join("", name)` یک مسیرِ
     # **نسبی** می‌داد و کوکی در CWDِ پروسه نوشته می‌شد. compose همیشه این را ست

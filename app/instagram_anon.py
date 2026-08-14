@@ -40,11 +40,14 @@ import asyncio
 import html as _html
 import json
 import logging
+import os
 import re
+import shutil
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from . import downloader as D
+from .exceptions import ProcessingCancelled
 
 log = logging.getLogger("telabzar.ig_anon")
 
@@ -111,6 +114,19 @@ R_PARSE_FAILED, R_NO_MEDIA = "parse_failed", "no_media"
 
 #: حکمِ کلی — چیزی که فاز ۲ روی آن تصمیم می‌گیرد.
 V_OK, V_UNSUPPORTED, V_BLOCKED, V_NETWORK = "ok", "unsupported", "blocked", "network"
+
+#: سطلِ تله‌متریِ `download_anonymous`. چهارتای اول همان `verdict`ِ resolve‌اند و
+#: دوتای آخر چیزهایی که resolve دربارهٔ‌شان حرفی ندارد:
+#:
+#: * `B_SKIPPED` — لینک اصلاً موردِ ناشناس نیست (استوری/پروفایل: شورت‌کد ندارد).
+#:   **بدونِ هیچ درخواستِ شبکه‌ای** شمرده می‌شود.
+#: * `B_FETCH_FAILED` — resolve موفق بود ولی بایت‌ها نیامدند (URLِ امضاشدهٔ
+#:   منقضی، سقفِ تجمعی وسطِ کاروسل، قطعیِ شبکه، اتمامِ بودجهٔ زمانی). این سطل
+#:   **نباید** با `B_OK` جمع شود: در این حالت به مسیرِ کوکی افتاده‌ایم و کوکی
+#:   سوخته، پس شمردنش به‌عنوان موفقیت ادعای «این‌قدر دانلود کوکی لمس نکرد» را
+#:   دروغ می‌کند.
+B_OK, B_SKIPPED, B_FETCH_FAILED = V_OK, "skipped", "fetch_failed"
+BUCKETS = (V_OK, V_UNSUPPORTED, V_BLOCKED, V_NETWORK, B_SKIPPED, B_FETCH_FAILED)
 
 
 @dataclass(frozen=True)
@@ -514,3 +530,146 @@ async def resolve(url: str, opts: dict | None = None, *,
     `resolve_detailed` را صدا بزند و `verdict` را بخواند.
     """
     return (await resolve_detailed(url, opts, session=session)).result
+
+
+# ── فاز ۲: از URL به بایت ────────────────────────────────────────
+#: زیرشاخهٔ اختصاصیِ پاسِ ناشناس داخلِ workdirِ جاب. **جداسازی، نه سلیقه**: اگر
+#: ۶ آیتم از ۱۱ تا بیاید و بعد بیفتد، آن فایل‌ها نباید در workdir بمانند تا
+#: مسیرِ کوکی هم رویش بریزد و تحویل یک مخلوطِ خراب ببیند.
+ANON_DIR = "igan"
+
+#: کرانِ زمانیِ **کلِ** حلقهٔ دانلود (رزولو جداست و خودش ۲۵ ثانیه سقف دارد).
+#: چرا لازم است: `download_direct` با `ClientTimeout(total=None, connect=30,
+#: sock_read=120)` کار می‌کند، یعنی هیچ کرانِ کلی per-item ندارد — برای یک فایلِ
+#: تکی درست است، ولی این‌جا در N آیتم ضرب می‌شود و تنها کرانِ باقی‌مانده
+#: `job_timeout`ِ ۵۴۰۰ ثانیه‌ایِ ورکر است. این پاس **گمانه‌زنی** است: اگر نگرفت
+#: باید سریع کنار برود تا مسیرِ کوکی وقت داشته باشد، نه اینکه اسلاتِ دانلود را
+#: یک ساعت نگه دارد و بعد تازه مسیرِ اصلی شروع شود.
+ANON_FETCH_BUDGET = 300.0
+
+
+@dataclass(frozen=True)
+class InstagramAnonFetch:
+    """خروجیِ `download_anonymous` — شکلی که `run_download` مستقیم مصرف می‌کند."""
+
+    #: دقیقاً شکلِ `paths`ِ `run_download`: (مسیر، info، thumb)
+    paths: tuple[tuple[str, dict, None], ...] = ()
+    caption: str | None = None
+    bucket: str = B_SKIPPED
+
+    @property
+    def won(self) -> bool:
+        return self.bucket == B_OK and bool(self.paths)
+
+
+def _slice_progress(progress, index: int, total: int):
+    """درصدِ per-item را به درصدِ کلِ پست تبدیل می‌کند.
+
+    بدونِ این، کاروسلِ ۱۱تایی نوار را یازده بار از ۰ تا ۹۹ می‌بَرد.
+    """
+    if progress is None or total <= 0:
+        return None
+
+    async def _cb(pct: float) -> None:
+        await progress((index * 100.0 + max(0.0, min(100.0, pct))) / total)
+
+    return _cb
+
+
+def _ordered_name(path: str, shortcode: str, index: int) -> str:
+    """فایل را به `<shortcode>_<NN><ext>` تغییرِ نام می‌دهد و مسیرِ تازه را می‌دهد.
+
+    نامی که `direct_filename` از مسیرِ CDN درمی‌آورد **مرتب نیست** (اندازه‌گیری‌شده:
+    `469847721_18072_n.jpg`)، پس نه روی کارت خوانا است و نه ترتیبِ کاروسل را
+    نگه می‌دارد. ترتیبِ واقعی از **ساختِ** فهرست می‌آید نه از `sorted()` — این
+    نام‌گذاری فقط برای خوانایی و برای اینکه دو آیتم نامِ یکسان نگیرند است.
+    """
+    ext = os.path.splitext(path)[1] or ".bin"
+    dest = os.path.join(os.path.dirname(path), f"{shortcode}_{index:02d}{ext}")
+    if dest != path:
+        os.replace(path, dest)
+    return dest
+
+
+async def download_anonymous(url: str, workdir: str, opts: dict | None = None, *,
+                             max_bytes: int = 0, progress=None, cancel=None,
+                             session=None,
+                             budget: float = ANON_FETCH_BUDGET) -> InstagramAnonFetch:
+    """لینکِ اینستاگرام → فایل‌های روی دیسک، **بدونِ لمسِ هیچ اکانتی**.
+
+    بایت‌ها را `downloader.download_direct` می‌کشد، نه یک لوپِ دست‌نویس. چه چیزی
+    از آن ارث می‌رسد: `_direct_connector` (همان رزولورِ ضدِTOCTOU/پروکسیِ سیاستِ
+    موتورِ `direct`)، `_follow` (هر پرشِ ریدایرکت دوباره `is_safe_url` می‌خورد)،
+    سقفِ **دولایه** با حذفِ فایلِ نیمه‌کاره، و قراردادِ progress/cancel. و مهم‌تر:
+    آن تابع کلیدِ `opts["cookies"]` را **اصلاً نمی‌خواند**، پس قاعدهٔ بنیادیِ این
+    ماژول رایگان حفظ می‌شود. نوشتنِ یک لوپِ جدا یعنی چکِ per-hopِ `_follow`
+    بازنویسی شود — همان «دو کپیِ دست‌نویس از یک قاعده واگرا می‌شوند» که §۷ برای
+    `remove_cookie_file` ثبت کرده.
+
+    `max_bytes` سقفِ **تجمعی** است: بودجهٔ باقی‌مانده به هر آیتم پاس داده می‌شود،
+    پس کاروسلِ پرحجم وسطِ راه می‌ایستد به‌جای اینکه ۱۱ فایل بکشد و بعد در چکِ
+    حجمِ `run_download` بیفتد.
+
+    شکست هیچ‌وقت استثنا نمی‌دهد (جز لغو، که باید بالا برود): `bucket` را بخوان.
+    """
+    opts = opts or {}
+    shortcode = shortcode_of(url)
+    if not shortcode:
+        # استوری و لینکِ پروفایل: **قبل از هر کاری** بیرون. نه سشنی ساخته
+        # می‌شود، نه درخواستی می‌رود — این حالت‌ها مسیرِ ناشناس ندارند (cobalt هم
+        # استوری را بی‌کوکی رد می‌کند) و باید مستقیم به کوکی بروند.
+        return InstagramAnonFetch(bucket=B_SKIPPED)
+
+    out = await resolve_detailed(url, opts, session=session)
+    if out.result is None:
+        # `resolve_detailed` خودش یک `log.warning` با علتِ هر رده زده است.
+        return InstagramAnonFetch(bucket=out.verdict)
+
+    res = out.result
+    outdir = os.path.join(workdir, ANON_DIR)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + budget
+    paths: list[tuple[str, dict, None]] = []
+    done = False
+    try:
+        os.makedirs(outdir, exist_ok=True)
+        remaining, total = max_bytes, len(res.items)
+        for i, item in enumerate(res.items):
+            left = deadline - loop.time()
+            if left <= 0:
+                raise TimeoutError(
+                    f"anonymous fetch budget of {budget:.0f}s exhausted at item {i}")
+            # هر آیتم در زیرشاخهٔ خودش: نامِ CDN می‌تواند تکراری باشد و آن‌وقت
+            # آیتمِ دوم روی اولی می‌نوشت — **حینِ** دانلود، یعنی پیش از تغییرِ نام.
+            itemdir = os.path.join(outdir, f"{i:02d}")
+            os.makedirs(itemdir, exist_ok=True)
+            path, info = await asyncio.wait_for(
+                D.download_direct(item.url, itemdir, opts, max_bytes=remaining,
+                                  progress=_slice_progress(progress, i, total),
+                                  cancel=cancel),
+                timeout=left)
+            path = _ordered_name(path, res.shortcode, i)
+            if remaining:
+                # هرگز به ۰ نرسد: در `download_direct` صفر یعنی «بی‌سقف».
+                # ۱ یعنی آیتمِ بعدی قطعاً `DirectTooLarge` می‌گیرد، که همان
+                # چیزی است که می‌خواهیم — سقف واقعاً تمام شده.
+                remaining = max(1, remaining - os.path.getsize(path))
+            paths.append((path, info, None))
+        done = True
+    except ProcessingCancelled:
+        raise                       # لغوِ کاربر مالِ `run_download` است، نه ما
+    except Exception as exc:  # noqa: BLE001
+        # resolve موفق بود ولی بایت‌ها نیامدند. سطلِ جدا، چون این حالت **کوکی
+        # می‌سوزاند** (به مسیرِ کوکی می‌افتیم) و نباید با `ok` قاطی شود.
+        log.warning("instagram anon: %s resolved but the fetch failed (%s) — "
+                    "falling through to the cookie path",
+                    res.shortcode, f"{type(exc).__name__}: {exc}"[:150])
+        return InstagramAnonFetch(bucket=B_FETCH_FAILED)
+    finally:
+        # قیدِ جداسازی: هر خروجی‌ای جز موفقیتِ **کامل** باید workdir را دقیقاً
+        # به حالتِ قبل از خودش برگرداند. در `finally` است تا لغو و
+        # `CancelledError` (که `except Exception` نمی‌گیردش) هم پوشش بگیرند.
+        if not done:
+            shutil.rmtree(outdir, ignore_errors=True)
+
+    return InstagramAnonFetch(tuple(paths), res.caption, B_OK)
