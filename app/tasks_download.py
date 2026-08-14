@@ -179,15 +179,28 @@ async def _warn_cookieless(redis, bot, platform: str, node: str) -> None:
     اکانتی ثبت نمی‌شود و پنل «سالم · خطا: ۰» می‌ماند در حالی که هیچ دانلودی کار
     نمی‌کند. حالت‌های واقعی‌اش: آینهٔ Redis خالی، `COOKIES_DIR`ِ اشتباه روی نود، یا
     همهٔ اکانت‌ها در کول‌داون/فریز.
+
+    **سطحِ لاگ همان تفکیکِ `_alert_if_low` را دارد و به همان دلیل.** خطِ ERROR
+    پیش‌تر *قبل از* گاردِ خروج زده می‌شد، پس هر دانلود از هشت پلتفرمی که سطلشان
+    پرکردنی نیست (ساندکلاود، آپارات، ویمئو، …) یک ERRORِ دائمیِ کاذب می‌گذاشت و
+    خطای واقعی لای آن گم می‌شد — همان ردهٔ سیگنالِ کاذبِ DM، یک پله آرام‌تر. پس:
+    سطلِ **بی‌اکانت** مسیرِ سالم است و `info` می‌گیرد؛ سطلی که اکانت دارد ولی هیچ
+    کدام قابلِ‌استفاده نیست **همچنان ERROR** است — آن واقعاً ناهنجاری است و
+    خفه‌کردنش همان اشتباهی است که گاردِ `healthy_count` در `_alert_if_low` بود.
     """
     if redis is None:
         return
     try:
-        usable = await ck.healthy_count(redis, platform)
+        total, usable = await ck.pool_counts(redis, platform)
+        if not total:
+            # سطل هرگز پر نشده؛ دانلود بی‌کوکی ادامه می‌دهد و ممکن است موفق شود
+            log.info("cookieless attempt on %s from exit %s — the pool has no account",
+                     platform, ck.exit_label(node))
+            return                       # واقعاً اکانتی نیست؛ پیامِ عادی درست است
         log.error("cookieless attempt on %s from exit %s — %d usable account(s) in the pool",
                   platform, ck.exit_label(node), usable)
         if not usable:
-            return                       # واقعاً اکانتی نیست؛ پیامِ عادی درست است
+            return                       # استخر سوخته؛ DMاش کارِ `_alert_if_low` است
         if not await redis.set(f"ckblind:{platform}", "1", ex=3 * 3600, nx=True):
             return                       # تازه خبر داده‌ایم
         text = (f"🛠 <b>اکانت‌ها به ورکر نرسیدند</b>\n\n"

@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import stat
 
@@ -169,3 +170,47 @@ async def test_a_failed_unknown_link_does_not_alert(redis, pool, tmp_path,
 
     assert bot.edits and "❌" in bot.edits[-1], "کاربر باید خطا را ببیند"
     assert bot.messages == [], f"ادمین نباید هشدار بگیرد: {bot.messages}"
+
+
+# ── ۶) همان تفکیک، یک پله آرام‌تر: سطحِ لاگِ `_warn_cookieless` ─────
+# DM ساکت شد ولی خطِ ERROR نه — و ERRORِ کاذبِ دائمی یعنی خطای واقعی لایش گم
+# می‌شود. سه حالت، چون تفکیک دو مرزی است نه یکی.
+def _levels(records, needle="cookieless attempt"):
+    return [r.levelname for r in records if needle in r.getMessage()]
+
+
+async def test_an_unstocked_bucket_does_not_log_an_error(redis, pool, caplog):
+    """سطلِ بی‌اکانت مسیرِ سالم است — لاگ باید باشد، ولی ERROR نه."""
+    with caplog.at_level(logging.DEBUG, logger="telabzar.dl"):
+        await TD._warn_cookieless(redis, FakeBot(), "aparat", "master")
+
+    assert _levels(caplog.records) == ["INFO"], _levels(caplog.records)
+
+
+async def test_a_burned_pool_still_logs_an_error(redis, pool, caplog):
+    """کنترلِ معکوس: اکانت دارد ولی هیچ‌کدام سالم نیست → واقعاً ناهنجاری است.
+
+    اگر این گارد را روی `usable` بنویسی (نه `total`) این تست fail می‌شود — همان
+    اشتباهی که `test_a_burned_pool_still_screams` یک پله بالاتر می‌گیرد.
+    """
+    await _add(redis, "cookies_a.txt", "other", frozen=True)
+    await _add(redis, "cookies_b.txt", "other", fail_streak=9)
+    assert await ck.pool_counts(redis, "other") == (2, 0)
+
+    with caplog.at_level(logging.DEBUG, logger="telabzar.dl"):
+        await TD._warn_cookieless(redis, FakeBot(), "other", "master")
+
+    assert _levels(caplog.records) == ["ERROR"], _levels(caplog.records)
+
+
+async def test_a_pool_the_worker_cannot_see_still_errors_and_dms(redis, pool, caplog):
+    """حالتی که این تابع اصلاً برایش ساخته شد: اکانتِ سالم هست ولی بی‌کوکی رفتیم."""
+    await _add(redis, "instagram_a.txt", "instagram")
+    assert await ck.pool_counts(redis, "instagram") == (1, 1)
+
+    bot = FakeBot()
+    with caplog.at_level(logging.DEBUG, logger="telabzar.dl"):
+        await TD._warn_cookieless(redis, bot, "instagram", "master")
+
+    assert _levels(caplog.records) == ["ERROR"], _levels(caplog.records)
+    assert len(bot.messages) == 1 and "🛠" in bot.messages[0]
