@@ -77,6 +77,16 @@ async def startup(ctx: dict) -> None:
     await textstore.load()  # متن‌های override‌شدهٔ ادمین را پیش‌بارگذاری کن
     if settings.node_role:  # این پروسه یک نود است → heartbeat به رجیستریِ مستر بزن
         ctx["hb_task"] = asyncio.create_task(_node_heartbeat())
+    # حفرهٔ راه‌اندازیِ سرد: اکانت‌هایی که پیش از افزوده‌شدنِ `ckseen` ساخته شده‌اند
+    # ردِ ماندگار ندارند، پس سطلِ **پرِ** اینستاگرام «هرگز پر نشده» خوانده می‌شود و
+    # حذفِ سشن‌های مرده‌اش هیچ هشداری نمی‌دهد. یک پیمایش سرِ استارت، idempotent.
+    try:
+        from . import cookies as ck
+        n = await ck.backfill_seen(settings_store.get_store().r)
+        if n:
+            log.info("cookie pool: marked %d platform(s) as stocked", n)
+    except Exception:  # noqa: BLE001 — تشخیص است، نباید استارتِ ورکر را بشکند
+        log.debug("cookie seen-backfill skipped", exc_info=True)
     # پس‌زمینه و غیرمسدودکننده: ورکر همین حالا آمادهٔ کار است. ارجاع در ctx
     # نگه داشته می‌شود وگرنه تسک می‌تواند قبل از اتمام زباله‌روبی شود.
     ctx["warm_task"] = asyncio.create_task(_warm_safety_model())

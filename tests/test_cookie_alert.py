@@ -298,3 +298,77 @@ async def test_a_never_stocked_bucket_is_still_silent_after_the_trace_exists(
 
     assert bot.messages == []
     assert _levels(caplog.records) == ["INFO"], _levels(caplog.records)
+
+
+# ── ۸) حفرهٔ راه‌اندازیِ سرد ────────────────────────────────────────
+# رد را `set_meta` می‌نویسد، ولی اکانت‌های موجود پیش از این کد ساخته شده‌اند و
+# ردی ندارند. اندازه‌گیری‌شده، نویسنده‌های `set_meta` عبارت‌اند از `mark_ok`/
+# `mark_fail` (هر تلاشِ دانلود)، `unfreeze` و سه مسیرِ پنل/ربات — پس پنجره از
+# استقرار تا **اولین دانلودِ** آن پلتفرم باز است، و ادمین دقیقاً در همان پنجره
+# سشن‌های مرده را پاک می‌کند.
+
+async def _forget_trace(redis, platform: str) -> None:
+    """اکانتی که پیش از افزوده‌شدنِ `ckseen` ساخته شده بود را شبیه‌سازی می‌کند."""
+    await redis.delete(f"ckseen:{platform}")
+
+
+async def test_without_the_backfill_a_pre_existing_pool_goes_silent(redis, pool):
+    """**کنترلِ خودِ حفره** — این تست حفره را ثبت می‌کند، نه رفع را.
+
+    رفتاری است و روی هر دو طرف سبز می‌ماند: کارش این است که نشان دهد بدونِ
+    backfill سکوت واقعاً رخ می‌دهد، وگرنه تستِ بعدی چیزی را اثبات نمی‌کند.
+    """
+    await _add(redis, "instagram_a.txt", "instagram")
+    await _forget_trace(redis, "instagram")          # اکانتِ «قدیمی»
+    await _delete(redis, "instagram_a.txt")
+
+    bot = FakeBot()
+    await TD._alert_if_low(redis, bot, "instagram")
+    assert bot.messages == [], "بدونِ backfill سکوت است — همین حفره است"
+
+
+async def test_the_backfill_closes_the_cold_start_hole(redis, pool):
+    """سرِ استارت، سطلِ پر باید ردش را بگیرد تا حذفِ بعدی ساکت نماند.
+
+    صداقتِ اثبات: روی سورسِ پیش از رفع این با `AttributeError` می‌افتد (نبودِ
+    symbol)، که ضعیف‌تر از شکافِ رفتاری است. چیزی که واقعاً رگرسیونِ محتمل را
+    می‌گیرد `test_worker_startup_backfills_the_seen_marks` است — «هلپر هست ولی
+    کسی صدایش نمی‌زند».
+    """
+    await _add(redis, "instagram_a.txt", "instagram")
+    await _add(redis, "youtube_a.txt", "youtube")
+    await _forget_trace(redis, "instagram")
+    await _forget_trace(redis, "youtube")
+
+    assert await ck.backfill_seen(redis) == 2
+
+    await _delete(redis, "instagram_a.txt")
+    bot = FakeBot()
+    await TD._alert_if_low(redis, bot, "instagram")
+    assert len(bot.messages) == 1, "سطلی که زمانی پر بوده باید داد بزند"
+
+
+async def test_the_backfill_does_not_invent_a_trace(redis, pool):
+    """کنترل: سطلی که اکانت ندارد نباید علامت بخورد، وگرنه backfill همان نویزِ
+    نُه سطل را برمی‌گرداند."""
+    await _add(redis, "instagram_a.txt", "instagram")
+    assert await ck.backfill_seen(redis) == 1
+    assert not await ck.was_stocked(redis, "aparat")
+
+    bot = FakeBot()
+    await TD._alert_if_low(redis, bot, "aparat")
+    assert bot.messages == []
+
+
+def test_worker_startup_backfills_the_seen_marks():
+    """هلپرِ صداـنشده همان حفره است. سورس با AST خوانده می‌شود (نه import،
+    چون `app.worker` سرِ import سراغِ چیزهایی می‌رود که رانرِ CI ندارد)."""
+    import ast
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[1] / "app" / "worker.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "startup")
+    called = {c.func.attr for c in ast.walk(fn)
+              if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
+    assert "backfill_seen" in called, "`worker.startup` باید backfill را صدا بزند"

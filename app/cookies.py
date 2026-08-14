@@ -413,6 +413,31 @@ async def mark_seen(redis, platform: str) -> None:
         pass
 
 
+async def backfill_seen(redis) -> int:
+    """برای هر پلتفرمی که **همین حالا** اکانت دارد ردِ ماندگار را می‌گذارد.
+
+    حفرهٔ راه‌اندازیِ سرد: رد را `set_meta` می‌نویسد، ولی اکانت‌هایی که پیش از این
+    کد اضافه شده‌اند هیچ ردی ندارند. اندازه‌گیری‌شده، نویسنده‌های `set_meta` اینها
+    هستند: `mark_ok`/`mark_fail` (یعنی هر تلاشِ دانلود)، `unfreeze`، و سه مسیرِ
+    پنل/ربات. پس بدونِ backfill پنجره‌ای باز می‌ماند از لحظهٔ استقرار تا **اولین
+    تلاشِ دانلودِ** آن پلتفرم — و دقیقاً همان پنجره‌ای است که ادمین در آن
+    سشن‌های مردهٔ اینستاگرام را پاک می‌کند، یعنی سطلِ پر «هرگز پر نشده» خوانده
+    می‌شود و هشدار نمی‌آید. «احتمالاً به‌زودی `set_meta` می‌خورد» جواب نیست.
+
+    یک پیمایش سرِ استارتِ هر ورکر؛ idempotent است و روی نود هم درست کار می‌کند
+    (Redis مشترک است و `list_names` آن‌جا آینه را می‌خواند).
+    """
+    if redis is None:
+        return 0
+    try:
+        plats = {a.get("platform") for a in await accounts(redis)} - {None, ""}
+    except Exception:  # noqa: BLE001
+        return 0
+    for p in plats:
+        await mark_seen(redis, str(p))
+    return len(plats)
+
+
 async def was_stocked(redis, platform: str) -> bool:
     """آیا این سطل **زمانی** اکانت داشته؟
 
