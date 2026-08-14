@@ -30,6 +30,11 @@ _CK_CONTENT = "ckfile:"    # ckfile:<name> → محتوا
 _CK_META = "ckmeta:"       # ckmeta:<name> → JSON متادیتای اکانت
 _CK_CD = "ckcd:"           # ckcd:<name> → کول‌داون (TTL)
 _CK_ROT = "ckrot:"         # ckrot:<platform> → شمارندهٔ چرخش
+#: `ckseen:<platform>` → «این سطل زمانی اکانت داشت». بی‌TTL و **هرگز پاک نمی‌شود**
+#: (`del_meta` عمداً دست نمی‌زند). `ckrot` جایگزینش نیست: فقط وقتی زیاد می‌شود که
+#: **دو یا چند** نامزدِ هم‌رتبه باشند، پس سطلی که همیشه یک اکانت داشت هرگز آن را
+#: افزایش نمی‌دهد — سنجیده شد، و به همین دلیل سیگنالِ مشتق کنار گذاشته شد.
+_CK_SEEN = "ckseen:"
 
 # وضعیت‌ها (به‌ترتیبِ اولویتِ استفاده)
 # `UNPROVEN` = آخرین اتفاقِ این اکانت یک **خطا** بود، نه یک موفقیت. لزوماً خراب
@@ -373,6 +378,14 @@ async def set_meta(redis, name: str, meta: dict) -> None:
         return
     try:
         await redis.set(_CK_META + name, json.dumps(meta))
+        # ردِ ماندگارِ «این سطل زمانی اکانت داشت». این‌جا نوشته می‌شود و نه در
+        # مسیرِ افزودنِ پنل، چون `set_meta` تنها نقطه‌ای است که پلتفرمِ **صریح**
+        # را می‌بیند: نامِ فایل قابلِ‌اتکا نیست (اکانتِ «other» با برچسبِ
+        # «youtube-backup» فایلش `cookies_youtube-backup.txt` می‌شود و
+        # `guess_platform` سطلِ اشتباه را علامت می‌زند)، و `admin_web` هم در
+        # محیطِ تست قابلِ import نیست.
+        if meta.get("platform"):
+            await redis.set(_CK_SEEN + str(meta["platform"]), "1")
     except Exception as exc:  # noqa: BLE001
         log.debug("cookie meta write failed: %s", exc)
 
@@ -383,8 +396,67 @@ async def del_meta(redis, name: str) -> None:
     try:
         await redis.delete(_CK_META + name)
         await redis.delete(_CK_CD + name)
+        # `_CK_SEEN` عمداً **پاک نمی‌شود** — تمامِ ارزشش همین است. بدونش
+        # «هرگز پر نشده» و «پر بوده و خالی شده» هر دو `total == 0` می‌خوانند، و
+        # آن‌وقت حذفِ اکانت‌های مردهٔ اینستاگرام هشدارِ واقعی را خاموش می‌کند.
     except Exception:  # noqa: BLE001
         pass
+
+
+async def mark_seen(redis, platform: str) -> None:
+    """«این سطل زمانی اکانت داشت» — ماندگار، بی‌TTL، هرگز پاک‌نشدنی."""
+    if redis is None or not platform:
+        return
+    try:
+        await redis.set(_CK_SEEN + platform, "1")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def backfill_seen(redis) -> int:
+    """برای هر پلتفرمی که **همین حالا** اکانت دارد ردِ ماندگار را می‌گذارد.
+
+    حفرهٔ راه‌اندازیِ سرد: رد را `set_meta` می‌نویسد، ولی اکانت‌هایی که پیش از این
+    کد اضافه شده‌اند هیچ ردی ندارند. اندازه‌گیری‌شده، نویسنده‌های `set_meta` اینها
+    هستند: `mark_ok`/`mark_fail` (یعنی هر تلاشِ دانلود)، `unfreeze`، و سه مسیرِ
+    پنل/ربات. پس بدونِ backfill پنجره‌ای باز می‌ماند از لحظهٔ استقرار تا **اولین
+    تلاشِ دانلودِ** آن پلتفرم — و دقیقاً همان پنجره‌ای است که ادمین در آن
+    سشن‌های مردهٔ اینستاگرام را پاک می‌کند، یعنی سطلِ پر «هرگز پر نشده» خوانده
+    می‌شود و هشدار نمی‌آید. «احتمالاً به‌زودی `set_meta` می‌خورد» جواب نیست.
+
+    یک پیمایش سرِ استارتِ هر ورکر؛ idempotent است و روی نود هم درست کار می‌کند
+    (Redis مشترک است و `list_names` آن‌جا آینه را می‌خواند).
+    """
+    if redis is None:
+        return 0
+    try:
+        plats = {a.get("platform") for a in await accounts(redis)} - {None, ""}
+    except Exception:  # noqa: BLE001
+        return 0
+    for p in plats:
+        await mark_seen(redis, str(p))
+    return len(plats)
+
+
+async def was_stocked(redis, platform: str) -> bool:
+    """آیا این سطل **زمانی** اکانت داشته؟
+
+    تنها ردِ ماندگارِ آن، چون حذفِ اکانت هم فایل را می‌برد هم متا را. سه حالتی که
+    مصرف‌کننده‌ها (`_alert_if_low`, `_warn_cookieless`) از هم جدا می‌کنند:
+    «۰ از ۰ و هرگز پر نشده» = عادی و ساکت · «۰ از ۰ ولی زمانی پر بوده» = یک
+    قابلیت از کار افتاده · «۰ از N» = استخرِ سوخته.
+
+    محدودیتِ شناخته‌شده: اگر Redis از صفر ساخته شود این رد می‌رود. آن حالت روی
+    مستر بی‌اثر است تا وقتی فایلی روی دیسک مانده باشد (`list_names` دیسک را
+    مقدم می‌داند، پس `total > 0`)؛ فقط «حذف شد **و بعد** Redis پاک شد» دوباره
+    ساکت می‌شود — یک شکستِ دوگانه، نه مسیرِ عادی.
+    """
+    if redis is None or not platform:
+        return False
+    try:
+        return bool(await redis.exists(_CK_SEEN + platform))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ── فهرستِ نام‌ها (مستر: دیسک · نود: آینهٔ Redis) ────────────────
@@ -537,8 +609,25 @@ async def pool_summary(redis) -> dict[str, dict]:
 USABLE = (HEALTHY, UNPROVEN, SUSPECT)
 
 
+async def pool_counts(redis, platform: str) -> tuple[int, int]:
+    """(کلِ اکانت‌های این پلتفرم, قابلِ‌استفاده‌ها) — با **یک** پیمایش.
+
+    تفکیکِ این دو عدد باربر است و `healthy_count` به‌تنهایی گمش می‌کند:
+    «۰ از ۳» یعنی استخر سوخته و باید داد زد؛ «۰ از ۰» یعنی کسی این سطل را پر
+    نکرده، که برای بیشترِ سطل‌ها **حالتِ عادی** است — از ۱۴ سطلی که یک دانلود
+    می‌تواند بخواهد، پنل فقط ۶ تا را پیشنهاد می‌دهد. هرکس فقط عددِ دوم را ببیند
+    این دو را یکی می‌کند، و هشدارِ «کوکیِ سالم نمانده» را برای سطلی می‌فرستد که
+    هیچ‌وقت کوکی نداشته.
+
+    یک `accounts()` می‌خواند نه دو تا: روی نودِ دانلود هر پیمایش یک دسته
+    رفت‌وبرگشتِ WireGuard است.
+    """
+    accts = await accounts(redis, platform)
+    return len(accts), sum(1 for a in accts if a["status"] in USABLE)
+
+
 async def healthy_count(redis, platform: str) -> int:
-    return sum(1 for a in await accounts(redis, platform) if a["status"] in USABLE)
+    return (await pool_counts(redis, platform))[1]
 
 
 # ── انتخابِ کوکی برای یک تلاش ───────────────────────────────────
@@ -895,4 +984,23 @@ async def _unmirror_cookie(redis, name: str) -> None:
         await redis.delete(_CK_CONTENT + name)
     except Exception:  # noqa: BLE001
         pass
+
+
+async def delete_account(redis, name: str) -> None:
+    """حذفِ کاملِ یک اکانت — **سه** گام، از یک جا.
+
+    پنل و کال‌بکِ ربات هر دو هر سه گام را داشتند ولی با ترتیبِ متفاوت، یعنی دقیقاً
+    همان شکلی که یکی به‌روز می‌شود و آن یکی نه (همان دلیلی که `remove_cookie_file`
+    را در §۷ یک‌جا کرد). پرش از هر گام بی‌سروصداست: بدونِ `_unmirror_cookie`
+    اکانتِ حذف‌شده روی **نودِ دانلود** همچنان انتخاب می‌شود، چون `list_names` وقتی
+    روی دیسک چیزی پیدا نکند به آینهٔ Redis برمی‌گردد.
+
+    ترتیب: اول آینه، بعد فایل. عکسش یعنی حذفِ **آخرین** فایل باعث می‌شود
+    `list_names` به آینه بیفتد و همان اکانت لحظه‌ای «زنده» شود.
+
+    `ckseen:<platform>` عمداً دست‌نخورده می‌ماند — ببین `del_meta`.
+    """
+    await _unmirror_cookie(redis, name)
+    remove_cookie_file(name)
+    await del_meta(redis, name)
 

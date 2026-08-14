@@ -191,9 +191,7 @@ async def cookie_action(cq: CallbackQuery, callback_data: Ck, is_admin: bool,
         await ck.set_meta(arq_pool, name, meta)
         await cq.answer("کنار گذاشته شد.")
     else:                                    # del
-        await ck.del_meta(arq_pool, name)
-        ck.remove_cookie_file(name)      # همان گاردهای مسیرِ پنل، از یک تابعِ مشترک
-        await ck._unmirror_cookie(arq_pool, name)
+        await ck.delete_account(arq_pool, name)   # همان سه گامِ مسیرِ پنل، از یک جا
         await cq.answer("حذف شد.")
     try:
         await cq.message.edit_reply_markup(reply_markup=None)

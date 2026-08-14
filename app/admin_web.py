@@ -2339,9 +2339,8 @@ async def cookies_delete(request: web.Request) -> web.Response:
     form = await request.post()
     name = _safe_cookie_name(form.get("name") or "")
     if name:
-        ck_pool.remove_cookie_file(name)                   # همان تابعِ مشترکِ مسیرِ ربات
-        await _unmirror_cookie(request.app["redis"], name)  # از آینهٔ نودها هم بردار
-        await ck_pool.del_meta(request.app["redis"], name)  # متادیتا + کول‌داون
+        # هر سه گام (آینه + فایل + متا) از یک جا — همان تابعِ مشترکِ مسیرِ ربات
+        await ck_pool.delete_account(request.app["redis"], name)
     raise web.HTTPFound("/cookies?ok=del")
 
 

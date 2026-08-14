@@ -179,15 +179,28 @@ async def _warn_cookieless(redis, bot, platform: str, node: str) -> None:
     اکانتی ثبت نمی‌شود و پنل «سالم · خطا: ۰» می‌ماند در حالی که هیچ دانلودی کار
     نمی‌کند. حالت‌های واقعی‌اش: آینهٔ Redis خالی، `COOKIES_DIR`ِ اشتباه روی نود، یا
     همهٔ اکانت‌ها در کول‌داون/فریز.
+
+    **سطحِ لاگ همان تفکیکِ `_alert_if_low` را دارد و به همان دلیل.** خطِ ERROR
+    پیش‌تر *قبل از* گاردِ خروج زده می‌شد، پس هر دانلود از هشت پلتفرمی که سطلشان
+    پرکردنی نیست (ساندکلاود، آپارات، ویمئو، …) یک ERRORِ دائمیِ کاذب می‌گذاشت و
+    خطای واقعی لای آن گم می‌شد — همان ردهٔ سیگنالِ کاذبِ DM، یک پله آرام‌تر. پس:
+    سطلِ **بی‌اکانت** مسیرِ سالم است و `info` می‌گیرد؛ سطلی که اکانت دارد ولی هیچ
+    کدام قابلِ‌استفاده نیست **همچنان ERROR** است — آن واقعاً ناهنجاری است و
+    خفه‌کردنش همان اشتباهی است که گاردِ `healthy_count` در `_alert_if_low` بود.
     """
     if redis is None:
         return
     try:
-        usable = await ck.healthy_count(redis, platform)
+        total, usable = await ck.pool_counts(redis, platform)
+        if not total and not await ck.was_stocked(redis, platform):
+            # سطل هرگز پر نشده؛ دانلود بی‌کوکی ادامه می‌دهد و ممکن است موفق شود
+            log.info("cookieless attempt on %s from exit %s — the pool has no account",
+                     platform, ck.exit_label(node))
+            return                       # واقعاً اکانتی نیست؛ پیامِ عادی درست است
         log.error("cookieless attempt on %s from exit %s — %d usable account(s) in the pool",
                   platform, ck.exit_label(node), usable)
         if not usable:
-            return                       # واقعاً اکانتی نیست؛ پیامِ عادی درست است
+            return                       # استخر سوخته؛ DMاش کارِ `_alert_if_low` است
         if not await redis.set(f"ckblind:{platform}", "1", ex=3 * 3600, nx=True):
             return                       # تازه خبر داده‌ایم
         text = (f"🛠 <b>اکانت‌ها به ورکر نرسیدند</b>\n\n"
@@ -233,14 +246,36 @@ async def _next_cookie(redis, platform: str, workdir: str | None,
 
 async def _alert_if_low(redis, bot, platform: str) -> None:
     """اگر اکانت‌های قابلِ‌استفادهٔ این پلتفرم زیرِ آستانه رفت، به ادمین‌ها خبر بده
-    (ضدِ‌اسپم: هر پلتفرم حداکثر هر ۶ ساعت یک‌بار)."""
+    (ضدِ‌اسپم: هر پلتفرم حداکثر هر ۶ ساعت یک‌بار).
+
+    **سطلی که هیچ‌وقت اکانت نداشته ساکت است** — سه حالت، نه دو تا:
+    «۰ از N» = استخرِ سوخته → هشدار · «۰ از ۰ ولی زمانی پر بوده»
+    (`ck.was_stocked`) = یک قابلیت از کار افتاده → هشدار · «۰ از ۰ و هرگز پر
+    نشده» → سکوت. بدونِ حالتِ وسط، حذفِ اکانت‌های مردهٔ اینستاگرام پیش از افزودنِ
+    تازه‌ها دقیقاً همان هشداری را خاموش می‌کرد که لازم است.
+
+    شرط عمداً روی `total` است نه روی
+    `left`: «۰ قابلِ‌استفاده از ۳» یعنی استخر سوخته و دقیقاً همان چیزی است که این
+    تابع برایش وجود دارد، پس گاردی که روی `healthy_count` نوشته شود همان زنگ را
+    خفه می‌کند. «۰ از ۰» چیزِ دیگری است: از ۱۴ سطلی که `_cookie_platform` می‌تواند
+    بخواهد، پنل فقط ۶ تا را می‌سازد (`admin_web.COOKIE_PLATFORMS`)، پس ۸ پلتفرمِ
+    پشتیبانی‌شده سطلی می‌خواهند که هرگز پر نمی‌شود — و لینکِ هاستِ ناشناخته
+    («other») هم معمولاً همین‌طور است. برای این‌ها «کوکیِ سالمی نمانده» از روزِ
+    اول کاذب بوده. اندازه‌گیری‌شده: خالی‌بودنِ سطل دانلود را متوقف نمی‌کند —
+    یک تلاشِ **بی‌کوکی** انجام می‌شود و اگر سایت ناشناس جواب بدهد موفق است.
+
+    همین تفکیک را `_warn_cookieless` از قبل دارد (`if not usable: return`)؛
+    این‌جا هم‌شکلش می‌کند، نه قاعده‌ای تازه.
+    """
     if redis is None:
         return
     try:
         thr = await settings_store.get_int("cookie_alert_min", settings.cookie_alert_min)
         if thr <= 0:
             return
-        left = await ck.healthy_count(redis, platform)
+        total, left = await ck.pool_counts(redis, platform)
+        if not total and not await ck.was_stocked(redis, platform):
+            return          # سطل هرگز پر نشده — این «سوختن» نیست
         if left >= thr:
             return
         if not await redis.set(f"ckalert:{platform}", "1", ex=6 * 3600, nx=True):
