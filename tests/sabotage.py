@@ -78,7 +78,86 @@ def sabotage(path: str | Path, old: str, new: str, *, count: int = 1):
 # خرابکاری نباید آن تست را بیندازد (اثباتِ اینکه تست هدفِ درست را می‌سنجد).
 #
 #: (نام, فایل, الگو, جایگزین, تعدادِ تطبیق, تستِ هدف, تستی که باید بیفتد)
+_IGW = "tests/test_ig_anon_wiring.py"
+
 CASES: list[dict] = [
+    # ── فاز ۲: مسیرِ ناشناسِ اینستاگرام. یکی به‌ازای هر قیدِ سخت. ──
+    {"name": "ig-anon: the cookie loop runs anyway (constraint 1)",
+     "path": "app/tasks_download.py",
+     "old": "        while not anon_won:\n            if anon:",
+     "new": "        while True:\n            if anon:",
+     "target": _IGW,
+     "expect": "test_a_successful_anonymous_pass_never_picks_or_materializes_a_cookie"},
+
+    {"name": "ig-anon: a story link gets a shortcode and hits the network (constraint 1)",
+     "path": "app/instagram_anon.py",
+     "old": '    m = _SHORTCODE_RE.search(url or "")\n    return m.group(1) if m else None',
+     "new": '    m = _SHORTCODE_RE.search(url or "")\n    return m.group(1) if m else "FAKESC"',
+     "target": _IGW,
+     "expect": "test_a_story_or_profile_link_never_touches_the_anonymous_network"
+               "[https://www.instagram.com/stories/someuser/3512345678/]"},
+
+    {"name": "ig-anon: a partial failure leaves its files behind (constraint 2)",
+     "path": "app/instagram_anon.py",
+     "old": "        if not done:\n            shutil.rmtree(outdir, ignore_errors=True)",
+     "new": "        if False:\n            shutil.rmtree(outdir, ignore_errors=True)",
+     "target": _IGW,
+     "expect": "test_a_half_finished_anonymous_failure_leaves_no_file_behind"},
+
+    {"name": "ig-anon: the flag ships on (constraint 3)",
+     "path": "app/config.py",
+     "old": "    dl_ig_anon_enabled: bool = False",
+     "new": "    dl_ig_anon_enabled: bool = True",
+     "target": _IGW,
+     "expect": "test_the_flag_default_is_off"},
+
+    {"name": "ig-anon: a failed verdict raises instead of falling through (constraint 4)",
+     "path": "app/instagram_anon.py",
+     "old": "        return InstagramAnonFetch(bucket=out.verdict)",
+     "new": '        raise RuntimeError(f"anonymous path failed: {out.verdict}")',
+     "target": _IGW,
+     "expect": "test_a_failed_verdict_falls_through_to_the_cookie_path[403-blocked]"},
+
+    {"name": "ig-anon: an anonymous failure is blamed on an account (decision d)",
+     "path": "app/tasks_download.py",
+     "old": "    await _iganon_metric(redis, got.bucket)\n    return got",
+     "new": "    await _iganon_metric(redis, got.bucket)\n"
+            "    if got.bucket != IGA.B_OK:\n"
+            '        await ck.mark_fail(redis, "instagram_a.txt")\n'
+            "    return got",
+     "target": _IGW,
+     "expect": "test_a_network_verdict_never_blames_an_account"},
+
+    {"name": "ig-anon: the carousel comes back in the wrong order (decision a)",
+     "path": "app/instagram_anon.py",
+     "old": "    return InstagramAnonFetch(tuple(paths), res.caption, B_OK)",
+     "new": "    return InstagramAnonFetch(tuple(reversed(paths)), res.caption, B_OK)",
+     "target": _IGW,
+     "expect": "test_the_carousel_order_is_preserved"},
+
+    {"name": "ig-anon: the safety layer is skipped for the anonymous path",
+     "path": "app/tasks_download.py",
+     "old": "        pol = await safety.load_policy()\n        if pol.enabled:\n"
+            '            why = ""',
+     "new": "        pol = await safety.load_policy()\n"
+            "        if pol.enabled and not anon_won:\n"
+            '            why = ""',
+     "target": _IGW,
+     "expect": "test_the_safety_layer_still_blocks_media_from_the_anonymous_path"},
+
+    {"name": "ig-anon: the time budget is not enforced (bound for a dribbling CDN)",
+     "path": "app/instagram_anon.py",
+     "old": "            path, info = await asyncio.wait_for(\n"
+            "                D.download_direct(item.url, itemdir, opts, max_bytes=remaining,\n"
+            "                                  progress=_slice_progress(progress, i, total),\n"
+            "                                  cancel=cancel),\n"
+            "                timeout=left)",
+     "new": "            path, info = await D.download_direct(\n"
+            "                item.url, itemdir, opts, max_bytes=remaining,\n"
+            "                progress=_slice_progress(progress, i, total), cancel=cancel)",
+     "target": _IGW,
+     "expect": "test_the_time_budget_stops_a_dribbling_cdn"},
+
     {"name": "alert: guard removed entirely",
      "path": "app/tasks_download.py",
      "old": "        total, left = await ck.pool_counts(redis, platform)\n"
