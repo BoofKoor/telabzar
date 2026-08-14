@@ -231,6 +231,17 @@ surfaces as a loud `SabotageError` rather than a silent pass. It is **manual, ne
 rewrites source, so a parallel run cannot be trusted. An entry with `expect: None` is a reverse
 control: that sabotage must *not* fail the named test, which is how the trim case proves the
 structural test targets `trim_video` and not its neighbour.
+**There is a third layer, and it is the subtlest: the helper proves the patch *applied*, not that
+it broke what you meant to break.** Verifying the trim claim, the first sabotage moved `-ss`/`-to`
+after `-i` but left a leading `-ss` in place; `patch_source` was satisfied, the file really did
+change, and the structural test — which reads the *first* index of each flag — was still correct
+to pass. Reported as "not caught" it would have looked like a weak assertion. So the three layers
+of the same problem, in order of how hard they are to see: a test that asserts nothing; a sabotage
+that never lands; and a sabotage that lands but breaks something adjacent. The first two now have
+mechanisms (controls, `SabotageError`); the third has none and probably cannot — the only defence
+is to assert the sabotaged state directly (`assert OUT in p.read_text()`), which is why the
+registry's reverse-control entries matter: a case that is *expected* to leave a test green is the
+one where a mis-aimed patch is indistinguishable from a correct one.
 
 **A timing or concurrency measurement means nothing until its harness is shown to be able to
 fail — and sabotage cannot catch this class of error.** Sabotage asks "does my assertion notice a
