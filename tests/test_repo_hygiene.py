@@ -158,3 +158,53 @@ def test_no_test_imports_a_module_the_ci_runner_does_not_have():
         "این‌ها روی رانرِ CI موجود نیستند و فقط آن‌جا می‌افتند:\n  "
         + "\n  ".join(offenders)
         + "\nسورس را با AST بخوان (نمونه: tests/test_phase2a._func_src).")
+
+
+# ── حذفِ اکانتِ کوکی باید از یک جا باشد ────────────────────────────
+#: گام‌های حذفِ یک اکانت. تکِ هرکدام کاربردِ مشروع دارد (مثلاً
+#: `_mirror_all_cookies` فقط آینه را با دیسک هماهنگ می‌کند)؛ چیزی که باگ‌زاست
+#: **ترکیب**شان در یک تابع است، یعنی یک کپیِ دستیِ دیگر از `delete_account`.
+_DELETE_STEPS = ("remove_cookie_file", "_unmirror_cookie", "del_meta")
+
+
+def test_only_delete_account_open_codes_the_delete_sequence():
+    """هیچ تابعی جز `cookies.delete_account` نباید دنبالهٔ حذف را دستی بنویسد.
+
+    دو مسیرِ حذف (پنل و کال‌بکِ ربات) هر سه گام را داشتند ولی با **ترتیبِ
+    متفاوت** — همان شکلی که بعداً یکی به‌روز می‌شود و آن یکی نه، دقیقاً همان
+    چیزی که یک‌بار `remove_cookie_file` را به `cookies.py` برد. پرش از
+    `_unmirror_cookie` بی‌سروصداست: اکانتِ حذف‌شده روی **نودِ دانلود** همچنان
+    انتخاب می‌شود، چون `list_names` روی دیسکِ خالی به آینهٔ Redis برمی‌گردد.
+
+    معیار «≥۲ گام در یک تابع» است نه «هر گامی»: نسخهٔ اولِ این تست روی تکِ
+    هر گام می‌افتاد و `_mirror_all_cookies` را — که فقط آینه را پاک می‌کند و
+    اصلاً حذفِ اکانت نیست — مثبتِ کاذب گرفت. باریک‌کردنِ **قاعده** درست است،
+    نه استثنای دستی برای آن تابع (که همان پوسیدگیِ فهرستِ دستی است).
+
+    کشف‌محور است، پس مسیرِ حذفِ سومِ آینده هم پوشش دارد. `app/cookies.py`
+    استثناست: خودِ `delete_account` آن‌جا زندگی می‌کند.
+    """
+    offenders = []
+    for path in sorted((ROOT / "app").rglob("*.py")):
+        if path.name == "cookies.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            used = {}
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                f = node.func
+                name = f.attr if isinstance(f, ast.Attribute) else \
+                    f.id if isinstance(f, ast.Name) else ""
+                if name in _DELETE_STEPS:
+                    used.setdefault(name, node.lineno)
+            if len(used) >= 2:
+                steps = "، ".join(f"{n}()@{ln}" for n, ln in sorted(used.items()))
+                offenders.append(
+                    f"{path.relative_to(ROOT)}:{fn.lineno} {fn.name}() → {steps}")
+    assert not offenders, (
+        "این‌ها باید `cookies.delete_account()` را صدا بزنند، نه دنبالهٔ حذف را "
+        "دستی بنویسند:\n  " + "\n  ".join(offenders))

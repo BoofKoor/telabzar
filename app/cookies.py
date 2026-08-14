@@ -960,3 +960,22 @@ async def _unmirror_cookie(redis, name: str) -> None:
     except Exception:  # noqa: BLE001
         pass
 
+
+async def delete_account(redis, name: str) -> None:
+    """حذفِ کاملِ یک اکانت — **سه** گام، از یک جا.
+
+    پنل و کال‌بکِ ربات هر دو هر سه گام را داشتند ولی با ترتیبِ متفاوت، یعنی دقیقاً
+    همان شکلی که یکی به‌روز می‌شود و آن یکی نه (همان دلیلی که `remove_cookie_file`
+    را در §۷ یک‌جا کرد). پرش از هر گام بی‌سروصداست: بدونِ `_unmirror_cookie`
+    اکانتِ حذف‌شده روی **نودِ دانلود** همچنان انتخاب می‌شود، چون `list_names` وقتی
+    روی دیسک چیزی پیدا نکند به آینهٔ Redis برمی‌گردد.
+
+    ترتیب: اول آینه، بعد فایل. عکسش یعنی حذفِ **آخرین** فایل باعث می‌شود
+    `list_names` به آینه بیفتد و همان اکانت لحظه‌ای «زنده» شود.
+
+    `ckseen:<platform>` عمداً دست‌نخورده می‌ماند — ببین `del_meta`.
+    """
+    await _unmirror_cookie(redis, name)
+    remove_cookie_file(name)
+    await del_meta(redis, name)
+

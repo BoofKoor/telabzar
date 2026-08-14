@@ -203,10 +203,15 @@ def test_both_delete_paths_share_one_implementation():
 
     دو نسخهٔ دست‌نویس دوباره واگرا می‌شوند، پس تست خودِ اشتراک را می‌سنجد نه
     نتیجه را.
+
+    نامِ تابعِ مشترک ۲۰۲۶-۰۸-۱۴ از `remove_cookie_file` به `delete_account`
+    رفت — همان قاعده، یک پله بالاتر: آن دو مسیر هر سه گامِ حذف را داشتند ولی با
+    ترتیبِ متفاوت، که همان واگراییِ در حالِ شکل‌گیری است. ادعای این تست عوض
+    نشده، فقط نامِ نقطهٔ اشتراک.
     """
     from app.routers import admin as admin_router
     bot_side = inspect.getsource(admin_router.cookie_action)
     panel_side = _func_src("app/admin_web.py", "cookies_delete")
     for who, src in (("ربات", bot_side), ("پنل", panel_side)):
-        assert "remove_cookie_file" in src, f"مسیرِ {who} از تابعِ مشترک استفاده نمی‌کند"
+        assert "delete_account" in src, f"مسیرِ {who} از تابعِ مشترک استفاده نمی‌کند"
         assert "os.remove(" not in src, f"مسیرِ {who} هنوز مستقیم حذف می‌کند"

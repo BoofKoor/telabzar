@@ -221,16 +221,13 @@ async def test_a_pool_the_worker_cannot_see_still_errors_and_dms(redis, pool, ca
 # سطل را به همان «۰ از ۰»ی می‌رساند که تازه ساکتش کردیم — یعنی نویزِ نُه سطل را
 # می‌بندیم و سیگنالِ سطل‌های مهم را خاموش می‌کنیم.
 async def _delete(redis, name: str) -> None:
-    """همان **سه** کاری که `admin_web.cookies_delete` می‌کند.
+    """همان تابعی که هر دو مسیرِ حذفِ تولید صدا می‌زنند.
 
-    نسخهٔ اولِ این کمکی دو تا را داشت و تست شکست، چون `list_names` وقتی روی دیسک
-    چیزی پیدا نکند به آینهٔ Redis برمی‌گردد و اکانت‌های «حذف‌شده» را همچنان
-    می‌دید. یعنی حذفِ واقعی سه گام است و این را باید از خودِ پنل کپی کرد، نه از
-    حافظه.
+    نسخهٔ اولِ این کمکی سه گام را دستی نوشته بود و **دو** تایش را گرفت، پس تست
+    شکست: `list_names` وقتی روی دیسک چیزی پیدا نکند به آینهٔ Redis برمی‌گردد و
+    اکانت‌های «حذف‌شده» را همچنان می‌دید. همان تجربه دلیلِ یک‌جا شدنِ حذف است.
     """
-    ck.remove_cookie_file(name)
-    await ck._unmirror_cookie(redis, name)
-    await ck.del_meta(redis, name)
+    await ck.delete_account(redis, name)
 
 
 async def test_deleting_the_last_account_leaves_a_durable_trace(redis, pool):
@@ -243,6 +240,19 @@ async def test_deleting_the_last_account_leaves_a_durable_trace(redis, pool):
 
     assert await ck.pool_counts(redis, "instagram") == (0, 0)
     assert await ck.was_stocked(redis, "instagram"), "رد نباید با حذف پاک شود"
+
+
+async def test_the_trace_has_no_expiry(redis, pool):
+    """کلِ ارزشِ این رفع به ماندگاری بند است — یک TTL آن را بی‌صدا برمی‌گرداند.
+
+    `TTL` روی کلیدِ **بدونِ انقضا** `-1` می‌دهد و روی کلیدِ **نبوده** `-2`، پس این
+    یک assert هر دو خرابی را می‌گیرد: انقضای صریح، و انقضایی که از هلپری به ارث
+    برسد. بعد از حذف سنجیده می‌شود، یعنی همان لحظه‌ای که رد باید کار کند.
+    """
+    await _add(redis, "instagram_a.txt", "instagram")
+    await _delete(redis, "instagram_a.txt")
+
+    assert await redis.ttl("ckseen:instagram") == -1, "رد نباید هیچ TTLی داشته باشد"
 
 
 async def test_a_bucket_emptied_by_deletion_still_screams(redis, pool):
