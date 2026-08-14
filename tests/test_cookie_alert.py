@@ -1,0 +1,171 @@
+"""هشدارِ «کوکیِ سالم نمانده» باید بینِ «استخر سوخت» و «سطل هرگز پر نشد» فرق بگذارد.
+
+پس‌زمینه (همه اندازه‌گیری‌شده، نه استدلال): `_cookie_platform` می‌تواند **۱۴**
+سطلِ متفاوت بخواهد، ولی `admin_web.COOKIE_PLATFORMS` فقط **۶** تا می‌سازد. پس
+هشت پلتفرمِ پشتیبانی‌شده (ساندکلاود، آپارات، ویمئو، توییچ، دیلی‌موشن، بندکمپ،
+ردیت، استریمبل) و معمولاً «other» سطلی می‌خواهند که هیچ‌وقت اکانت ندارد — و
+`_alert_if_low` برای هر کدامشان هر ۶ ساعت یک DMِ قرمز می‌فرستاد.
+
+خالی‌بودنِ سطل دانلود را متوقف نمی‌کند: `run_download` یک تلاشِ **بی‌کوکی**
+می‌زند و اگر سایت ناشناس جواب بدهد موفق می‌شود. پس آن هشدار نویز بود، نه خبر.
+
+تستِ **کنترل** این‌جا از تستِ رفعْ مهم‌تر است: گاردِ ساده‌لوحانه
+(`if not left: return`) هشدارِ استخرِ سوخته را هم خفه می‌کند، یعنی دقیقاً همان
+چیزی که این تابع برایش وجود دارد. `test_a_burned_pool_still_screams` همان را
+می‌گیرد و باید روی چنین رفعی fail شود.
+"""
+from __future__ import annotations
+
+import os
+import stat
+
+import pytest
+
+from tests.aiogram_double import ValidatingBot
+
+from app import cookies as ck
+from app import tasks_download as TD
+
+_NETSCAPE = ("# Netscape HTTP Cookie File\n"
+             ".example.com\tTRUE\t/\tTRUE\t9999999999\tsessionid\tv\n")
+
+
+class FakeBot(ValidatingBot):
+    """فقط `send_message` را نگه می‌دارد؛ امضاها از خودِ aiogram می‌آیند."""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+        self.edits: list[str] = []
+
+    def _on(self, name, payload):
+        if name == "send_message":
+            self.messages.append(payload["text"])
+        elif name == "edit_message_text":
+            self.edits.append(payload["text"])
+        elif name == "edit_message_caption":
+            self.edits.append(payload.get("caption"))
+        return True
+
+
+@pytest.fixture
+def pool(tmp_path, monkeypatch):
+    """استخرِ واقعی روی دیسکِ موقت + ادمینی که DM را دریافت کند."""
+    d = tmp_path / "ck"
+    d.mkdir()
+    monkeypatch.setattr(ck.settings, "cookies_dir", str(d))
+    monkeypatch.setattr(TD.settings, "admin_ids", "42")
+    return d
+
+
+@pytest.fixture
+def fail_ytdlp(tmp_path, monkeypatch):
+    """yt-dlpِ **اجراییِ** جعلی که شکست می‌خورد — زیرفرایندِ واقعی، نه ماک."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for tool in ("yt-dlp", "gallery-dl"):
+        s = bindir / tool
+        s.write_text("#!/usr/bin/env python3\nimport sys\n"
+                     'sys.stderr.write("ERROR: Unsupported URL\\n")\nsys.exit(1)\n')
+        s.chmod(s.stat().st_mode | stat.S_IRWXU)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+
+
+async def _add(redis, name: str, platform: str, **meta_over) -> None:
+    assert await ck._save_cookie(redis, name, _NETSCAPE) == ""
+    meta = await ck.get_meta(redis, name)
+    meta.update({"platform": platform, **meta_over})
+    await ck.set_meta(redis, name, meta)
+
+
+# ── ۱) سطلی که هرگز پر نشده ────────────────────────────────────────
+async def test_a_bucket_that_was_never_stocked_is_silent(redis, pool):
+    """«۰ از ۰» خبر نیست. روی سورسِ پیش از رفع، این‌جا یک DMِ قرمز می‌آمد."""
+    assert await ck.pool_counts(redis, "other") == (0, 0)
+
+    bot = FakeBot()
+    await TD._alert_if_low(redis, bot, "other")
+
+    assert bot.messages == [], f"سطلِ خالی نباید DM بدهد: {bot.messages}"
+
+
+@pytest.mark.parametrize("platform",
+                         ["soundcloud", "aparat", "vimeo", "twitch",
+                          "dailymotion", "bandcamp", "reddit", "streamable"])
+async def test_the_unstockable_platforms_are_silent(platform, redis, pool):
+    """این هشت‌تا را پنل اصلاً نمی‌تواند پر کند، پس هشدارشان همیشه کاذب است."""
+    bot = FakeBot()
+    await TD._alert_if_low(redis, bot, platform)
+    assert bot.messages == []
+
+
+# ── ۲) کنترل: استخرِ سوخته هنوز باید داد بزند ──────────────────────
+async def test_a_burned_pool_still_screams(redis, pool):
+    """سه اکانت که هیچ‌کدام قابلِ‌استفاده نیستند = استخرِ سوخته.
+
+    این تستِ **کنترل** است: اگر گارد را روی `healthy_count` بنویسی (`if not
+    left: return`) این‌جا fail می‌شود، چون آن‌وقت رفع تبدیل می‌شود به خفه‌کردنِ
+    همان زنگی که تابع برایش هست.
+    """
+    await _add(redis, "cookies_a.txt", "other", frozen=True)
+    await _add(redis, "cookies_b.txt", "other", fail_streak=9)
+    await _add(redis, "cookies_c.txt", "other", disabled=True)
+    total, left = await ck.pool_counts(redis, "other")
+    # فیکسچر باید واقعاً همان چیزی باشد که ادعا می‌کند، وگرنه تست بی‌معنی است
+    assert (total, left) == (3, 0), [a["status"] for a in await ck.accounts(redis, "other")]
+
+    bot = FakeBot()
+    await TD._alert_if_low(redis, bot, "other")
+
+    assert len(bot.messages) == 1, "استخرِ سوخته باید دقیقاً یک DM بدهد"
+    assert "🔴" in bot.messages[0] and "نمانده" in bot.messages[0]
+
+
+# ── ۳) کنترل: سطلِ سالم ساکت است (رفتارِ قبلی دست‌نخورده) ───────────
+async def test_a_stocked_healthy_bucket_is_silent(redis, pool, monkeypatch):
+    monkeypatch.setattr(TD.settings, "cookie_alert_min", 1)
+    await _add(redis, "youtube_a.txt", "youtube")
+    assert await ck.pool_counts(redis, "youtube") == (1, 1)
+
+    bot = FakeBot()
+    await TD._alert_if_low(redis, bot, "youtube")
+
+    assert bot.messages == []
+
+
+# ── ۴) کنترل: استخرِ نازک‌شده هنوز هشدارِ زردش را می‌دهد ────────────
+async def test_a_thinning_pool_still_warns(redis, pool, monkeypatch):
+    """مسیرِ ناصفر نباید قربانیِ این رفع شود."""
+    monkeypatch.setattr(TD.settings, "cookie_alert_min", 2)
+    await _add(redis, "youtube_a.txt", "youtube")
+    await _add(redis, "youtube_b.txt", "youtube", frozen=True)
+    assert await ck.pool_counts(redis, "youtube") == (2, 1)
+
+    bot = FakeBot()
+    await TD._alert_if_low(redis, bot, "youtube")
+
+    assert len(bot.messages) == 1
+    assert "🍪" in bot.messages[0], bot.messages[0]
+
+
+# ── ۵) همان علامتی که گزارش شد، از مسیرِ واقعیِ `run_download` ──────
+async def test_a_failed_unknown_link_does_not_alert(redis, pool, tmp_path,
+                                                    monkeypatch, fail_ytdlp):
+    """لینکِ هاستِ ناشناخته که شکست می‌خورد: کاربر خطا می‌بیند، ادمین نه.
+
+    این دقیقاً همان چیزی است که گزارش شد — لینکِ اپل روی کدِ قدیم «other» می‌شد
+    و شکست می‌خورد. اندازه‌گیری‌شده: هیچ اکانتی ضربه نمی‌خورد (استخر خالی است،
+    پس `cookie_name` همیشه `None` است و `failures` تهی می‌ماند)، تنها اثرِ آن
+    شکست همان DM بود.
+    """
+    monkeypatch.setattr(TD.settings, "work_dir", str(tmp_path / "w"))
+    os.makedirs(tmp_path / "w", exist_ok=True)
+    bot = FakeBot()
+
+    await TD.run_download({"bot": bot, "redis": redis}, {
+        "ref": "alr00001", "chat_id": 7, "status_mid": 9, "lang": "fa",
+        "url": "https://music.apple.com/us/album/x/305568683?i=305568690",
+        "platform": "other", "engine": "ytdlp", "phase": "fetch",
+        "selector": "best", "owner_id": 1, "tg_user_id": 42})
+
+    assert bot.edits and "❌" in bot.edits[-1], "کاربر باید خطا را ببیند"
+    assert bot.messages == [], f"ادمین نباید هشدار بگیرد: {bot.messages}"

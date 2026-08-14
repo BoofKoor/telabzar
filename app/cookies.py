@@ -537,8 +537,25 @@ async def pool_summary(redis) -> dict[str, dict]:
 USABLE = (HEALTHY, UNPROVEN, SUSPECT)
 
 
+async def pool_counts(redis, platform: str) -> tuple[int, int]:
+    """(کلِ اکانت‌های این پلتفرم, قابلِ‌استفاده‌ها) — با **یک** پیمایش.
+
+    تفکیکِ این دو عدد باربر است و `healthy_count` به‌تنهایی گمش می‌کند:
+    «۰ از ۳» یعنی استخر سوخته و باید داد زد؛ «۰ از ۰» یعنی کسی این سطل را پر
+    نکرده، که برای بیشترِ سطل‌ها **حالتِ عادی** است — از ۱۴ سطلی که یک دانلود
+    می‌تواند بخواهد، پنل فقط ۶ تا را پیشنهاد می‌دهد. هرکس فقط عددِ دوم را ببیند
+    این دو را یکی می‌کند، و هشدارِ «کوکیِ سالم نمانده» را برای سطلی می‌فرستد که
+    هیچ‌وقت کوکی نداشته.
+
+    یک `accounts()` می‌خواند نه دو تا: روی نودِ دانلود هر پیمایش یک دسته
+    رفت‌وبرگشتِ WireGuard است.
+    """
+    accts = await accounts(redis, platform)
+    return len(accts), sum(1 for a in accts if a["status"] in USABLE)
+
+
 async def healthy_count(redis, platform: str) -> int:
-    return sum(1 for a in await accounts(redis, platform) if a["status"] in USABLE)
+    return (await pool_counts(redis, platform))[1]
 
 
 # ── انتخابِ کوکی برای یک تلاش ───────────────────────────────────

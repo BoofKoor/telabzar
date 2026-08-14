@@ -233,14 +233,30 @@ async def _next_cookie(redis, platform: str, workdir: str | None,
 
 async def _alert_if_low(redis, bot, platform: str) -> None:
     """اگر اکانت‌های قابلِ‌استفادهٔ این پلتفرم زیرِ آستانه رفت، به ادمین‌ها خبر بده
-    (ضدِ‌اسپم: هر پلتفرم حداکثر هر ۶ ساعت یک‌بار)."""
+    (ضدِ‌اسپم: هر پلتفرم حداکثر هر ۶ ساعت یک‌بار).
+
+    **سطلی که هیچ اکانتی ندارد ساکت است** — و شرط عمداً روی `total` است نه روی
+    `left`: «۰ قابلِ‌استفاده از ۳» یعنی استخر سوخته و دقیقاً همان چیزی است که این
+    تابع برایش وجود دارد، پس گاردی که روی `healthy_count` نوشته شود همان زنگ را
+    خفه می‌کند. «۰ از ۰» چیزِ دیگری است: از ۱۴ سطلی که `_cookie_platform` می‌تواند
+    بخواهد، پنل فقط ۶ تا را می‌سازد (`admin_web.COOKIE_PLATFORMS`)، پس ۸ پلتفرمِ
+    پشتیبانی‌شده سطلی می‌خواهند که هرگز پر نمی‌شود — و لینکِ هاستِ ناشناخته
+    («other») هم معمولاً همین‌طور است. برای این‌ها «کوکیِ سالمی نمانده» از روزِ
+    اول کاذب بوده. اندازه‌گیری‌شده: خالی‌بودنِ سطل دانلود را متوقف نمی‌کند —
+    یک تلاشِ **بی‌کوکی** انجام می‌شود و اگر سایت ناشناس جواب بدهد موفق است.
+
+    همین تفکیک را `_warn_cookieless` از قبل دارد (`if not usable: return`)؛
+    این‌جا هم‌شکلش می‌کند، نه قاعده‌ای تازه.
+    """
     if redis is None:
         return
     try:
         thr = await settings_store.get_int("cookie_alert_min", settings.cookie_alert_min)
         if thr <= 0:
             return
-        left = await ck.healthy_count(redis, platform)
+        total, left = await ck.pool_counts(redis, platform)
+        if not total:
+            return          # سطل هرگز پر نشده — این «سوختن» نیست
         if left >= thr:
             return
         if not await redis.set(f"ckalert:{platform}", "1", ex=6 * 3600, nx=True):
