@@ -192,7 +192,7 @@ async def _warn_cookieless(redis, bot, platform: str, node: str) -> None:
         return
     try:
         total, usable = await ck.pool_counts(redis, platform)
-        if not total:
+        if not total and not await ck.was_stocked(redis, platform):
             # سطل هرگز پر نشده؛ دانلود بی‌کوکی ادامه می‌دهد و ممکن است موفق شود
             log.info("cookieless attempt on %s from exit %s — the pool has no account",
                      platform, ck.exit_label(node))
@@ -248,7 +248,13 @@ async def _alert_if_low(redis, bot, platform: str) -> None:
     """اگر اکانت‌های قابلِ‌استفادهٔ این پلتفرم زیرِ آستانه رفت، به ادمین‌ها خبر بده
     (ضدِ‌اسپم: هر پلتفرم حداکثر هر ۶ ساعت یک‌بار).
 
-    **سطلی که هیچ اکانتی ندارد ساکت است** — و شرط عمداً روی `total` است نه روی
+    **سطلی که هیچ‌وقت اکانت نداشته ساکت است** — سه حالت، نه دو تا:
+    «۰ از N» = استخرِ سوخته → هشدار · «۰ از ۰ ولی زمانی پر بوده»
+    (`ck.was_stocked`) = یک قابلیت از کار افتاده → هشدار · «۰ از ۰ و هرگز پر
+    نشده» → سکوت. بدونِ حالتِ وسط، حذفِ اکانت‌های مردهٔ اینستاگرام پیش از افزودنِ
+    تازه‌ها دقیقاً همان هشداری را خاموش می‌کرد که لازم است.
+
+    شرط عمداً روی `total` است نه روی
     `left`: «۰ قابلِ‌استفاده از ۳» یعنی استخر سوخته و دقیقاً همان چیزی است که این
     تابع برایش وجود دارد، پس گاردی که روی `healthy_count` نوشته شود همان زنگ را
     خفه می‌کند. «۰ از ۰» چیزِ دیگری است: از ۱۴ سطلی که `_cookie_platform` می‌تواند
@@ -268,7 +274,7 @@ async def _alert_if_low(redis, bot, platform: str) -> None:
         if thr <= 0:
             return
         total, left = await ck.pool_counts(redis, platform)
-        if not total:
+        if not total and not await ck.was_stocked(redis, platform):
             return          # سطل هرگز پر نشده — این «سوختن» نیست
         if left >= thr:
             return

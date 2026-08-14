@@ -30,6 +30,11 @@ _CK_CONTENT = "ckfile:"    # ckfile:<name> → محتوا
 _CK_META = "ckmeta:"       # ckmeta:<name> → JSON متادیتای اکانت
 _CK_CD = "ckcd:"           # ckcd:<name> → کول‌داون (TTL)
 _CK_ROT = "ckrot:"         # ckrot:<platform> → شمارندهٔ چرخش
+#: `ckseen:<platform>` → «این سطل زمانی اکانت داشت». بی‌TTL و **هرگز پاک نمی‌شود**
+#: (`del_meta` عمداً دست نمی‌زند). `ckrot` جایگزینش نیست: فقط وقتی زیاد می‌شود که
+#: **دو یا چند** نامزدِ هم‌رتبه باشند، پس سطلی که همیشه یک اکانت داشت هرگز آن را
+#: افزایش نمی‌دهد — سنجیده شد، و به همین دلیل سیگنالِ مشتق کنار گذاشته شد.
+_CK_SEEN = "ckseen:"
 
 # وضعیت‌ها (به‌ترتیبِ اولویتِ استفاده)
 # `UNPROVEN` = آخرین اتفاقِ این اکانت یک **خطا** بود، نه یک موفقیت. لزوماً خراب
@@ -373,6 +378,14 @@ async def set_meta(redis, name: str, meta: dict) -> None:
         return
     try:
         await redis.set(_CK_META + name, json.dumps(meta))
+        # ردِ ماندگارِ «این سطل زمانی اکانت داشت». این‌جا نوشته می‌شود و نه در
+        # مسیرِ افزودنِ پنل، چون `set_meta` تنها نقطه‌ای است که پلتفرمِ **صریح**
+        # را می‌بیند: نامِ فایل قابلِ‌اتکا نیست (اکانتِ «other» با برچسبِ
+        # «youtube-backup» فایلش `cookies_youtube-backup.txt` می‌شود و
+        # `guess_platform` سطلِ اشتباه را علامت می‌زند)، و `admin_web` هم در
+        # محیطِ تست قابلِ import نیست.
+        if meta.get("platform"):
+            await redis.set(_CK_SEEN + str(meta["platform"]), "1")
     except Exception as exc:  # noqa: BLE001
         log.debug("cookie meta write failed: %s", exc)
 
@@ -383,8 +396,42 @@ async def del_meta(redis, name: str) -> None:
     try:
         await redis.delete(_CK_META + name)
         await redis.delete(_CK_CD + name)
+        # `_CK_SEEN` عمداً **پاک نمی‌شود** — تمامِ ارزشش همین است. بدونش
+        # «هرگز پر نشده» و «پر بوده و خالی شده» هر دو `total == 0` می‌خوانند، و
+        # آن‌وقت حذفِ اکانت‌های مردهٔ اینستاگرام هشدارِ واقعی را خاموش می‌کند.
     except Exception:  # noqa: BLE001
         pass
+
+
+async def mark_seen(redis, platform: str) -> None:
+    """«این سطل زمانی اکانت داشت» — ماندگار، بی‌TTL، هرگز پاک‌نشدنی."""
+    if redis is None or not platform:
+        return
+    try:
+        await redis.set(_CK_SEEN + platform, "1")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def was_stocked(redis, platform: str) -> bool:
+    """آیا این سطل **زمانی** اکانت داشته؟
+
+    تنها ردِ ماندگارِ آن، چون حذفِ اکانت هم فایل را می‌برد هم متا را. سه حالتی که
+    مصرف‌کننده‌ها (`_alert_if_low`, `_warn_cookieless`) از هم جدا می‌کنند:
+    «۰ از ۰ و هرگز پر نشده» = عادی و ساکت · «۰ از ۰ ولی زمانی پر بوده» = یک
+    قابلیت از کار افتاده · «۰ از N» = استخرِ سوخته.
+
+    محدودیتِ شناخته‌شده: اگر Redis از صفر ساخته شود این رد می‌رود. آن حالت روی
+    مستر بی‌اثر است تا وقتی فایلی روی دیسک مانده باشد (`list_names` دیسک را
+    مقدم می‌داند، پس `total > 0`)؛ فقط «حذف شد **و بعد** Redis پاک شد» دوباره
+    ساکت می‌شود — یک شکستِ دوگانه، نه مسیرِ عادی.
+    """
+    if redis is None or not platform:
+        return False
+    try:
+        return bool(await redis.exists(_CK_SEEN + platform))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ── فهرستِ نام‌ها (مستر: دیسک · نود: آینهٔ Redis) ────────────────

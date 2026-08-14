@@ -214,3 +214,77 @@ async def test_a_pool_the_worker_cannot_see_still_errors_and_dms(redis, pool, ca
 
     assert _levels(caplog.records) == ["ERROR"], _levels(caplog.records)
     assert len(bot.messages) == 1 and "🛠" in bot.messages[0]
+
+
+# ── ۷) نقطهٔ کورِ «۰ از ۰»: هرگز‌پرنشده در برابرِ پر‌بوده‌و‌خالی‌شده ─────
+# بدونِ ردِ ماندگار، حذفِ اکانت‌های مردهٔ اینستاگرام (پیش از افزودنِ تازه‌ها)
+# سطل را به همان «۰ از ۰»ی می‌رساند که تازه ساکتش کردیم — یعنی نویزِ نُه سطل را
+# می‌بندیم و سیگنالِ سطل‌های مهم را خاموش می‌کنیم.
+async def _delete(redis, name: str) -> None:
+    """همان **سه** کاری که `admin_web.cookies_delete` می‌کند.
+
+    نسخهٔ اولِ این کمکی دو تا را داشت و تست شکست، چون `list_names` وقتی روی دیسک
+    چیزی پیدا نکند به آینهٔ Redis برمی‌گردد و اکانت‌های «حذف‌شده» را همچنان
+    می‌دید. یعنی حذفِ واقعی سه گام است و این را باید از خودِ پنل کپی کرد، نه از
+    حافظه.
+    """
+    ck.remove_cookie_file(name)
+    await ck._unmirror_cookie(redis, name)
+    await ck.del_meta(redis, name)
+
+
+async def test_deleting_the_last_account_leaves_a_durable_trace(redis, pool):
+    """واحد: `was_stocked` باید از حذف جان به در ببرد — کلِ نکته همین است."""
+    assert not await ck.was_stocked(redis, "instagram")
+    await _add(redis, "instagram_a.txt", "instagram")
+    assert await ck.was_stocked(redis, "instagram")
+
+    await _delete(redis, "instagram_a.txt")
+
+    assert await ck.pool_counts(redis, "instagram") == (0, 0)
+    assert await ck.was_stocked(redis, "instagram"), "رد نباید با حذف پاک شود"
+
+
+async def test_a_bucket_emptied_by_deletion_still_screams(redis, pool):
+    """رفتاری: «۰ از ۰ ولی زمانی پر بوده» = قابلیتی که از کار افتاده.
+
+    روی سورسِ پیش از این تغییر fail می‌شود — آن‌جا گارد فقط `total` را می‌دید و
+    این حالت را با «آپارات» یکی می‌گرفت.
+    """
+    await _add(redis, "instagram_a.txt", "instagram")
+    await _add(redis, "instagram_b.txt", "instagram")
+    await _delete(redis, "instagram_a.txt")
+    await _delete(redis, "instagram_b.txt")
+    assert await ck.pool_counts(redis, "instagram") == (0, 0)
+
+    bot = FakeBot()
+    await TD._alert_if_low(redis, bot, "instagram")
+
+    assert len(bot.messages) == 1, "سطلی که خالی شده باید داد بزند"
+    assert "🔴" in bot.messages[0]
+
+
+async def test_an_emptied_bucket_logs_an_error_not_an_info(redis, pool, caplog):
+    """همان تفکیک در `_warn_cookieless`: خالی‌شدن ناهنجاری است، نه مسیرِ عادی."""
+    await _add(redis, "instagram_a.txt", "instagram")
+    await _delete(redis, "instagram_a.txt")
+
+    with caplog.at_level(logging.DEBUG, logger="telabzar.dl"):
+        await TD._warn_cookieless(redis, FakeBot(), "instagram", "master")
+
+    assert _levels(caplog.records) == ["ERROR"], _levels(caplog.records)
+
+
+async def test_a_never_stocked_bucket_is_still_silent_after_the_trace_exists(
+        redis, pool, caplog):
+    """کنترل: ردِ یک سطل نباید سطلِ دیگر را بیدار کند."""
+    await _add(redis, "instagram_a.txt", "instagram")
+    await _delete(redis, "instagram_a.txt")
+
+    bot = FakeBot()
+    with caplog.at_level(logging.DEBUG, logger="telabzar.dl"):
+        await TD._alert_if_low(redis, bot, "aparat")
+        await TD._warn_cookieless(redis, bot, "aparat", "master")
+
+    assert bot.messages == []
+    assert _levels(caplog.records) == ["INFO"], _levels(caplog.records)
