@@ -153,6 +153,63 @@ CASES: list[dict] = [
      "new": '"-i", inp, "-ss", f"{start}", "-to", f"{end}",\n                "-vn"',
      "target": "tests/test_phase2b.py::test_trim_video_seeks_before_input",
      "expect": None},
+
+    # ── مسیرِ ناشناسِ اینستاگرام (فاز ۱) ─────────────────────────
+    # اولی مهم‌ترینشان است: تلهٔ srcset روی فیکسچرِ واقعی **هم عرض و هم URLِ
+    # برنده** را عوض می‌کند (۳۰۷۲ → ۹)، پس اگر این نیفتد یعنی تست چیزی
+    # را نمی‌سنجد. توجه: شکلِ per-token + `re.search` باربر است —
+    # `findall`+`max` روی کلِ رشته تصادفاً همان ۳۰۷۲ را می‌دهد و سابوتاژ
+    # بی‌اثر می‌شود.
+    {"name": "ig: srcset width regex unanchored (picks a number from inside the URL)",
+     "path": "app/instagram_anon.py",
+     "old": '_SRCSET_W_RE = re.compile(r"\\s(\\d+)w$")',
+     "new": '_SRCSET_W_RE = re.compile(r"(\\d+)w")',
+     "target": "tests/test_instagram_anon.py",
+     "expect": "test_single_photo_comes_from_the_img_fallback_and_picks_the_widest_candidate"},
+
+    # این یکی **باید هر دو گارد را با هم بردارد** و دلیلش خودش یک یافته است:
+    # `if cj` و `isinstance(cj, str)` دو دفاعِ مستقل‌اند و هرکدام به‌تنهایی جلوی
+    # کرش را می‌گیرد، پس یک سابوتاژِ تک‌گارده هیچ تستی را نمی‌اندازد و «نگرفت»
+    # گزارش می‌شود — که از بیرون شبیهِ تستِ ضعیف است ولی نیست. شکلِ زیر همان
+    # پیاده‌سازیِ ساده‌لوحانه‌ای است که واقعاً نوشته می‌شود.
+    {"name": "ig: contextJSON parsed on key presence (both guards dropped)",
+     "path": "app/instagram_anon.py",
+     "old": "            if cj:\n                try:\n"
+            "                    ctx = json.loads(cj) if isinstance(cj, str) else cj",
+     "new": '            if "contextJSON" in init:\n                try:\n'
+            "                    ctx = json.loads(cj)",
+     "target": "tests/test_instagram_anon.py",
+     "expect": "test_single_photo_comes_from_the_img_fallback_and_picks_the_widest_candidate"},
+
+    {"name": "ig: only shortcode_media is read (the GraphQL key is dropped)",
+     "path": "app/instagram_anon.py",
+     "old": 'media = gql.get("shortcode_media") or gql.get("xdt_shortcode_media")',
+     "new": 'media = gql.get("shortcode_media")',
+     "target": "tests/test_instagram_anon.py",
+     "expect": "test_xdt_shortcode_media_is_read_too"},
+
+    {"name": "ig: media-host allow-list removed",
+     "path": "app/instagram_anon.py",
+     "old": '    if not host.endswith(_MEDIA_HOST_SUFFIXES):\n        return False\n'
+            '    if host.startswith("static."):            # میزبانِ دارایی‌های ثابتِ اینستاگرام\n'
+            "        return False\n"
+            '    return "/rsrc.php/" not in (p.path or "")',
+     "new": "    return True",
+     "target": "tests/test_instagram_anon.py",
+     "expect": "test_an_icon_url_in_a_structured_field_is_still_rejected"},
+
+    {"name": "ig: a video child without video_url silently yields the poster (cobalt's behaviour)",
+     "path": "app/instagram_anon.py",
+     "old": "        if not vurl:\n"
+            "            raise _VideoUrlMissing(\n"
+            '                f"carousel child {index}: is_video but no video_url")\n'
+            '        return InstagramAnonItem("video", vurl) if _is_media_url(vurl) else None',
+     "new": "        if not vurl:\n"
+            '            durl = node.get("display_url")\n'
+            '            return InstagramAnonItem("photo", durl) if _is_media_url(durl) else None\n'
+            '        return InstagramAnonItem("video", vurl) if _is_media_url(vurl) else None',
+     "target": "tests/test_instagram_anon.py",
+     "expect": "test_a_video_child_without_video_url_drops_the_whole_rung"},
 ]
 
 
