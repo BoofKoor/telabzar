@@ -232,6 +232,20 @@ surfaces as a loud `SabotageError` rather than a silent pass. It is **manual, ne
 rewrites source, so a parallel run cannot be trusted. An entry with `expect: None` is a reverse
 control: that sabotage must *not* fail the named test, which is how the trim case proves the
 structural test targets `trim_video` and not its neighbour.
+**The registry matches the failing test by name, so a `parametrize` id containing a space makes a
+successful sabotage report itself as a miss.** `_run_case` reads pytest's summary and splits it on
+whitespace, and pytest's *auto-generated* ids are built from the parameter values — so a case
+parametrized over engine error strings produced ids like
+`test_x[An unexpected error occurred: JSONDecodeError - …]`, which the splitter chopped at the
+first space and could never match against `expect`. Measured on the first replay of the probe
+cases: the sabotage landed, all five parametrizations failed exactly as intended, and the notebook
+printed «نگرفت». The fix belongs in the **test**, not in the registry — pass explicit, space-free
+`ids=[…]` — because a name that survives being split is also the name you grep for in CI output.
+Note what class of error this is: not a weak assertion and not a sabotage that failed to apply
+(the two failure modes above), but the **validation tool misreading a correct result** — and its
+symptom is indistinguishable from "the tests are worthless", which is precisely the reading that
+would make someone weaken a good test. When a case is parametrized, name it explicitly and point
+`expect` at one specific id, the way the ig-anon story-link case already does.
 **There is a third layer, and it is the subtlest: the helper proves the patch *applied*, not that
 it broke what you meant to break.** Verifying the trim claim, the first sabotage moved `-ss`/`-to`
 after `-i` but left a leading `-ss` in place; `patch_source` was satisfied, the file really did
