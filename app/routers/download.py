@@ -128,7 +128,17 @@ async def _reject(message: Message, arq_pool: ArqRedis, user: User | None, lang:
         await message.answer(t(lang, "nsfw_user_blocked"))
 
 
-@router.message(F.text.regexp(r"https?://"))
+# `mode="search"` **لازم است، آرایش نیست**: پیش‌فرضِ `magic_filter.regexp` برابرِ
+# `pattern.match` است نه `pattern.search` (`magic_filter/magic.py`، شاخهٔ
+# `if mode is None`)، یعنی لنگرخورده به موقعیتِ صفر. بدونِ آن، متن باید **با**
+# `http` شروع شود — پس دکمهٔ Shareِ اپِ ساندکلاود («Listen to … on #SoundCloud\n<لینک>»)،
+# اشتراکِ دوخطیِ یوتیوب، «اینو بگیر <لینک>» و حتی **یک فاصلهٔ** پیش از لینک همگی
+# از این هندلر رد می‌شدند و به fallbackِ `files.py` می‌افتادند، یعنی کاربر در جوابِ
+# یک لینکِ کاملاً معتبر «یک فایل بفرست» می‌گرفت.
+#
+# و بدترین بخشش این بود که **در هیچ شمارنده‌ای دیده نمی‌شد**: `_metric`/`dlstat:*`
+# داخلِ `run_download`اند و وقتی هندلر اجرا نشود جابی ساخته نمی‌شود که چیزی بشمارد.
+@router.message(F.text.regexp(r"https?://", mode="search"))
 async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | None,
                   session: AsyncSession) -> None:
     if not await settings_store.get_bool("downloader_enabled", settings.downloader_enabled):
