@@ -79,6 +79,7 @@ def sabotage(path: str | Path, old: str, new: str, *, count: int = 1):
 #
 #: (نام, فایل, الگو, جایگزین, تعدادِ تطبیق, تستِ هدف, تستی که باید بیفتد)
 _IGW = "tests/test_ig_anon_wiring.py"
+_PCB = "tests/test_probe_cookie_blame.py"
 
 CASES: list[dict] = [
     # ── فاز ۲: مسیرِ ناشناسِ اینستاگرام. یکی به‌ازای هر قیدِ سخت. ──
@@ -289,6 +290,88 @@ CASES: list[dict] = [
             '        return InstagramAnonItem("video", vurl) if _is_media_url(vurl) else None',
      "target": "tests/test_instagram_anon.py",
      "expect": "test_a_video_child_without_video_url_drops_the_whole_rung"},
+
+    # ── حلقهٔ probe: کلاسِ خطا، خطِ لاگ، سقفِ تلاش ──
+    # نکتهٔ الگو: `if max_tries and attempts >= max_tries:` حالا **دو بار** در
+    # فایل است (fetch و probe)، پس شکلِ کوتاهش `SabotageError` می‌دهد — همان
+    # تله‌ای که یک‌بار `trim_audio` را به‌جای `trim_video` خراب کرد. هر الگوی
+    # این‌جا آن‌قدر بلند است که یکتا شود و `count` هم صریح داده شده.
+    {"name": "probe: mark_fail loses the error class again (whole-pool bench)",
+     "path": "app/tasks_download.py",
+     "old": "await ck.mark_fail(redis, cname, error_class=cls, message=msg)",
+     "new": "await ck.mark_fail(redis, cname)",
+     "count": 1,
+     "target": _PCB,
+     "expect": "test_a_probe_transient_does_not_bench_the_whole_pool"},
+
+    {"name": "probe: the class is passed but the message is forgotten",
+     "path": "app/tasks_download.py",
+     "old": "await ck.mark_fail(redis, cname, error_class=cls, message=msg)",
+     "new": "await ck.mark_fail(redis, cname, error_class=cls)",
+     "count": 1,
+     "target": _PCB,
+     # نامِ **پارامتری‌شده**، مثلِ موردِ استوریِ ig-anon بالاتر: دفترچه تطبیقِ
+     # دقیق می‌خواهد. `transient` انتخاب شد چون همان کلاسی است که ادعای
+     # «کلِ استخر» رویش سوار است.
+     "expect": "test_a_probe_failure_records_why_in_the_panel[transient]"},
+
+    # کنترلِ معکوس: همان خرابکاری **نباید** کنترلِ بات‌چک را بیندازد. بات‌چک
+    # اکانت را می‌سوزاند و باید بسوزاند، پس رفع نباید آن را نرم کرده باشد.
+    {"name": "probe: mark_fail loses the class — but the bot-check control stays green",
+     "path": "app/tasks_download.py",
+     "old": "await ck.mark_fail(redis, cname, error_class=cls, message=msg)",
+     "new": "await ck.mark_fail(redis, cname)",
+     "count": 1,
+     "target": _PCB + "::test_a_probe_bot_check_is_punished_exactly_as_before",
+     "expect": None},
+
+    {"name": "probe: the checkpoint alert is dropped again",
+     "path": "app/tasks_download.py",
+     "old": "                    if ck.needs_human(cls):",
+     "new": "                    if False:",
+     "count": 1,
+     "target": _PCB,
+     "expect": "test_a_probe_checkpoint_tells_the_admin"},
+
+    # کنترلِ معکوس: نبودِ DM نباید تستِ **فریز** را بیندازد — فریز کارِ
+    # `mark_fail` است و DM کارِ `_alert_checkpoint`؛ دو ادعای جدا.
+    {"name": "probe: checkpoint alert dropped — but the freeze test stays green",
+     "path": "app/tasks_download.py",
+     "old": "                    if ck.needs_human(cls):",
+     "new": "                    if False:",
+     "count": 1,
+     "target": _PCB + "::test_a_probe_checkpoint_freezes_the_account",
+     "expect": None},
+
+    {"name": "probe: the attempt cap is removed (walks the whole pool)",
+     "path": "app/tasks_download.py",
+     "old": "                    if max_tries and attempts >= max_tries:\n"
+            '                        log.info("probe: stopping after %d attempts '
+            '(dl_max_cookie_tries)",',
+     "new": "                    if False:\n"
+            '                        log.info("probe: stopping after %d attempts '
+            '(dl_max_cookie_tries)",',
+     "count": 1,
+     "target": _PCB,
+     "expect": "test_the_probe_loop_stops_at_dl_max_cookie_tries"},
+
+    {"name": "probe: the failure log line goes back to being message-less",
+     "path": "app/tasks_download.py",
+     "old": 'log.info("probe attempt %d failed (%s): %s", attempts, cls, msg[:90])',
+     "new": 'log.info("probe: an attempt failed")',
+     "count": 1,
+     "target": _PCB,
+     "expect": "test_a_probe_failure_is_greppable_in_the_log"},
+
+    # کنترلِ معکوس: خطِ لاگ فقط تشخیصی است. برداشتنش نباید ادعای استخر را
+    # بیندازد — اگر بیندازد یعنی آن تست دارد لاگ را می‌سنجد نه رفتار را.
+    {"name": "probe: log line neutered — but the pool claim stays green",
+     "path": "app/tasks_download.py",
+     "old": 'log.info("probe attempt %d failed (%s): %s", attempts, cls, msg[:90])',
+     "new": 'log.info("probe: an attempt failed")',
+     "count": 1,
+     "target": _PCB + "::test_a_probe_transient_does_not_bench_the_whole_pool",
+     "expect": None},
 ]
 
 

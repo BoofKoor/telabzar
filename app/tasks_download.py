@@ -760,18 +760,50 @@ async def run_download(ctx: dict, payload: dict) -> None:
         await _edit(bot, chat_id, status_mid, t(lang, "dl_probing"))
         # مثلِ fetch: اگر کوکی خطا داد، کوکیِ بعدی امتحان می‌شود.
         info, msg, tried = None, "", set()
+        attempts = 0
+        # همان سقفی که حلقهٔ fetch دارد (`dl_max_cookie_tries`). بدونش یک خطای
+        # کوکی‌محور در probe **کلِ استخر** را می‌پیماید و هیچ کلیدِ پنلی محدودش
+        # نمی‌کند — و چون این حلقه به‌ازای هر اکانتی که لمس می‌کند یک ضربه ثبت
+        # می‌کرد، واحدِ آسیب «اکانت» نبود، «استخر» بود.
+        max_tries = await settings_store.get_int("dl_max_cookie_tries",
+                                                 settings.dl_max_cookie_tries)
         while True:
             cname, cpath = await _next_cookie(redis, platform, workdir, tried)
+            attempts += 1
             try:
                 info = await D.probe(url, await _opts(redis, platform, workdir, cpath))
                 await ck.mark_ok(redis, cname)
                 break
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
+                cls = ck.classify_error(msg)
+                # تنها خطی که توزیعِ خطای فازِ probe را قابلِ اندازه‌گیری می‌کند.
+                # تا امروز این شاخه فقط **نامِ اکانت** را لاگ می‌کرد و متنِ خطا را
+                # هرگز، و شاخهٔ شکستِ نهایی‌اش اصلاً لاگ نمی‌کرد — پس هر سرشماریِ
+                # لاگ در عمل آمارِ fetch بود و تعمیمش به probe بی‌پشتوانه. شکل
+                # عمداً هم‌ریختِ خطِ `attempt %d failed (%s)`ِ حلقهٔ fetch است تا
+                # یک گرپ هر دو فاز را کنارِ هم بیاورد.
+                log.info("probe attempt %d failed (%s): %s", attempts, cls, msg[:90])
                 if cname and _is_cookie_error(msg, platform):
-                    await ck.mark_fail(redis, cname)
+                    # کلاس و متن پاس داده می‌شوند، دقیقاً مثلِ مسیرِ fetch
+                    # (`_resolve_blame`). بدونشان `mark_fail` از هر شاخهٔ
+                    # دسته‌بندی رد می‌شد و به سخت‌ترینشان می‌افتاد، پس یک خطای
+                    # مبهمِ `transient` (بدنهٔ خالی/JSONDecodeError) هر اکانتی را
+                    # که لمس می‌کرد می‌سوزاند — اندازه‌گیری‌شده روی استخرِ ۵تایی:
+                    # ۰ از ۵ قابلِ‌استفاده می‌ماند، در حالی که با کلاس ۵ از ۵.
+                    await ck.mark_fail(redis, cname, error_class=cls, message=msg)
+                    if ck.needs_human(cls):
+                        # چک‌پوینت با تلاشِ خودکار حل نمی‌شود؛ مسیرِ fetch این را از
+                        # `_resolve_blame` می‌گیرد و probe تا امروز نداشت، یعنی
+                        # اکانت بی‌صدا کنار می‌رفت.
+                        await _alert_checkpoint(redis, bot, cname,
+                                                _cookie_platform(platform), msg)
                     tried.add(cname)
                     await _alert_if_low(redis, bot, _cookie_platform(platform))
+                    if max_tries and attempts >= max_tries:
+                        log.info("probe: stopping after %d attempts (dl_max_cookie_tries)",
+                                 attempts)
+                        break
                     if await ck.pick(redis, _cookie_platform(platform), exclude=tried):
                         log.info("probe: cookie %s failed, trying next", cname)
                         continue
