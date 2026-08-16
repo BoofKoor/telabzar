@@ -430,6 +430,16 @@ usable accounts drop below `cookie_alert_min`.
   on this app». تنها فرمِ خطای یوتیوب همان bot-checkِ استاندارد است، **۲۹ بار**. یک ریزه‌کاریِ
   شمارش که باید گفته شود وگرنه عدد سه‌برابر خوانده می‌شود: سه گرپِ `not a bot` /
   `cookies-from-browser` / `Sign in to confirm` **یک پیامِ واحد** را می‌شمارند، نه سه رخداد.
+  **و یک قیدِ دامنه که بدونش این سرشماری اشتباه خوانده می‌شود: این آمارِ فازِ fetch است، نه
+  فازِ probe.** تنها دو خطِ لاگ متنِ خطای موتور را حمل می‌کنند و **هر دو در حلقهٔ fetch**اند —
+  `anonymous attempt failed (%s); retrying with a cookie` (که فقط `cls` را چاپ می‌کند) و
+  `attempt %d failed (%s); rotating: %s` (که `str(exc)[:90]` را چاپ می‌کند). شاخهٔ probe فقط
+  `probe: cookie %s failed, trying next` می‌زند — **نامِ اکانت، بدونِ پیام** — و شاخهٔ شکستِ
+  نهایی‌اش اصلاً لاگ نمی‌کند. پس **شکستِ probe در لاگ نامرئی است و توزیعِ خطایش اندازه‌گیری
+  نشده**؛ هر استدلالی که توزیعِ fetch را به probe تعمیم بدهد بی‌پشتوانه است. این فرق عملی هم
+  دارد: probe **همیشه با کوکی** می‌رود و طبقِ جدولِ چهارحالتهٔ بالا کوکی جواب می‌دهد، پس
+  محتمل است probe عمدتاً **موفق** باشد — یعنی هزینهٔ قطعیِ فازِ probe «مصرفِ اکانت» است،
+  و «سوزاندنِ اکانت» یک احتمالِ نسنجیده. برای سنجشش یک خطِ لاگ لازم است که امروز نیست.
   **نتیجه:** واگراییِ `downloader._YT_BOTCHECK_HINTS` با `cookies._CLASS_HINTS[BOT_CHECK]` — که
   باعث می‌شود گیتِ ارتقای anon→کوکی (`tasks_download.py`، شاخهٔ `if anon:` در حلقهٔ fetch، شرطِ
   `cls != ck.UNRELATED`) بعضی خطاها را رد کند — **واقعی ولی امروز بی‌هزینه** است: درستیِ نهفته،
@@ -449,6 +459,18 @@ usable accounts drop below `cookie_alert_min`.
   probe است. سنجهٔ در دسترس برای حجمِ probe: کلیدهای `probe:{ref}` (TTL ۱۸۰۰) در برابرِ
   `dlctx:{ref}` که برای **هر** لینک ست می‌شود — نسبتشان سهمِ probe در ۳۰ دقیقهٔ اخیر است. شمارندهٔ
   اختصاصی ندارد.
+  **و حلقهٔ probe سقفِ تلاش ندارد** — `dl_max_cookie_tries` فقط در حلقهٔ fetch چک می‌شود
+  (`if max_tries and attempts >= max_tries`)، پس یک شکستِ کوکی‌محور در probe **کلِ استخر** را
+  می‌پیماید و هیچ کلیدِ پنلی محدودش نمی‌کند. با `ck_invalid_at=3` و کول‌داونِ پلکانی،
+  اندازه‌گیری‌شده روی استخرِ سه‌تایی: سه استورمِ فاصله‌دار (t≈۰ / +۳۰د / +۹۰د) هر سه اکانت را به
+  `fail_streak=3` یعنی «باطل» می‌رساند. این نتیجه **مشروط** است نه مشاهده‌شده — نرخِ شکستِ
+  probe در تولید (بولتِ بالا) اندازه‌گیری نشده.
+  **ساده‌ترین اهرم یک کلیدِ پنل است، نه کد:** `dl_ux_youtube = quick` کلِ این کلاس را حذف
+  می‌کند — اندازه‌گیری‌شده روی `_resolve_ux` و تصمیمِ `quick` در `routers/download.py`:
+  فاز به `fetch` می‌رود (پس anon-first اعمال می‌شود و مصرفِ کوکیِ probe **صفر** می‌شود)،
+  کشِ آنی سرِ intake **چک می‌شود** (امروز با probe اصلاً چک نمی‌شود)، و `_charge` هم اعمال
+  می‌شود (پس سقفِ روزانه و کول‌داونِ کاربر برمی‌گردند). بهایش تصمیمِ محصولی است: منوی کیفیت
+  از بین می‌رود و کاربر «بهترین» می‌گیرد.
 - **Spotify/Apple are DRM**: never downloaded directly — metadata is resolved then matched to a YouTube recording. Accurate matching needs `ytmusicapi` **installed in the download-worker image** and a proxy that can reach `music.youtube.com`; otherwise it falls back to raw `ytsearch` (less accurate). `SPOTIFY_SOURCE=youtube` forces the fallback.
 - **The Spotify Web API is closed to us — design for the embed page, and stop looking for a key.**
   `spotify_resolve()` has two paths: the official API when `spotify_client_id`+`spotify_client_secret`
