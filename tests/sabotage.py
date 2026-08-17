@@ -87,6 +87,9 @@ _CBX = "tests/test_castbox_path.py"
 _CAP = "tests/test_caption_html.py"
 _COV = "tests/test_audio_cover.py"
 _ORP = "tests/test_probe_orphan.py"
+_HYG = "tests/test_repo_hygiene.py"
+_PAL = "tests/test_panel_path_is_alive.py"
+_CHR = "tests/panel/test_security_characterization.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -800,6 +803,118 @@ CASES: list[dict] = [
      "new": "    if False:\n        try:\n            proc.kill()",
      "target": _ORP,
      "expect": "test_the_harness_can_observe_a_kill"},
+
+    # ── فاز ۳: مسیرِ تستِ رفتاریِ پنل ───────────────────────────────────────
+    # این موردها فقط `tests/` را می‌خوانند و هیچ‌کدام به استکِ ادمین نیاز ندارند،
+    # پس در همان محیطِ `requirements-dev.txt` اجرا می‌شوند. موردهایی که خودِ
+    # `tests/panel/` را هدف بگیرند **به `requirements-admin.txt` نیاز دارند**،
+    # چون `_run_case` واقعاً pytest را روی آن مسیر می‌دواند.
+    {"name": "panel: drop the tests/panel exemption from the import guard",
+     "path": "tests/test_repo_hygiene.py",
+     "old": '_PANEL_DIR = "tests/panel"',
+     "new": '_PANEL_DIR = "tests/nowhere"',
+     "target": _HYG,
+     "expect": "test_no_test_imports_a_module_the_ci_runner_does_not_have"},
+
+    {"name": "panel: stop the guard reading conftest.py",
+     "path": "tests/test_repo_hygiene.py",
+     "old": 'return sorted({*tests_dir.rglob("test_*.py"), *tests_dir.rglob("conftest.py")})',
+     "new": 'return sorted(tests_dir.rglob("test_*.py"))',
+     "target": _HYG,
+     "expect": "test_the_guard_also_reads_conftest_files"},
+
+    {"name": "panel: blind the guard to the from-package import form again",
+     "path": "tests/test_repo_hygiene.py",
+     "old": "            for alias in node.names:\n"
+            "                yield f\"{node.module}.{alias.name}\", node.lineno",
+     "new": "            pass",
+     "target": _HYG,
+     "expect": "test_the_guard_sees_the_from_package_import_form"},
+
+    {"name": "panel: make the CI panel job depend on the main job",
+     "path": ".github/workflows/tests.yml",
+     "old": "  panel:\n    runs-on: ubuntu-latest",
+     "new": "  panel:\n    needs: pytest\n    runs-on: ubuntu-latest",
+     "target": _PAL,
+     "expect": "test_the_panel_job_runs_in_parallel_with_the_main_job"},
+
+    {"name": "panel: drop the collected-count gate from the CI job",
+     "path": ".github/workflows/tests.yml",
+     "old": "          n=$(pytest tests/panel --collect-only -q | grep -c '::')",
+     "new": "          n=5",
+     "target": _PAL,
+     "expect": "test_the_panel_job_asserts_a_nonzero_collection"},
+
+    {"name": "panel: stop pytest.ini ignoring the panel dir by default",
+     "path": "pytest.ini",
+     "old": "addopts = --ignore=tests/panel",
+     "new": "addopts =",
+     "target": _PAL,
+     "expect": "test_pytest_ini_keeps_the_panel_directory_out_of_the_default_run"},
+
+    # **کنترلِ معکوس:** جابه‌جاییِ ترتیبِ دو کلیدِ requirements در همان دستور
+    # نباید چیزی را بشکند — گاردها **حضور** را می‌سنجند نه ترتیب را. اگر این
+    # چیزی بیندازد یعنی گاردی به شکلِ رشته چسبیده که نباید.
+    {"name": "panel: reorder the two requirements files in the install step (must break nothing)",
+     "path": ".github/workflows/tests.yml",
+     "old": "pip install -r requirements-dev.txt -r requirements-admin.txt",
+     "new": "pip install -r requirements-admin.txt -r requirements-dev.txt",
+     "target": _PAL,
+     "expect": None},
+
+    # ── تست‌های characterization ────────────────────────────────────────────
+    # این‌ها شکلِ **معکوس** دارند: «خرابکاری» در واقع همان **رفعِ فاز ۲** است، و
+    # ادعا این است که تستِ `..._TODAY_...` مربوطه آشکارا قرمز می‌شود. اگر یکی از
+    # این‌ها «نگرفت» بدهد یعنی آن تست رفتارِ امروز را pin نمی‌کند و فاز ۲
+    # می‌تواند بی‌صدا از کنارش رد شود.
+    #
+    # ⚠️ این چهار مورد `tests/panel/` را هدف می‌گیرند، پس **به
+    # `requirements-admin.txt` نیاز دارند**؛ در محیطِ فقط-dev با خطای collect
+    # می‌افتند و نتیجه بی‌معناست.
+    {"name": "char: A-1 fix — stop deriving the session key from the bot token",
+     "path": "app/admin_web.py",
+     "old": "    seed = settings.admin_secret or settings.bot_token",
+     "new": "    seed = settings.admin_secret",
+     "target": _CHR,
+     "expect": "test_TODAY_an_empty_admin_secret_falls_back_to_the_bot_token"},
+
+    {"name": "char: A-2 fix — keep the join token out of the redirect URL",
+     "path": "app/admin_web.py",
+     "old": '    raise web.HTTPFound(f"/nodes?tok={tok}")',
+     "new": '    raise web.HTTPFound("/nodes")',
+     "target": _CHR,
+     "expect": "test_TODAY_the_join_token_is_handed_back_in_the_redirect_url"},
+
+    {"name": "char: A-2 fix — stop returning service config from /node/join",
+     "path": "app/admin_web.py",
+     "old": "    cfg = node_mod.node_config(role, ip)",
+     "new": '    cfg = {"services": {}}',
+     "target": _CHR,
+     "expect": "test_TODAY_an_unauthenticated_caller_can_redeem_that_token"},
+
+    {"name": "char: A-3 fix — validate the request before consuming the token",
+     "path": "app/admin_web.py",
+     "old": '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n'
+            '    if payload is None:\n'
+            '        return web.json_response({"error": "invalid or used token"}, status=403)\n'
+            '    if not pubkey or len(pubkey) > 64:\n'
+            '        return web.json_response({"error": "missing pubkey"}, status=400)',
+     "new": '    if not pubkey or len(pubkey) > 64:\n'
+            '        return web.json_response({"error": "missing pubkey"}, status=400)\n'
+            '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n'
+            '    if payload is None:\n'
+            '        return web.json_response({"error": "invalid or used token"}, status=403)',
+     "target": _CHR,
+     "expect": "test_TODAY_a_malformed_join_burns_the_token"},
+
+    # **کنترلِ معکوس:** تغییری در همان تابع که هیچ ادعای ثبت‌شده‌ای را جابه‌جا
+    # نمی‌کند. اگر چیزی بیندازد یعنی تستی به جزئیاتِ بی‌ربط چسبیده.
+    {"name": "char: rename a local in node_join (must break nothing)",
+     "path": "app/admin_web.py",
+     "old": '        nid = secrets.token_urlsafe(9)[:12]',
+     "new": '        nid = secrets.token_urlsafe(9)[:12]  # noqa',
+     "target": _CHR,
+     "expect": None},
 ]
 
 
