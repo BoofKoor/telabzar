@@ -388,12 +388,22 @@ VIDEO_FMT = {"format_id": "v", "url": "https://cdn/v.mp4", "ext": "mp4",
 
 
 def _ctx(formats: list[dict]) -> dict:
-    """دقیقاً همان ctxی که `YoutubeDL._select_formats` می‌سازد."""
-    return {"formats": formats,
-            "has_merged_format": any(
-                "none" not in (f.get("acodec"), f.get("vcodec")) for f in formats),
-            "incomplete_formats": (all(f.get("vcodec") == "none" for f in formats)
-                                   or all(f.get("acodec") == "none" for f in formats))}
+    """ctxی که `YoutubeDL._select_formats` می‌سازد — **از خودش پرسیده می‌شود**.
+
+    نسخهٔ اول همان دو عبارت را دستی بازنویسی می‌کرد. درست بود، ولی یک کپیِ
+    دومِ دست‌نویس از قاعده‌ای است که صاحبش yt-dlp است، و دو کپیِ دست‌نویس
+    واگرا می‌شوند (همان درسِ `remove_cookie_file`): روزی که yt-dlp فرمول را
+    عوض کند، این‌جا بی‌صدا کهنه می‌شود و هارنس دوباره چیزی را مدل می‌کند که
+    تولید نیست. حالا قاعده فقط **یک** جا زندگی می‌کند.
+    """
+    seen: dict = {}
+
+    def _spy(ctx):
+        seen.update(ctx)
+        return []
+
+    YoutubeDL({"quiet": True})._select_formats(formats, _spy)
+    return seen
 
 
 def _picked(expr: str, formats: list[dict]) -> str | None:

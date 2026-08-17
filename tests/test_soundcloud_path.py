@@ -18,6 +18,11 @@
 
 **۳) پیام‌ها.** سه پیام دربارهٔ «سشن» حرف می‌زدند در حالی که سطلِ ساندکلاود
 هیچ اکانتی ندارد و پنل هم نمی‌تواند برایش بسازد.
+
+**۰) خودِ هارنس** (بعداً اضافه شد، بخشِ «۰» پایین). نسخهٔ اولِ `_picked` ctxِ
+انتخابگر را هاردکد می‌کرد و **هر دو فلگش غلط بود**. نتیجهٔ کارِ ۱ عوض نشد —
+ولی همان نقص در کارِ کست‌باکس یک نقصِ تولیدیِ **خیالی** ساخت. حالا ctx از
+`YoutubeDL._select_formats` می‌آید، یعنی همان جایی که تولید می‌سازدش.
 """
 from __future__ import annotations
 
@@ -56,7 +61,48 @@ ALL_THREE = [HTTP_MP3, HLS_MP3, HLS_AAC]
 
 
 def _picked(expr: str, formats: list[dict]) -> str | None:
-    """فرمتی که yt-dlp با این عبارت برمی‌دارد — با موتورِ خودش، نه شبیه‌سازی."""
+    """فرمتی که yt-dlp با این عبارت برمی‌دارد — با موتورِ خودش، نه شبیه‌سازی.
+
+    **ctx از `_select_formats` می‌آید، نه از یک دیکشنریِ دست‌ساز.** آن متد همان
+    چیزی است که `process_video_result` صدا می‌زند (`YoutubeDL.py:2885`)، پس
+    `incomplete_formats`/`has_merged_format` را دقیقاً همان‌جایی می‌سازد که تولید
+    می‌سازدشان.
+
+    نسخهٔ اول ctx را هاردکد می‌کرد (`incomplete_formats: False`، و
+    `has_merged_format` را اصلاً نمی‌داد) و **هر دو مقدار غلط بودند**:
+    اندازه‌گیری‌شده روی همین فیکسچر، yt-dlp مقدارِ `True` و `False` می‌سازد. این
+    باگِ تولیدی نبود — انتخابگرِ ساندکلاود با هر دو ctx همان `http_mp3_0_0` را
+    می‌دهد، چون `ba` بی‌اعتنا به این فلگ‌ها جور می‌شود — ولی هارنس یک نقصِ
+    **خیالی** ساخت: در کارِ کست‌باکس گزارش کرد `bv*+ba/b` روی منبعِ فقط‌صوتی
+    «هیچ فرمتی برنمی‌دارد»، نتیجه‌ای تمیز و بازتولیدپذیر و کاملاً غلط که نزدیک
+    بود کدِ سالم را «تعمیر» کند. §۶: false fail، نه false pass — و سابوتاژ این
+    رده را نمی‌گیرد، چون آن‌جا خودِ اندازه‌گیری خراب است نه assert.
+
+    اگر روزی yt-dlp این متد را تغییرِ نام بدهد، این‌جا `AttributeError` می‌دهد و
+    **کلِ فایل بلند می‌افتد** — که همان چیزی است که می‌خواهیم؛ سکوت و برگشت به
+    ctxِ دست‌ساز دقیقاً همان تله است.
+    """
+    ydl = YoutubeDL({"format": expr, "quiet": True})
+    got = ydl._select_formats(formats, ydl.build_format_selector(expr))
+    return got[0]["format_id"] if got else None
+
+
+def _ctx_yt_dlp_builds(formats: list[dict]) -> dict:
+    """ctxی که خودِ yt-dlp برای این فرمت‌ها می‌سازد (با یک انتخابگرِ جاسوس)."""
+    seen: dict = {}
+
+    def _spy(ctx):
+        seen.update(ctx)
+        return []
+
+    YoutubeDL({"quiet": True})._select_formats(formats, _spy)
+    return seen
+
+
+# شکلِ **پیش از رفع** — عمداً این‌جا نگه داشته شده تا کنترلِ منفی بتواند نشان
+# دهد نسخهٔ محافظت‌نشده روی همین هارنس واقعاً می‌افتد. بدونِ آن، «فلگ درست است»
+# از «این مسیر اصلاً اجرا نمی‌شود» تفکیک‌پذیر نیست.
+def _picked_with_a_hardcoded_ctx(expr: str, formats: list[dict]) -> str | None:
     ydl = YoutubeDL({"format": expr, "quiet": True})
     got = list(ydl.build_format_selector(expr)(
         {"formats": formats, "incomplete_formats": False}))
@@ -66,6 +112,53 @@ def _picked(expr: str, formats: list[dict]) -> str | None:
 def _sc(formats: list[dict]) -> str | None:
     """انتخابِ **تولید** برای یک لینکِ ساندکلاودِ صوتی."""
     return _picked(D._selector_to_format("audio", "soundcloud"), formats)
+
+
+# ── ۰) خودِ هارنس ───────────────────────────────────────────────────
+# سه ادعا در سه سطح، چون این هم یک «دفاع در عمق» است و یک تستِ انتها‌به‌انتها
+# نمی‌تواند هر دو فلگ را جدا اثبات کند (§۷).
+def test_the_harness_computes_the_flags_like_yt_dlp_does():
+    """پینِ حقیقتِ زمینی: yt-dlp برای این فیکسچر چه ctxی می‌سازد.
+
+    هر دو مقداری که نسخهٔ اولِ هارنس فرض کرده بود **غلط** بودند:
+    `incomplete_formats` را `False` می‌گفت (درستش `True` است — همهٔ فرمت‌ها
+    `vcodec="none"` دارند، یعنی همان حالتِ «فقط‌صوتی» که کامنتِ خودِ yt-dlp
+    ساندکلاود را به‌عنوان مثالش نام می‌برد) و `has_merged_format` را اصلاً
+    نمی‌داد.
+    """
+    ctx = _ctx_yt_dlp_builds(ALL_THREE)
+    assert ctx["incomplete_formats"] is True, "هارنس `False` فرض کرده بود"
+    assert "has_merged_format" in ctx, "هارنس این کلید را اصلاً نمی‌داد"
+    assert ctx["has_merged_format"] is False
+
+
+@pytest.mark.parametrize("expr", ["b", "bv*+ba/b"])
+def test_a_hardcoded_ctx_invents_a_defect_that_does_not_exist(expr):
+    """کنترلِ منفی — **این چیزی است که هارنسِ درست را از هارنسِ مرده جدا می‌کند**.
+
+    `format_fallback` در `YoutubeDL.py` مستقیماً به `ctx['incomplete_formats']`
+    گیت خورده، پس روی یک منبعِ **تک‌نوع** یک `False`ِ هاردکد باعث می‌شود
+    انتخابگر «هیچ‌چیز» برگرداند. اندازه‌گیری‌شده، و دقیقاً همان چیزی است که در
+    کارِ کست‌باکس به‌عنوان یک نقصِ تولیدی گزارش شد و نبود.
+    """
+    assert _picked_with_a_hardcoded_ctx(expr, ALL_THREE) is None, (
+        "پیش‌شرط: نسخهٔ محافظت‌نشده باید روی همین هارنس بیفتد، وگرنه این تست "
+        "چیزی را جدا نمی‌کند.")
+    assert _picked(expr, ALL_THREE) == "hls_aac_96k"
+
+
+def test_a_hardcoded_ctx_omits_a_key_the_selector_reads_directly():
+    """ادعای دوم و مستقل: کلیدِ **غایب** هم بی‌صدا falsy نیست.
+
+    `build_format_selector` مقدارِ `ctx['has_merged_format']` را با `[]`
+    می‌خواند نه `.get()`، پس هر انتخابگری که به شاخهٔ `seperate_fallback` برسد
+    (یعنی نامِ یک پسوندِ ویدیویی، مثلِ `mp4`) با ctxِ دست‌ساز `KeyError`
+    می‌دهد. جدا از ادعای بالا تست می‌شود چون فلگِ دیگری است و سابوتاژِ دیگری
+    دارد.
+    """
+    with pytest.raises(KeyError):
+        _picked_with_a_hardcoded_ctx("mp4", ALL_THREE)
+    assert _picked("mp4", ALL_THREE) is None   # هیچ mp4ی نیست، ولی تمیز
 
 
 # ── ۱) انتخابگر ────────────────────────────────────────────────────
