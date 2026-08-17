@@ -257,6 +257,23 @@ mechanisms (controls, `SabotageError`); the third has none and probably cannot �
 is to assert the sabotaged state directly (`assert OUT in p.read_text()`), which is why the
 registry's reverse-control entries matter: a case that is *expected* to leave a test green is the
 one where a mis-aimed patch is indistinguishable from a correct one.
+**And there is a fourth layer, distinct from all three: a sabotage that lands, breaks exactly what
+it aimed at, and is *still* uncatchable — because a second defence covers the same path.** Where two
+independent guards protect one route, a single-layer sabotage is inherently unprovable by an
+end-to-end test: the end-to-end claim ("no job was created", "no request went out") stays true
+because the surviving guard makes it true. From outside, that "not caught" is indistinguishable from
+a weak assertion — which is exactly the reading that would make someone delete a good test. Seen
+twice now. Instagram phase 1: breaking the `if cj` check failed nothing, because `isinstance(cj, str)`
+independently stops `json.loads(None)`. Castbox: removing the URL **rebuild** failed nothing, because
+`is_safe_url_resolved` rejected the payload anyway. The fix is not a better sabotage but a different
+test shape — **prove each defence in isolation, at the level where it alone decides**, and keep the
+end-to-end test as a third, separate claim whose sabotage removes *both* layers. Castbox does this
+explicitly: `test_the_rebuild_alone_rejects_the_payloads` calls the pure function with no guard in
+play, `test_the_guard_rejects_a_castbox_that_resolves_internal` poisons DNS so only the guard can
+save it, and `test_the_ssrf_payloads_never_reach_the_engine` asserts the user-visible outcome. Three
+sabotage entries, one per claim. The general rule: **defence in depth requires testing in depth** —
+layered guards make an end-to-end suite feel strong while leaving each individual layer unproven, and
+the day someone refactors one away, nothing goes red.
 
 **A timing or concurrency measurement means nothing until its harness is shown to be able to
 fail — and sabotage cannot catch this class of error.** Sabotage asks "does my assertion notice a
