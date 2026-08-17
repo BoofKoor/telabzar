@@ -2122,8 +2122,13 @@ async def nodes_add(request: web.Request) -> web.Response:
     form = await request.post()
     role = (form.get("role") or "").strip()
     if role not in node_mod.ROLES:
-        raise web.HTTPFound("/nodes")
-    tok = await node_mod.make_join_token(request.app["redis"], role)
+        raise _result("/nodes", err="نقشِ نامعتبر.")
+    # فرم از روزِ اول یک فیلدِ «نامِ نود» داشت و این هندلر هرگز نمی‌خواندش: نامِ
+    # واقعی از POSTِ خودِ نود می‌آمد (`hostname -s` در `node/install.sh`)، پس
+    # هرچه ادمین می‌نوشت بی‌صدا دور ریخته می‌شد و نودِ تازه با نامی غیر از آنچه
+    # خواسته بود ظاهر می‌شد — و راهِ تغییرِ نام هم وجود ندارد.
+    name = (form.get("name") or "").strip()[:node_mod.NAME_MAX]
+    tok = await node_mod.make_join_token(request.app["redis"], role, name=name)
     # **هرگز در query string.** توکن یک‌بارمصرف است ولی تا مصرف‌شدن معتبر است، و
     # لاگِ دسترسیِ aiohttp مسیر را با query می‌نویسد (`%r`) — یعنی راز مستقیم به
     # `docker compose logs admin` می‌رود. لاگِ تولید نشان داد از ۹ خطِ `tok=`،
@@ -2169,13 +2174,17 @@ async def node_join(request: web.Request) -> web.Response:
     if payload is None:
         return web.json_response({"error": "invalid or used token"}, status=403)
     role = payload["role"]
+    # نامی که ادمین در پنل نوشته بر نامِ خودگزارشِ نود مقدم است: عمدی و صریح
+    # انتخاب شده، در برابرِ `hostname -s` که صرفاً fallback است.
+    chosen = (payload.get("name") or "").strip() or name
     async with Sessionmaker() as s:
         used = {ip for (ip,) in (await s.execute(select(Node.wg_ip))).all()}
         ip = node_mod.next_wg_ip(used)
         if ip is None:
             return web.json_response({"error": "wg subnet full"}, status=507)
         nid = secrets.token_urlsafe(9)[:12]
-        s.add(Node(id=nid, name=name or f"{role}-{nid[:4]}", role=role, wg_ip=ip, wg_pubkey=pubkey))
+        s.add(Node(id=nid, name=chosen or f"{role}-{nid[:4]}", role=role,
+                   wg_ip=ip, wg_pubkey=pubkey))
         await s.commit()
     node_mod.add_peer(pubkey, ip)  # peer را به WGِ مستر اضافه کن (روی سرورِ واقعی)
     cfg = node_mod.node_config(role, ip)

@@ -281,3 +281,84 @@ async def test_persian_digits_keep_working(panel):
     _r, body = await _post_settings(panel, rate_per_min="۲۰")
     assert _shows_ok(body) and not _shows_error(body)
     assert await ss.get_store().get_int("rate_per_min", -1) == 20
+
+
+# ── B-5: /nodes/add ─────────────────────────────────────────────
+async def _mint(panel, **form) -> str:
+    r = await panel.client.post("/nodes/add", data=form,
+                                cookies=panel.cookies, allow_redirects=False)
+    assert r.status == 302
+    return await panel.redis.get(f"njoinview:{panel.admin_id}") or ""
+
+
+async def _join(panel, token: str, self_name: str) -> str:
+    """نود خودش join می‌کند (همان کاری که `node/install.sh` می‌کند) → نامِ ذخیره‌شده."""
+    from sqlalchemy import select
+
+    import app.admin_web as aw
+    from app.models import Node
+    r = await panel.client.post("/node/join",
+                                json={"token": token, "pubkey": "k" * 20, "name": self_name})
+    assert r.status == 200, await r.text()
+    async with aw.Sessionmaker() as s:
+        rows = (await s.execute(select(Node))).scalars().all()
+    assert len(rows) == 1
+    return rows[0].name
+
+
+async def test_the_node_name_the_admin_typed_is_the_one_that_sticks(panel):
+    """B-5: فیلدِ «نامِ نود» از روزِ اول خوانده نمی‌شد.
+
+    نامِ واقعی از `hostname -s`ِ خودِ نود می‌آمد، پس آنچه ادمین می‌نوشت بی‌صدا
+    دور ریخته می‌شد — و راهی برای تغییرِ نام بعدش وجود ندارد.
+    """
+    tok = await _mint(panel, role="download", name="de-1")
+    assert await _join(panel, tok, self_name="raspberrypi") == "de-1"
+
+
+async def test_an_empty_name_still_falls_back_to_the_node(panel):
+    """کنترل: ادمین که چیزی ننویسد، رفتارِ امروز باید بماند."""
+    tok = await _mint(panel, role="download", name="")
+    assert await _join(panel, tok, self_name="raspberrypi") == "raspberrypi"
+
+
+async def test_the_name_is_carried_inside_the_signed_payload(panel):
+    """نام باید امضاشده برود، نه در حالتی که نود بتواند جایش چیزی بگذارد."""
+    import json
+
+    from app.nodes import _b64d, _parse_token
+    tok = await _mint(panel, role="download", name="de-1")
+    assert json.loads(_b64d(tok.split(".")[0]))["name"] == "de-1"
+    assert _parse_token(tok) is not None, "امضا باید معتبر بماند"
+
+
+async def test_a_tampered_name_invalidates_the_token(panel):
+    """**کنترل**، نه ادعای این رفع: امضا کلِ payload را می‌پوشاند.
+
+    روی سورسِ پیش از رفع هم سبز است (آن‌جا اصلاً `name`ی در payload نیست، پس
+    افزودنش امضا را می‌شکند) و همین درست است: این‌جا خاصیتِ HMAC سنجیده می‌شود
+    نه تغییرِ امروز. بدونش، ادعای «نام امضاشده می‌رود» بی‌پشتوانه می‌ماند.
+    """
+    import json
+
+    from app.nodes import _b64d, _b64e, _parse_token
+    tok = await _mint(panel, role="download", name="de-1")
+    body, sig = tok.split(".", 1)
+    payload = json.loads(_b64d(body))
+    payload["name"] = "attacker"
+    assert _parse_token(f"{_b64e(json.dumps(payload).encode())}.{sig}") is None
+
+
+async def test_an_invalid_role_says_so(panel):
+    """نقشِ نامعتبر هم بی‌صدا به /nodes برمی‌گشت — همان الگو، یک خط بالاتر.
+
+    ⚠ این‌جا `_shows_error` **کافی نیست**: صفحهٔ نودها وقتی WireGuardِ مستر
+    پیکربندی نشده (که در تست همین‌طور است) خودش یک errbox دارد، پس نسخهٔ اولِ
+    این تست روی سورسِ پیش از رفع هم سبز بود. همان تلهٔ «برچسب در کلِ صفحه
+    هست» یک بار دیگر، این‌بار روی یک بنرِ نامربوط.
+    """
+    r = await panel.client.post("/nodes/add", data={"role": "banana", "name": "x"},
+                                cookies=panel.cookies, allow_redirects=False)
+    body = await _follow(panel, r)
+    assert "نقشِ نامعتبر" in _error_text(body), "پیامِ اختصاصیِ نقش نشان داده نشد"
+    assert not await panel.redis.get(f"njoinview:{panel.admin_id}"), "توکن نباید ساخته شود"

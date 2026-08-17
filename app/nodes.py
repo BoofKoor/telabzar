@@ -74,12 +74,23 @@ def _b64d(s: str) -> bytes:
 
 
 # ── توکنِ join (امضاشدهٔ HMAC + یک‌بارمصرف از طریقِ Redis) ────────
-async def make_join_token(redis, role: str, ttl: int = 1800) -> str:
-    """توکنِ نصب می‌سازد: payload امضاشده + jti که در Redis کوتاه‌عمر و یک‌بارمصرف است."""
+#: بیشینهٔ نامِ نود — هم‌اندازهٔ برشی که `node_join` روی نامِ خودِ نود می‌زند.
+NAME_MAX = 64
+
+
+async def make_join_token(redis, role: str, ttl: int = 1800, name: str = "") -> str:
+    """توکنِ نصب می‌سازد: payload امضاشده + jti که در Redis کوتاه‌عمر و یک‌بارمصرف است.
+
+    `name` نامی است که **ادمین** در پنل نوشته. داخلِ همان payloadِ امضاشده
+    می‌رود، پس نه نود می‌تواند جایش چیزِ دیگری بگذارد و نه لازم است حالتِ
+    جداگانه‌ای در Redis نگه داریم. تهی = ادمین چیزی ننوشته، و آن‌وقت نامِ
+    خودگزارشِ نود (hostname) می‌ماند — یعنی رفتارِ امروز.
+    """
     if role not in ROLES:
         raise ValueError(f"unknown role: {role}")
     jti = _b64e(os.urandom(9))
-    payload = {"jti": jti, "role": role, "exp": int(time.time()) + ttl}
+    payload = {"jti": jti, "role": role, "exp": int(time.time()) + ttl,
+               "name": (name or "").strip()[:NAME_MAX]}
     body = _b64e(json.dumps(payload, separators=(",", ":")).encode())
     sig = _b64e(hmac.new(_secret(), body.encode(), hashlib.sha256).digest())
     try:

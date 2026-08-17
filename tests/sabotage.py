@@ -1099,6 +1099,30 @@ CASES: list[dict] = [
      "new": "    for k in rendered:",
      "target": _SVF,
      "expect": None},
+
+    # B-5: پنل دوباره نامِ فرم را نخواند (شکلِ پیش از رفع).
+    {"name": "nodes: the panel stops reading the name field",
+     "path": "app/admin_web.py",
+     "old": '    name = (form.get("name") or "").strip()[:node_mod.NAME_MAX]',
+     "new": '    name = ""',
+     "target": _SVF,
+     "expect": "test_the_node_name_the_admin_typed_is_the_one_that_sticks"},
+
+    # B-5: نام حمل شود ولی نودِ خودگزارش دوباره برنده شود.
+    {"name": "nodes: the node's own hostname wins again",
+     "path": "app/admin_web.py",
+     "old": '    chosen = (payload.get("name") or "").strip() or name',
+     "new": "    chosen = name",
+     "target": _SVF,
+     "expect": "test_the_node_name_the_admin_typed_is_the_one_that_sticks"},
+
+    # B-5: نقشِ نامعتبر دوباره بی‌صدا برگردد.
+    {"name": "nodes: an invalid role goes back to a silent redirect",
+     "path": "app/admin_web.py",
+     "old": 'raise _result("/nodes", err="نقشِ نامعتبر.")',
+     "new": 'raise web.HTTPFound("/nodes")',
+     "target": _SVF,
+     "expect": "test_an_invalid_role_says_so"},
 ]
 
 
