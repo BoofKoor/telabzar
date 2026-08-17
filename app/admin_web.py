@@ -2018,6 +2018,33 @@ async def buttons_reset(request: web.Request) -> web.Response:
 
 
 # ── نودهای توزیع‌شده (master/node روی WireGuard) ────────────────
+#: توکنِ joinِ تازه‌ساخته، برای **نمایشِ یک‌بارهٔ** همان ادمین. کلید به شناسهٔ
+#: ادمین بسته است، پس نه در URL می‌رود نه با شناسهٔ حدس‌زدنی قابلِ برداشتن است.
+_JOIN_VIEW = "njoinview:"
+_JOIN_VIEW_TTL = 1800           # هم‌اندازهٔ عمرِ خودِ توکن
+
+
+async def _stash_join_view(redis, admin_id: int | None, token: str) -> None:
+    if admin_id:
+        await redis.set(f"{_JOIN_VIEW}{admin_id}", token, ex=_JOIN_VIEW_TTL)
+
+
+async def _take_join_view(redis, admin_id: int | None) -> str:
+    """توکن را برای نمایش برمی‌دارد و **مصرفش می‌کند**.
+
+    `getdel` عمدی است: دستورِ نصب یک‌بار نشان داده می‌شود و رفرشِ صفحه دوباره
+    نشانش نمی‌دهد. اگر ادمین قبل از کپی رفرش کند باید دکمه را دوباره بزند —
+    قیمتِ کوچکی برای اینکه یک رازِ زنده در تاریخچهٔ مرورگر و در بافرِ صفحه
+    نماند.
+    """
+    if not admin_id:
+        return ""
+    try:
+        return await redis.getdel(f"{_JOIN_VIEW}{admin_id}") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 async def nodes_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
@@ -2032,7 +2059,7 @@ async def nodes_page(request: web.Request) -> web.Response:
                       "role_label": role.get("label", n.role), "emoji": role.get("emoji", "🖧"),
                       "wg_ip": n.wg_ip, "online": bool(hb), "load": hb.get("load", 0),
                       "ver": hb.get("ver", "—"), "done": hb.get("done", 0)})
-    token = request.query.get("tok", "")
+    token = await _take_join_view(request.app["redis"], _session_admin(request))
     base = settings.admin_base or (settings.public_base or "")
     install_cmd = f"curl -fsSL {base}/node/install.sh | sudo bash -s -- {token}" if token else ""
     master_ready = bool(settings.wg_master_pubkey and settings.wg_endpoint and base)
@@ -2052,7 +2079,12 @@ async def nodes_add(request: web.Request) -> web.Response:
     if role not in node_mod.ROLES:
         raise web.HTTPFound("/nodes")
     tok = await node_mod.make_join_token(request.app["redis"], role)
-    raise web.HTTPFound(f"/nodes?tok={tok}")
+    # **هرگز در query string.** توکن یک‌بارمصرف است ولی تا مصرف‌شدن معتبر است، و
+    # لاگِ دسترسیِ aiohttp مسیر را با query می‌نویسد (`%r`) — یعنی راز مستقیم به
+    # `docker compose logs admin` می‌رود. لاگِ تولید نشان داد از ۹ خطِ `tok=`،
+    # هشت‌تا `Referer` هم داشتند، پس same-origin تکثیرش هم می‌کرد.
+    await _stash_join_view(request.app["redis"], _session_admin(request), tok)
+    raise web.HTTPFound("/nodes")
 
 
 async def nodes_remove(request: web.Request) -> web.Response:
@@ -2457,8 +2489,35 @@ async def _on_cleanup(app: web.Application) -> None:
         pass
 
 
+#: هدرهای امنیتیِ هر پاسخ. امروز فقط `Referrer-Policy` — که **بخشی از رفعِ
+#: نشتِ توکنِ join است، نه سخت‌سازیِ عمومی**: لاگِ تولید نشان داد از ۹ خطِ
+#: حاویِ `tok=`، هشت‌تا `Referer` داشتند، یعنی مرورگر همان URL را روی هر
+#: درخواستِ same-origin تکثیر می‌کرد. حتی حالا که توکن از URL بیرون آمده، این
+#: هدر جلوی تکرارِ همین رده را برای هر مسیرِ آیندهٔ پنل می‌گیرد.
+_SECURITY_HEADERS = {
+    "Referrer-Policy": "no-referrer",
+}
+
+
+@web.middleware
+async def _security_headers(request: web.Request, handler):
+    """هدرها روی **هر** پاسخ می‌نشینند، از جمله ریدایرکت‌ها و خطاها.
+
+    ریدایرکت‌ها در aiohttp استثنا هستند (`HTTPFound` که `raise` می‌شود)، و
+    دقیقاً همان‌هایی‌اند که در جریانِ نودها ساخته می‌شوند — پس اگر فقط مسیرِ
+    موفق پوشش داده شود، جایی که بیشترین اهمیت را دارد بی‌هدر می‌ماند.
+    """
+    try:
+        resp = await handler(request)
+    except web.HTTPException as exc:
+        exc.headers.update(_SECURITY_HEADERS)
+        raise
+    resp.headers.update(_SECURITY_HEADERS)
+    return resp
+
+
 def build_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[_security_headers])
     app.router.add_get("/", dashboard)
     app.router.add_get("/login", login)
     app.router.add_post("/auth/request", auth_request)

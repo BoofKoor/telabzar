@@ -944,6 +944,50 @@ CASES: list[dict] = [
      "target": _HYG,
      "expect": "test_every_generated_secret_is_actually_generated_by_the_installer"},
 
+    # ── فاز ۲: A-2 (توکن از URL بیرون) + C-2 (Referrer-Policy) ─────────────
+    # الگو با خطِ **قبلش** لنگر می‌خورد: `raise web.HTTPFound("/nodes")` سه بار
+    # در فایل هست و الگوی کوتاه هر سه را می‌زد — همان چیزی که `patch_source`
+    # برای گرفتنش ساخته شد، و همین‌جا هم گرفتش.
+    {"name": "phase2 A-2: put the join token back in the redirect URL",
+     "path": "app/admin_web.py",
+     "old": '    await _stash_join_view(request.app["redis"], _session_admin(request), tok)\n'
+            '    raise web.HTTPFound("/nodes")',
+     "new": '    raise web.HTTPFound(f"/nodes?tok={tok}")',
+     "target": _CHR,
+     "expect": "test_the_join_token_never_appears_in_a_url"},
+
+    # ادعای مستقل و مهم‌ترین: لاگ. جدا از تستِ بالا، چون آن یکی دربارهٔ
+    # `Location` است و این یکی دربارهٔ چیزی که روی دیسکِ سرور می‌نشیند.
+    {"name": "phase2 A-2: the token lands in the access log again",
+     "path": "app/admin_web.py",
+     "old": '    await _stash_join_view(request.app["redis"], _session_admin(request), tok)\n'
+            '    raise web.HTTPFound("/nodes")',
+     "new": '    await _stash_join_view(request.app["redis"], _session_admin(request), tok)\n'
+            '    raise web.HTTPFound(f"/nodes?tok={tok}")',
+     "target": _CHR,
+     "expect": "test_the_token_never_reaches_the_access_log"},
+
+    {"name": "phase2 A-2: show the install command on every refresh",
+     "path": "app/admin_web.py",
+     "old": '        return await redis.getdel(f"{_JOIN_VIEW}{admin_id}") or ""',
+     "new": '        return await redis.get(f"{_JOIN_VIEW}{admin_id}") or ""',
+     "target": _CHR,
+     "expect": "test_the_install_command_is_shown_once_from_the_session"},
+
+    {"name": "phase2 A-2: stash the token under a shared key, not per-admin",
+     "path": "app/admin_web.py",
+     "old": '        await redis.set(f"{_JOIN_VIEW}{admin_id}", token, ex=_JOIN_VIEW_TTL)',
+     "new": '        await redis.set(f"{_JOIN_VIEW}shared", token, ex=_JOIN_VIEW_TTL)',
+     "target": _CHR,
+     "expect": "test_another_admin_cannot_pick_up_the_token"},
+
+    {"name": "phase2 C-2: drop Referrer-Policy from redirects and errors",
+     "path": "app/admin_web.py",
+     "old": "    except web.HTTPException as exc:\n        exc.headers.update(_SECURITY_HEADERS)\n        raise",
+     "new": "    except web.HTTPException:\n        raise",
+     "target": _CHR,
+     "expect": "test_every_response_carries_a_referrer_policy"},
+
     # **کنترلِ معکوس:** تغییری در همان تابع که هیچ ادعای ثبت‌شده‌ای را جابه‌جا
     # نمی‌کند. اگر چیزی بیندازد یعنی تستی به جزئیاتِ بی‌ربط چسبیده.
     {"name": "char: rename a local in node_join (must break nothing)",
