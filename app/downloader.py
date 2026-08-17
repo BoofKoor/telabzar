@@ -25,6 +25,7 @@ import socket
 import tempfile
 import time
 import unicodedata
+from html.parser import HTMLParser
 from urllib.parse import parse_qs, unquote, urljoin, urlparse, urlsplit
 
 from .exceptions import ProcessingCancelled
@@ -2443,9 +2444,137 @@ async def download_matched(url: str, workdir: str, opts: dict,
 _HASHTAG_RE = re.compile(r"#[^\s#]+")
 
 
+# ── پاک‌سازیِ توضیحاتِ HTMLدار ────────────────────────────────────────────
+# توضیحاتِ پادکست (کست‌باکس و هر منبعِ RSS-محور که اکسترکتورِ `html5` می‌خواندش)
+# **HTML** است. `post_view` آن را escape می‌کند — که درست است، وگرنه یک `<` واقعی
+# کلِ پیام را برای تلگرام خراب می‌کند — پس تگ‌ها عیناً به کاربر نشان داده می‌شدند:
+# `<strong>`، `</p>`، `<p>`. گامِ غایب **پاک‌کردن** بود، نه escape.
+#
+# **چرا گیت، و چرا این مهم‌ترین بخشِ این رفع است.** `clean_caption` مشترک است و
+# کپشنِ **سادهٔ** اینستاگرام هم از آن رد می‌شود. پاک‌کردنِ بی‌قید روی ۱۰ متنِ
+# سادهٔ واقعی **۳ تا را خراب کرد** (اندازه‌گیری‌شده)، و بدترینش شدید بود:
+#
+#     کد: if (a<b) return;   →   کد: if (a          ← بقیه‌اش خورده شد
+#     use --flag <value> here →  use --flag  here
+#     به <a@b.com> ایمیل بزن  →  به  ایمیل بزن
+#
+# `<b>` نامِ تگِ واقعی است و پارسر تا انتهای رشته را می‌بلعد. یعنی رفعِ بی‌قید یک
+# زشتیِ کوچک در کست‌باکس را با یک **باگِ واقعی** در پرترافیک‌ترین مسیر عوض می‌کرد.
+# پس فهرستِ تگ‌ها **صریح و بسته** است و تگ باید با `>`/`/`/فاصله تمام شود — همان
+# اصلِ `safety.STRONG_TOKENS`/`WORD_TOKENS`: نه قاعده‌ای که خودش را گسترش بدهد.
+# اندازه‌گیری‌شده: ۱۲ از ۱۲ متنِ ساده ساکت، ۸ از ۸ متنِ HTMLدار شلیک.
+_HTML_TAGS = ("p", "br", "div", "strong", "em", "b", "i", "u", "ul", "ol", "li", "a",
+              "span", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "code",
+              "table", "tr", "td")
+_HTML_GATE = re.compile(
+    r"</(?:" + "|".join(_HTML_TAGS) + r")\s*>"
+    r"|<(?:" + "|".join(_HTML_TAGS) + r")(?:\s[^<>]*)?/?>", re.I)
+# تگ‌هایی که مرزِ خط می‌سازند. بدونِ این، `</p><p>` دو پاراگراف را به هم می‌چسباند
+# (اندازه‌گیری‌شده: «خط یکخط دو») — حذفِ تگ کافی نیست، باید به `\n` تبدیل شود.
+_BLOCK_TAGS = {"p", "br", "div", "li", "tr", "ul", "ol", "blockquote", "section",
+               "h1", "h2", "h3", "h4", "h5", "h6"}
+
+
+class _HTMLStripper(HTMLParser):
+    """HTML → متنِ ساده. عمداً پارسر و نه رجکس.
+
+    `<[^>]+>` روی «اگر x < 5 باشد و y > 2» از `<` تا اولین `>` را می‌بلعد و متن را
+    می‌خورد (اندازه‌گیری‌شده: «اگر x  2»)؛ پارسر `< 5` را داده می‌بیند نه تگ.
+
+    `convert_charrefs=True` موجودیت‌ها را **حینِ** پارس تبدیل می‌کند، که دقیقاً
+    ترتیبِ درست است: تگ‌ها از متنِ **خام** شناخته می‌شوند و بعد `&amp;` باز می‌شود.
+    ترتیبِ برعکس (اول unescape بعد حذفِ تگ) متنی را که مبدأ **عمداً** escape کرده
+    می‌خورد — اجراشده: `&lt;script&gt;alert(1)&lt;/script&gt;` می‌شد `alert(1)`.
+    با ترتیبِ درست همان رشته متنِ لفظی می‌ماند و `post_view` دوباره escapeاش
+    می‌کند، پس امنیت تضعیف نمی‌شود.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._out: list[str] = []
+        self._href: str | None = None
+        self._anchor_at: int | None = None
+
+    def handle_data(self, data: str) -> None:
+        self._out.append(data)
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in _BLOCK_TAGS:
+            self._out.append("\n")
+        elif tag == "a":
+            href = (dict(attrs).get("href") or "").strip()
+            self._href = href if href.startswith(("http://", "https://")) else None
+            self._anchor_at = len(self._out)
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        # پیش‌فرضِ HTMLParser این را به start+end می‌شکند، یعنی `<br/>` دو `\n`
+        # می‌داد و `<br>` یکی — ناهماهنگیِ بی‌دلیل.
+        if tag in _BLOCK_TAGS:
+            self._out.append("\n")
+        else:
+            self.handle_starttag(tag, attrs)
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _BLOCK_TAGS:
+            self._out.append("\n")
+        elif tag == "a":
+            self._close_anchor()
+
+    def _close_anchor(self) -> None:
+        """آدرس را نگه دار وقتی متنِ لنگر آن را نمی‌رساند (تصمیمِ «ب»).
+
+        show-notesِ پادکست پر از لینکِ معنادار است (کانال، حمایت، منابع) و
+        دورانداختنِ آدرس همان «تحویلِ ناقص بدونِ نشانه» است. لنگرِ **خالی** فقط
+        آدرس را می‌دهد — تنها اطلاعاتی که دارد.
+        """
+        href, at = self._href, self._anchor_at
+        self._href, self._anchor_at = None, None
+        if not href:
+            return
+        text = "".join(self._out[at:]) if at is not None else ""
+        if not text.strip():
+            self._out.append(href)
+        elif href not in text:
+            self._out.append(f" ({href})")
+
+    def value(self) -> str:
+        return "".join(self._out)
+
+
+def strip_html(text: str) -> str:
+    """متنِ HTMLدار → متنِ ساده. **فقط** وقتی صدا زده می‌شود که گیت شلیک کند.
+
+    `\\xa0` (که از `&nbsp;` می‌آید) به فاصلهٔ عادی تبدیل می‌شود، وگرنه
+    `clean_caption` جمعش نمی‌کند — الگویش `[ \\t]{2,}` است و `\\xa0` عضوش نیست.
+
+    فاصلهٔ **ابتدای** خط هم این‌جا جمع می‌شود نه در `clean_caption`: بعد از تبدیلِ
+    تگِ بلوکی به `\\n`، یک `<p> متن` (با فاصله، که در توضیحاتِ واقعی هست)
+    تورفتگیِ بی‌دلیل می‌داد. عمداً این‌جا و نه در مسیرِ مشترک — آن‌جا `ln.rstrip()`
+    است و تبدیلش به `strip()` تورفتگیِ عمدیِ کپشنِ سادهٔ کاربر را هم می‌خورد.
+    """
+    p = _HTMLStripper()
+    try:
+        p.feed(text)
+        p.close()
+    except Exception:  # noqa: BLE001 — HTMLِ خراب نباید کپشن را از بین ببرد
+        return text
+    out = p.value().replace("\xa0", " ")
+    return "\n".join(ln.strip() for ln in out.splitlines())
+
+
 def clean_caption(text: str | None) -> str | None:
-    """کپشنِ پست را تمیز می‌کند: حذفِ هشتگ‌ها، جمعِ فاصله/خطوطِ اضافی، سقفِ ۱۰۲۴ کاراکترِ تلگرام."""
-    text = _HASHTAG_RE.sub("", text or "")
+    """کپشنِ پست را تمیز می‌کند: حذفِ HTML (اگر باشد)، هشتگ‌ها، فاصله/خطوطِ اضافی، سقفِ ۱۰۲۴.
+
+    **سقف نشانه دارد و خاموش نیست:** برشِ ۱۰۲۴ کاراکتری `…` می‌گذارد. چون
+    افزودنِ آدرسِ لینک‌ها طول را بالا می‌برد، یک آدرس می‌تواند وسط بریده شود —
+    پذیرفته‌شده و علامت‌دار. خودِ سقف عمداً دست‌نخورده ماند: مسیرِ مشترکِ همهٔ
+    پلتفرم‌هاست و تغییرش رگرسیونِ کپشنِ اینستاگرام است.
+    """
+    text = text or ""
+    if _HTML_GATE.search(text):
+        text = strip_html(text)
+    text = _HASHTAG_RE.sub("", text)
     text = "\n".join(ln.rstrip() for ln in text.splitlines())
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()

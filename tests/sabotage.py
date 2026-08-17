@@ -84,6 +84,7 @@ _LNK = "tests/test_link_filter.py"
 _SCP = "tests/test_soundcloud_path.py"
 _DEM = "tests/test_deadend_messages.py"
 _CBX = "tests/test_castbox_path.py"
+_CAP = "tests/test_caption_html.py"
 
 CASES: list[dict] = [
     # ── فاز ۲: مسیرِ ناشناسِ اینستاگرام. یکی به‌ازای هر قیدِ سخت. ──
@@ -622,6 +623,62 @@ CASES: list[dict] = [
      "new": '            "incomplete_formats": False}',
      "target": _CBX,
      "expect": "test_the_harness_computes_the_flag_like_yt_dlp_does"},
+
+    # ── کپشنِ HTMLدار ──────────────────────────────────────────────
+    # **گیت** — تنها چیزی که جلوی خراب‌شدنِ کپشنِ سادهٔ اینستاگرام را می‌گیرد.
+    # این مهم‌ترین موردِ این دسته است: بدونِ گیت، رفع یک زشتیِ کوچک را با یک
+    # باگِ واقعی در پرترافیک‌ترین مسیر عوض می‌کند.
+    {"name": "caption: strip unconditionally (no HTML gate)",
+     "path": "app/downloader.py",
+     "old": "    if _HTML_GATE.search(text):\n        text = strip_html(text)",
+     "new": "    text = strip_html(text)",
+     "target": _CAP,
+     "expect": "test_a_plain_caption_is_untouched[code-lt-b]"},
+
+    # رجکسِ ساده‌لوحانه به‌جای پارسر — متنِ حاویِ `<` را می‌خورد.
+    {"name": "caption: naive regex instead of the parser",
+     "path": "app/downloader.py",
+     "old": "    p = _HTMLStripper()\n    try:\n        p.feed(text)\n        p.close()\n"
+            "    except Exception:  # noqa: BLE001 — HTMLِ خراب نباید کپشن را از بین ببرد\n"
+            "        return text\n    out = p.value().replace(\"\\xa0\", \" \")",
+     "new": "    out = re.sub(r\"<[^>]+>\", \"\", text).replace(\"\\xa0\", \" \")",
+     "target": _CAP,
+     "expect": "test_a_less_than_sign_in_prose_survives"},
+
+    # تگِ بلوکی حذف شود به‌جای تبدیل به `\n` — پاراگراف‌ها به هم می‌چسبند.
+    {"name": "caption: drop block tags instead of turning them into newlines",
+     "path": "app/downloader.py",
+     "old": "_BLOCK_TAGS = {\"p\", \"br\", \"div\", \"li\", \"tr\", \"ul\", \"ol\", \"blockquote\", \"section\",\n"
+            "               \"h1\", \"h2\", \"h3\", \"h4\", \"h5\", \"h6\"}",
+     "new": "_BLOCK_TAGS: set[str] = set()",
+     "target": _CAP,
+     "expect": "test_the_real_description_keeps_its_paragraphs_apart"},
+
+    # ترتیبِ برعکس: اول unescape بعد حذفِ تگ → متنِ عمداً escapeشده خورده می‌شود.
+    {"name": "caption: unescape before stripping (wrong order)",
+     "path": "app/downloader.py",
+     "old": "    p = _HTMLStripper()\n    try:\n        p.feed(text)",
+     "new": "    import html as _h\n    text = _h.unescape(text)\n"
+            "    p = _HTMLStripper()\n    try:\n        p.feed(text)",
+     "target": _CAP,
+     "expect": "test_deliberately_escaped_markup_stays_text"},
+
+    # تصمیمِ «ب»: آدرس دور ریخته شود (رفتارِ گزینهٔ «الف»).
+    {"name": "caption: drop the anchor URL (option A behaviour)",
+     "path": "app/downloader.py",
+     "old": "        if not text.strip():\n            self._out.append(href)\n"
+            "        elif href not in text:\n            self._out.append(f\" ({href})\")",
+     "new": "        return",
+     "target": _CAP,
+     "expect": "test_an_anchor_keeps_both_its_text_and_its_url"},
+
+    # فاصلهٔ ابتدای خط جمع نشود — تورفتگیِ بی‌دلیل در توضیحاتِ واقعی.
+    {"name": "caption: leave the leading indent on each line",
+     "path": "app/downloader.py",
+     "old": '    return "\\n".join(ln.strip() for ln in out.splitlines())',
+     "new": '    return "\\n".join(ln.rstrip() for ln in out.splitlines())',
+     "target": _CAP,
+     "expect": "test_the_real_description_has_no_leading_indent"},
 ]
 
 
