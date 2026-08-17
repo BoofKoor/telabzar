@@ -362,3 +362,27 @@ async def test_an_invalid_role_says_so(panel):
     body = await _follow(panel, r)
     assert "نقشِ نامعتبر" in _error_text(body), "پیامِ اختصاصیِ نقش نشان داده نشد"
     assert not await panel.redis.get(f"njoinview:{panel.admin_id}"), "توکن نباید ساخته شود"
+
+
+async def test_a_value_already_stored_out_of_range_names_itself(panel):
+    """پیامدِ استقرار: کرانْ سرِ **نوشتن** اعمال می‌شود، نه روی ردیف‌های موجود.
+
+    اگر مقداری که از قبل روی مستر نشسته بیرونِ کران باشد، صفحه همان را رندر
+    می‌کند و اولین ذخیرهٔ بعدی — حتی اگر ادمین آن فیلد را لمس نکرده باشد —
+    رد می‌شود. **درست است ولی باید گفته شود**، چون از بیرون شبیهِ «پنل خراب
+    شد» به‌نظر می‌رسد؛ پیام نامِ همان کلید را می‌برد، پس راهِ خروج یک ویرایش
+    است نه یک دیباگ.
+    """
+    from app import settings_store as ss
+    store = ss.get_store()
+    await store.set("max_file_mb", "-1")           # وضعیتی که استقرار می‌تواند ارث ببرد
+    body = await (await panel.client.get("/", cookies=panel.cookies)).text()
+    assert 'name="max_file_mb" value="-1"' in body, "صفحه باید مقدارِ واقعی را نشان بدهد"
+
+    _r, after = await _post_settings(panel, max_file_mb="-1")
+    assert "max_file_mb" in _error_text(after), "پیام باید بگوید کدام کلید"
+    assert await store.get("max_file_mb") == "-1", "ردیفِ موجود نباید خودبه‌خود عوض شود"
+
+    _r2, ok_body = await _post_settings(panel, max_file_mb="1500")   # راهِ خروج
+    assert _shows_ok(ok_body)
+    assert await store.get("max_file_mb") == "1500"
