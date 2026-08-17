@@ -111,6 +111,11 @@ async def panel(tmp_path, monkeypatch):
     monkeypatch.setattr(textstore, "_loaded_ver", None, raising=False)
 
     monkeypatch.setattr(admin_web.settings, "admin_ids", str(ADMIN_ID))
+    # نمایندهٔ یک استقرارِ **درست‌پیکربندی‌شده**. تا پیش از رفعِ A-1 این‌جا ست
+    # نمی‌شد و در نتیجه هر تستِ پنل بی‌سروصدا روی همان fallbackِ `BOT_TOKEN`
+    # می‌دوید که قرار است بسته شود — یعنی هارنس مسیرِ آسیب‌پذیر را تمرین
+    # می‌کرد. تست‌هایی که خالی‌بودن را می‌خواهند خودشان monkeypatch می‌کنند.
+    monkeypatch.setattr(admin_web.settings, "admin_secret", "t" * 64)
     cookies_dir = tmp_path / "cookies"
     cookies_dir.mkdir()
     monkeypatch.setattr(admin_web.settings, "cookies_dir", str(cookies_dir))

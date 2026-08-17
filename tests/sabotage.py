@@ -90,6 +90,7 @@ _ORP = "tests/test_probe_orphan.py"
 _HYG = "tests/test_repo_hygiene.py"
 _PAL = "tests/test_panel_path_is_alive.py"
 _CHR = "tests/panel/test_security_characterization.py"
+_SEC = "tests/panel/test_security_headers.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -871,41 +872,145 @@ CASES: list[dict] = [
     # ⚠️ این چهار مورد `tests/panel/` را هدف می‌گیرند، پس **به
     # `requirements-admin.txt` نیاز دارند**؛ در محیطِ فقط-dev با خطای collect
     # می‌افتند و نتیجه بی‌معناست.
-    {"name": "char: A-1 fix — stop deriving the session key from the bot token",
-     "path": "app/admin_web.py",
-     "old": "    seed = settings.admin_secret or settings.bot_token",
-     "new": "    seed = settings.admin_secret",
-     "target": _CHR,
-     "expect": "test_TODAY_an_empty_admin_secret_falls_back_to_the_bot_token"},
 
-    {"name": "char: A-2 fix — keep the join token out of the redirect URL",
-     "path": "app/admin_web.py",
-     "old": '    raise web.HTTPFound(f"/nodes?tok={tok}")',
-     "new": '    raise web.HTTPFound("/nodes")',
-     "target": _CHR,
-     "expect": "test_TODAY_the_join_token_is_handed_back_in_the_redirect_url"},
 
     {"name": "char: A-2 fix — stop returning service config from /node/join",
      "path": "app/admin_web.py",
      "old": "    cfg = node_mod.node_config(role, ip)",
      "new": '    cfg = {"services": {}}',
      "target": _CHR,
-     "expect": "test_TODAY_an_unauthenticated_caller_can_redeem_that_token"},
+     "expect": "test_an_unauthenticated_caller_can_still_redeem_a_valid_token"},
 
-    {"name": "char: A-3 fix — validate the request before consuming the token",
+
+    # ── فاز ۲: بستنِ زنجیرهٔ راز ────────────────────────────────────────────
+    # ⚠️ موردهای `tests/panel/` به `requirements-admin.txt` نیاز دارند.
+    {"name": "phase2 A-1: restore the bot-token fallback in _fernet",
      "path": "app/admin_web.py",
-     "old": '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n'
-            '    if payload is None:\n'
-            '        return web.json_response({"error": "invalid or used token"}, status=403)\n'
-            '    if not pubkey or len(pubkey) > 64:\n'
-            '        return web.json_response({"error": "missing pubkey"}, status=400)',
-     "new": '    if not pubkey or len(pubkey) > 64:\n'
-            '        return web.json_response({"error": "missing pubkey"}, status=400)\n'
-            '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n'
-            '    if payload is None:\n'
-            '        return web.json_response({"error": "invalid or used token"}, status=403)',
+     "old": "    seed = settings.admin_secret\n    if not seed:\n        raise RuntimeError(_NO_SECRET)",
+     "new": "    seed = settings.admin_secret or settings.bot_token",
      "target": _CHR,
-     "expect": "test_TODAY_a_malformed_join_burns_the_token"},
+     "expect": "test_an_empty_admin_secret_no_longer_yields_a_usable_key"},
+
+    {"name": "phase2 A-1: let an empty secret 500 instead of failing closed",
+     "path": "app/admin_web.py",
+     "old": "    except RuntimeError:\n        # رازِ خالی.",
+     "new": "    except (ValueError,):\n        # رازِ خالی.",
+     "target": _CHR,
+     "expect": "test_a_bot_token_cookie_is_rejected_when_the_secret_is_empty"},
+
+    {"name": "phase2 A-1: main() serves anyway with an empty secret",
+     "path": "app/admin_web.py",
+     "old": "    _require_admin_secret()      # پیش از هر کاری",
+     "new": "    pass                         # پیش از هر کاری",
+     "target": _HYG,
+     "expect": "test_main_refuses_to_serve_without_the_session_secret"},
+
+    {"name": "phase2 A-1: drop the actionable command from the refusal message",
+     "path": "app/admin_web.py",
+     "old": "openssl rand -hex 32",
+     "new": "some random value",
+     "target": _CHR,
+     "expect": "test_the_refusal_message_tells_the_operator_what_to_run"},
+
+    {"name": "phase2 A-1: installer stops generating the secret",
+     "path": "install.sh",
+     "old": '  ADMIN_SECRET=$(env_get ADMIN_SECRET); [[ -n "$ADMIN_SECRET" ]] || ADMIN_SECRET=$(rand 32)',
+     "new": '  ADMIN_SECRET=$(env_get ADMIN_SECRET)',
+     "target": _HYG,
+     "expect": "test_every_generated_secret_is_actually_generated_by_the_installer"},
+
+    # ── فاز ۲: A-2 (توکن از URL بیرون) + C-2 (Referrer-Policy) ─────────────
+    # الگو با خطِ **قبلش** لنگر می‌خورد: `raise web.HTTPFound("/nodes")` سه بار
+    # در فایل هست و الگوی کوتاه هر سه را می‌زد — همان چیزی که `patch_source`
+    # برای گرفتنش ساخته شد، و همین‌جا هم گرفتش.
+    {"name": "phase2 A-2: put the join token back in the redirect URL",
+     "path": "app/admin_web.py",
+     "old": '    await _stash_join_view(request.app["redis"], _session_admin(request), tok)\n'
+            '    raise web.HTTPFound("/nodes")',
+     "new": '    raise web.HTTPFound(f"/nodes?tok={tok}")',
+     "target": _CHR,
+     "expect": "test_the_join_token_never_appears_in_a_url"},
+
+    # ادعای مستقل و مهم‌ترین: لاگ. جدا از تستِ بالا، چون آن یکی دربارهٔ
+    # `Location` است و این یکی دربارهٔ چیزی که روی دیسکِ سرور می‌نشیند.
+    {"name": "phase2 A-2: the token lands in the access log again",
+     "path": "app/admin_web.py",
+     "old": '    await _stash_join_view(request.app["redis"], _session_admin(request), tok)\n'
+            '    raise web.HTTPFound("/nodes")',
+     "new": '    await _stash_join_view(request.app["redis"], _session_admin(request), tok)\n'
+            '    raise web.HTTPFound(f"/nodes?tok={tok}")',
+     "target": _CHR,
+     "expect": "test_the_token_never_reaches_the_access_log"},
+
+    {"name": "phase2 A-2: show the install command on every refresh",
+     "path": "app/admin_web.py",
+     "old": '        return await redis.getdel(f"{_JOIN_VIEW}{admin_id}") or ""',
+     "new": '        return await redis.get(f"{_JOIN_VIEW}{admin_id}") or ""',
+     "target": _CHR,
+     "expect": "test_the_install_command_is_shown_once_from_the_session"},
+
+    {"name": "phase2 A-2: stash the token under a shared key, not per-admin",
+     "path": "app/admin_web.py",
+     "old": '        await redis.set(f"{_JOIN_VIEW}{admin_id}", token, ex=_JOIN_VIEW_TTL)',
+     "new": '        await redis.set(f"{_JOIN_VIEW}shared", token, ex=_JOIN_VIEW_TTL)',
+     "target": _CHR,
+     "expect": "test_another_admin_cannot_pick_up_the_token"},
+
+    {"name": "phase2 C-2: drop Referrer-Policy from redirects and errors",
+     "path": "app/admin_web.py",
+     "old": '    except web.HTTPException as exc:\n        exc.headers.update(headers)\n        raise',
+     "new": "    except web.HTTPException:\n        raise",
+     "target": _CHR,
+     "expect": "test_every_response_carries_a_referrer_policy"},
+
+    # ── فاز ۲: A-3 (اعتبارسنجی پیش از مصرف) ────────────────────────────────
+    {"name": "phase2 A-3: consume the token before validating again",
+     "path": "app/admin_web.py",
+     "old": '    if not pubkey or len(pubkey) > 64:\n        return web.json_response({"error": "missing pubkey"}, status=400)\n    payload = await node_mod.consume_join_token(request.app["redis"], token)\n    if payload is None:\n        return web.json_response({"error": "invalid or used token"}, status=403)',
+     "new": '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n    if payload is None:\n        return web.json_response({"error": "invalid or used token"}, status=403)\n    if not pubkey or len(pubkey) > 64:\n        return web.json_response({"error": "missing pubkey"}, status=400)',
+     "target": _CHR,
+     "expect": "test_a_malformed_join_does_not_burn_the_token"},
+
+    # نیمهٔ دومِ همان `if`. اگر فقط شاخهٔ «غایب» تست می‌شد، یک نصفه‌رفع بی‌صدا
+    # از کنارش رد می‌شد.
+    {"name": "phase2 A-3: drop the length half of the pubkey check",
+     "path": "app/admin_web.py",
+     "old": "    if not pubkey or len(pubkey) > 64:",
+     "new": "    if not pubkey:",
+     "target": _CHR,
+     "expect": "test_an_oversized_pubkey_also_leaves_the_token_usable"},
+
+    # ── فاز ۲: بقیهٔ هدرهای امنیتی ─────────────────────────────────────────
+    {"name": "phase2 headers: drop X-Frame-Options (panel becomes frameable)",
+     "path": "app/admin_web.py",
+     "old": '    "X-Frame-Options": "DENY",',
+     "new": "",
+     "target": _SEC,
+     "expect": "test_the_hardening_headers_are_on_an_ordinary_page"},
+
+    {"name": "phase2 headers: send HSTS unconditionally",
+     "path": "app/admin_web.py",
+     "old": '    if request.secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https":\n'
+            '        headers["Strict-Transport-Security"] = _HSTS',
+     "new": '    headers["Strict-Transport-Security"] = _HSTS',
+     "target": _SEC,
+     "expect": "test_hsts_is_sent_only_over_https"},
+
+    {"name": "phase2 headers: a CSP that would blank the panel",
+     "path": "app/admin_web.py",
+     "old": '"default-src \'self\'; img-src \'self\' data:; style-src \'self\' \'unsafe-inline\'; "',
+     "new": '"default-src \'self\'; img-src \'self\' data:; style-src \'self\'; "',
+     "target": _SEC,
+     "expect": "test_the_csp_permits_what_the_panel_actually_serves"},
+
+    # **کنترلِ معکوس:** یک منبعِ خارجی که CSP بلاکش می‌کند باید گرفته شود.
+    {"name": "phase2 headers: add an external CDN reference",
+     "path": "app/admin_web.py",
+     "old": "<title>{% block title %}پنلِ مدیریت{% endblock %}",
+     "new": '<script src="https://cdn.example.com/x.js"></script>'
+            "<title>{% block title %}پنلِ مدیریت{% endblock %}",
+     "target": _SEC,
+     "expect": "test_the_panel_has_no_external_resources_for_the_csp_to_break"},
 
     # **کنترلِ معکوس:** تغییری در همان تابع که هیچ ادعای ثبت‌شده‌ای را جابه‌جا
     # نمی‌کند. اگر چیزی بیندازد یعنی تستی به جزئیاتِ بی‌ربط چسبیده.
