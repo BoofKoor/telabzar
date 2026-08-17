@@ -872,41 +872,15 @@ CASES: list[dict] = [
     # ⚠️ این چهار مورد `tests/panel/` را هدف می‌گیرند، پس **به
     # `requirements-admin.txt` نیاز دارند**؛ در محیطِ فقط-dev با خطای collect
     # می‌افتند و نتیجه بی‌معناست.
-    {"name": "char: A-1 fix — stop deriving the session key from the bot token",
-     "path": "app/admin_web.py",
-     "old": "    seed = settings.admin_secret or settings.bot_token",
-     "new": "    seed = settings.admin_secret",
-     "target": _CHR,
-     "expect": "test_TODAY_an_empty_admin_secret_falls_back_to_the_bot_token"},
 
-    {"name": "char: A-2 fix — keep the join token out of the redirect URL",
-     "path": "app/admin_web.py",
-     "old": '    raise web.HTTPFound(f"/nodes?tok={tok}")',
-     "new": '    raise web.HTTPFound("/nodes")',
-     "target": _CHR,
-     "expect": "test_TODAY_the_join_token_is_handed_back_in_the_redirect_url"},
 
     {"name": "char: A-2 fix — stop returning service config from /node/join",
      "path": "app/admin_web.py",
      "old": "    cfg = node_mod.node_config(role, ip)",
      "new": '    cfg = {"services": {}}',
      "target": _CHR,
-     "expect": "test_TODAY_an_unauthenticated_caller_can_redeem_that_token"},
+     "expect": "test_an_unauthenticated_caller_can_still_redeem_a_valid_token"},
 
-    {"name": "char: A-3 fix — validate the request before consuming the token",
-     "path": "app/admin_web.py",
-     "old": '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n'
-            '    if payload is None:\n'
-            '        return web.json_response({"error": "invalid or used token"}, status=403)\n'
-            '    if not pubkey or len(pubkey) > 64:\n'
-            '        return web.json_response({"error": "missing pubkey"}, status=400)',
-     "new": '    if not pubkey or len(pubkey) > 64:\n'
-            '        return web.json_response({"error": "missing pubkey"}, status=400)\n'
-            '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n'
-            '    if payload is None:\n'
-            '        return web.json_response({"error": "invalid or used token"}, status=403)',
-     "target": _CHR,
-     "expect": "test_TODAY_a_malformed_join_burns_the_token"},
 
     # ── فاز ۲: بستنِ زنجیرهٔ راز ────────────────────────────────────────────
     # ⚠️ موردهای `tests/panel/` به `requirements-admin.txt` نیاز دارند.
@@ -984,7 +958,7 @@ CASES: list[dict] = [
 
     {"name": "phase2 C-2: drop Referrer-Policy from redirects and errors",
      "path": "app/admin_web.py",
-     "old": "    except web.HTTPException as exc:\n        exc.headers.update(_SECURITY_HEADERS)\n        raise",
+     "old": '    except web.HTTPException as exc:\n        exc.headers.update(headers)\n        raise',
      "new": "    except web.HTTPException:\n        raise",
      "target": _CHR,
      "expect": "test_every_response_carries_a_referrer_policy"},
