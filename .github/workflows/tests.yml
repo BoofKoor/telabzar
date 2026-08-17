@@ -75,3 +75,54 @@ jobs:
       # (`test_phase2b.test_the_ffmpeg_marker_is_not_dead_weight`) که محلی هم می‌دود.
       - name: pytest
         run: pytest -q
+
+  # ── تست‌های رفتاریِ پنلِ ادمین ──────────────────────────────────────────────
+  # عمداً jobِ **جدا** و **موازی** (بدونِ `needs:`): اگر به jobِ اصلی وابسته
+  # می‌شد، یک قرمزیِ بی‌ربط در آن‌جا نتیجهٔ پنل را پنهان می‌کرد.
+  #
+  # دلیلِ وجودش: `app/admin_web.py` سرِ import به `cryptography` (خطِ ۲۸) و
+  # `jinja2` (خطِ ۲۹) نیاز دارد که فقط در `requirements-admin.txt` هستند. jobِ
+  # اصلی عمداً آن‌ها را نصب نمی‌کند (تا «محلی سبز، روی رانر قرمز» تکرار نشود)،
+  # پس تنها راهِ پوششِ رفتاریِ ۳۱ مسیرِ پنل یک محیطِ دومِ صریح است.
+  # اندازه‌گیری‌شده: دلتای دقیقِ این دو فایل ۵ توزیع است — دو تای اعلام‌شده
+  # به‌علاوهٔ MarkupSafe/cffi/pycparser که وابستگیِ خودشان‌اند.
+  panel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-admin.txt
+
+      - name: install dev + admin requirements
+        run: pip install -r requirements-dev.txt -r requirements-admin.txt
+
+      # کلِ شکلِ این job به یک رفتار بند است: `addopts = --ignore=tests/panel`
+      # در `pytest.ini` نباید جلوی مسیرِ **صریحِ** `pytest tests/panel` را
+      # بگیرد. امروز نمی‌گیرد (سنجیده شد، و
+      # `test_the_ignore_does_not_beat_an_explicit_path` پینش می‌کند).
+      #
+      # **دقیقاً چه چیزی را می‌گیرد — با عدد، نه با فرض.** روی pytest 9.1.1 هر
+      # سه مسیرِ «صفر تست» کدِ **۵** می‌دهند (نه صفر)، پس اگر آن تقدم برگردد،
+      # job به‌هرحال قرمز می‌شود و این گام برای آن حالت **باربر نیست**. چیزی که
+      # واقعاً می‌خرد دو چیز است: (۱) کفِ **فرسایش** — اگر پوشه از ۵ تست به ۱
+      # برسد، کدِ خروج همچنان صفر است و فقط این گام می‌گیردش؛ (۲) بیمه در برابرِ
+      # عوض‌شدنِ همین معناشناسی، که **اثباتاً عوض می‌شود**: §۶ ثبت کرده بود
+      # «deselectِ همه کدِ صفر می‌دهد» و روی 9.1.1 اندازه‌گیری‌شده کدِ ۵ می‌دهد.
+      #
+      # کفِ عددی است نه تعدادِ دقیق: عددِ دقیق با هر تستِ تازه عوض می‌شود و
+      # گارد را شکننده می‌کند.
+      - name: prove the panel suite is actually collected
+        run: |
+          n=$(pytest tests/panel --collect-only -q | grep -c '::')
+          echo "collected $n panel tests"
+          test "$n" -ge 5
+
+      - name: pytest (panel)
+        run: pytest tests/panel -q
