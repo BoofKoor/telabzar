@@ -25,17 +25,31 @@ def test_a_negative_number_is_refused(key, value):
     assert ss.validate_value(key, value) is not None
 
 
-@pytest.mark.parametrize("key,value", [
-    ("max_file_mb", "2001"),
-    ("dl_max_size_mb", "5000"),
-    ("dl_direct_max_mb", "2001"),
-    ("vjoin_max_mb", "9999"),
-    ("compress_tiny_target_mb", "2500"),
-], ids=["max_file_mb", "dl_max_size_mb", "dl_direct_max_mb", "vjoin_max_mb",
-        "compress_tiny_target_mb"])
-def test_a_size_over_the_upload_ceiling_is_refused(key, value):
-    """سقف از سقفِ آپلودِ Bot API می‌آید، نه از سلیقه."""
-    assert ss.validate_value(key, value) is not None
+#: کلیدهایی که مقدارشان به **آپلودِ بایتِ تازه** ختم می‌شود → سقفِ ۲۰۰۰ دارند.
+#: هر کدام با ردیابیِ محلِ خواندن تأیید شده، نه با شباهتِ نام (جدول در §۷).
+_UPLOAD_SIDE = ["dl_max_size_mb", "dl_direct_max_mb", "vjoin_max_mb",
+                "compress_tiny_target_mb"]
+
+
+@pytest.mark.parametrize("key", _UPLOAD_SIDE)
+def test_a_size_over_the_upload_ceiling_is_refused(key):
+    """سقف از سقفِ **آپلودِ** Bot API می‌آید، نه از سلیقه."""
+    assert ss.validate_value(key, "2001") is not None
+    assert ss.validate_value(key, str(ss._UPLOAD_CEILING_MB)) is None   # کنترلِ مرز
+
+
+def test_a_receive_side_limit_has_no_telegram_ceiling():
+    """`max_file_mb` سمتِ **دریافت** است و `--local` دانلود را بی‌سقف می‌کند.
+
+    نسخهٔ اولِ این کار سقفِ ۲۰۰۰ را روی هر پنج کلیدِ مگابایتی گذاشت، و برای این
+    یکی غلط بود: تنها خواننده‌اش `ops.py:_max_mb()` است و تنها مصرفش
+    `_too_large()` — یعنی «آیا روی این فایلِ **از قبل دریافت‌شده** عملیات اجرا
+    شود؟». نه intake چیزی را رد می‌کند و نه کارتش بایتی آپلود می‌کند.
+    شاهدِ تولید: جدولِ `files` ۴۴ ردیفِ بالای ۲۰۰۰ مگ دارد، بزرگ‌ترین ۳۹۱۲ مگ.
+    """
+    assert ss.validate_value("max_file_mb", "4000") is None
+    assert ss.validate_value("max_file_mb", "10000") is None
+    assert "max_file_mb" not in ss.BOUNDS, "این کلید نباید سقفِ آپلود بگیرد"
 
 
 def test_the_upload_ceiling_matches_what_the_docs_state():
@@ -43,12 +57,23 @@ def test_the_upload_ceiling_matches_what_the_docs_state():
 
     بدونِ این، `_UPLOAD_CEILING_MB` یک ثابتِ دستی است که از مستندش جدا می‌افتد —
     همان پوسیدگی‌ای که §۷ برای `_KNOWN_UNREACHABLE` ثبت کرده.
+
+    **و پین‌کردنِ عدد به‌تنهایی کافی نیست.** نسخهٔ اولِ همین تست فقط دنبالِ
+    «۲۰۰۰ MB» می‌گشت و سبز بود، در حالی که خودِ سند آن عدد را برای **هر دو**
+    جهت می‌فروخت («lifts the 50 MB download / 20 MB upload limits to ~2000 MB»)
+    — یعنی تست دقیقاً همان جمله‌ای را تأیید می‌کرد که باعثِ باگ شد. پس جهت هم
+    پین می‌شود: سند باید صریح بگوید دانلود بی‌سقف است و ۲۰۰۰ مالِ آپلود است.
     """
     import pathlib
     doc = (pathlib.Path(__file__).resolve().parent.parent
            / "docs" / "telegram-api.md").read_text(encoding="utf-8")
     assert f"{ss._UPLOAD_CEILING_MB} MB" in doc, (
         f"سقفِ {ss._UPLOAD_CEILING_MB} در docs/telegram-api.md پیدا نشد")
+    low = doc.lower()
+    assert "no size limit" in low, "سند باید بگوید دانلود سقفِ حجم ندارد"
+    assert "**download**" in low and "**upload**" in low, (
+        "سند باید دو جهت را **جدا** نام ببرد؛ یک عدد برای هر دو جهت همان "
+        "ثابتی است که می‌پوسد")
 
 
 @pytest.mark.parametrize("key", ["safety_threshold", "ck_warmup_pct"])

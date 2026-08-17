@@ -93,6 +93,7 @@ _CHR = "tests/panel/test_security_characterization.py"
 _SEC = "tests/panel/test_security_headers.py"
 _SVF = "tests/panel/test_save_failures.py"
 _SBD = "tests/test_settings_bounds.py"
+_UPD = "tests/test_upload_direction.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -1073,6 +1074,34 @@ CASES: list[dict] = [
      "new": "_UPLOAD_CEILING_MB = 20000",
      "target": _SBD,
      "expect": "test_the_upload_ceiling_matches_what_the_docs_state"},
+
+    # سقفِ آپلود دوباره روی یک کلیدِ سمتِ **دریافت** گذاشته شود — همان اشتباهی
+    # که نسخهٔ اولِ این کار کرد و شاهدِ تولید (۴۴ ردیفِ بالای ۲۰۰۰ مگ) ردش کرد.
+    {"name": "settings: the receive-side key gets an upload ceiling again",
+     "path": "app/settings_store.py",
+     "old": '    "dl_max_size_mb": (0, _UPLOAD_CEILING_MB),',
+     "new": ('    "max_file_mb": (0, _UPLOAD_CEILING_MB),\n'
+             '    "dl_max_size_mb": (0, _UPLOAD_CEILING_MB),'),
+     "target": _SBD,
+     "expect": "test_a_receive_side_limit_has_no_telegram_ceiling"},
+
+    # سند دوباره یک عدد را برای هر دو جهت بفروشد. پین‌کردنِ **عدد** به‌تنهایی
+    # این را نمی‌گیرد — به همین دلیل تست جهت را هم می‌سنجد.
+    {"name": "docs: the two directions collapse back into one number",
+     "path": "docs/telegram-api.md",
+     "old": "| **Download** (Telegram DC → our server) | **no size limit** |",
+     "new": "| Download (Telegram DC to our server) | up to 2000 MB |",
+     "target": _SBD,
+     "expect": "test_the_upload_ceiling_matches_what_the_docs_state"},
+
+    # مکانیزمِ تفکیک: اگر کارتِ فایلِ دریافتی هم بایت آپلود کند، کلِ استدلالِ
+    # «سمتِ دریافت سقف ندارد» می‌ریزد.
+    {"name": "cards: a received file starts uploading its bytes too",
+     "path": "app/cards.py",
+     "old": '    return FSInputFile(path, filename=file.name or "file") if path else file.file_id',
+     "new": '    return FSInputFile(path or "/dev/null", filename=file.name or "file")',
+     "target": _UPD,
+     "expect": "test_a_path_uploads_bytes_and_a_file_id_does_not"},
 
     # B-3: پنل دیگر اعتبارسنجی را صدا نزند — ادعای «وصل است» جدا از ادعای
     # «تابع درست است».

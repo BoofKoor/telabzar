@@ -203,7 +203,7 @@ _REJECTED = [
     ("dl_max_size_mb", "-5", "negative"),
     ("safety_threshold", "9999", "percent over 100"),
     ("ck_warmup_pct", "150", "percent over 100"),
-    ("max_file_mb", "5000", "over the Bot API upload ceiling"),
+    ("dl_max_size_mb", "5000", "over the Bot API upload ceiling"),
     ("dl_daily_count", "1,000", "thousands separator"),
     ("dl_concurrency", "--5", "isdigit says yes, int() raises"),
     ("rate_per_min", "", "cleared box"),
@@ -255,12 +255,14 @@ async def test_the_stored_value_is_the_one_the_page_shows(panel):
 
 # ── کنترل‌ها ─────────────────────────────────────────────────────
 @pytest.mark.parametrize("key,value", [
-    ("max_file_mb", "2000"),          # دقیقاً روی سقف
+    ("dl_max_size_mb", "2000"),       # دقیقاً روی سقفِ آپلود
+    ("max_file_mb", "4000"),          # سمتِ دریافت — سقفِ تلگرامی ندارد
     ("safety_threshold", "100"),      # دقیقاً روی سقفِ درصد
     ("ck_cap_youtube", "0"),          # ۰ = بی‌سقف، معنیِ تثبیت‌شدهٔ پروژه
     ("vjoin_max_mb", "0"),            # ۰ = برگرد به max_file_mb
     ("dl_concurrency", "7"),
-], ids=["ceiling", "percent-ceiling", "zero-uncapped", "zero-fallback", "ordinary"])
+], ids=["upload-ceiling", "receive-side-above-2000", "percent-ceiling",
+     "zero-uncapped", "zero-fallback", "ordinary"])
 async def test_a_legal_setting_still_saves(panel, key, value):
     from app import settings_store as ss
     _r, body = await _post_settings(panel, **{key: value})
