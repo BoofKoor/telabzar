@@ -219,6 +219,7 @@ MESSAGES: dict[str, str] = {
     "btn_dl_best": "⭐ Best",
     "btn_dl_audio": "🎵 Audio only",
     "dl_bad_link": "⚠️ This link is unsupported or invalid.",
+    "dl_castbox_channel": "📻 That's a Castbox <b>channel</b> link, not an episode. Send the episode link instead — open the episode in the app, then Share.",
     "dl_probe_failed": "❌ Couldn't read the link's info.",
     "dl_failed": "❌ Download failed.",
     "dl_need_cookies": "🔒 “{platform}” requires a logged-in account to download; an admin must add cookies.",

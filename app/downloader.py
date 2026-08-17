@@ -25,7 +25,7 @@ import socket
 import tempfile
 import time
 import unicodedata
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse, urlsplit
 
 from .exceptions import ProcessingCancelled
 
@@ -41,7 +41,7 @@ _MEDIA_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".m4v",
 _GALLERY_PLATFORMS = {"instagram", "pinterest"}
 # پلتفرم‌های صوتیِ تک‌استریم: منوی کیفیت بی‌معنی است → همیشه quick-grab.
 # spotify هم صوتی است (تطبیق روی یوتیوب) → بی‌منوی کیفیت.
-AUDIO_PLATFORMS = {"soundcloud", "bandcamp", "spotify", "apple"}
+AUDIO_PLATFORMS = {"soundcloud", "bandcamp", "spotify", "apple", "castbox"}
 # پلتفرم‌های استریمِ DRM‌دار که مستقیم دانلود نمی‌شوند → متادیتا از API + تطبیقِ یوتیوب.
 #
 # **هر پلتفرمِ تازه‌ای که هدفش را *ما* انتخاب می‌کنیم باید این‌جا اضافه شود.**
@@ -70,6 +70,7 @@ PLATFORM_LABELS = {
     "aparat": "آپارات", "vimeo": "ویمئو", "twitch": "توییچ",
     "dailymotion": "دیلی‌موشن", "bandcamp": "بندکمپ", "reddit": "ردیت",
     "streamable": "استریمبل", "spotify": "اسپاتیفای", "apple": "اپل موزیک",
+    "castbox": "کست‌باکس",
     "other": "عمومی / سایر",
 }
 # برچسبِ انگلیسیِ پلتفرم‌ها (برای پیامِ کاربرِ en).
@@ -79,6 +80,7 @@ PLATFORM_LABELS_EN = {
     "aparat": "Aparat", "vimeo": "Vimeo", "twitch": "Twitch",
     "dailymotion": "Dailymotion", "bandcamp": "Bandcamp", "reddit": "Reddit",
     "streamable": "Streamable", "spotify": "Spotify", "apple": "Apple Music",
+    "castbox": "Castbox",
     "other": "the site",
 }
 # پلتفرم‌های شناخته‌شده (برای متریکِ per-host؛ «other» شناخته‌شده نیست).
@@ -134,6 +136,11 @@ def describe_link(url: str, platform: str, lang: str = "fa") -> str:
         if kind == "playlist":
             return "پلی‌لیستِ اپل موزیک" if fa else "an Apple Music playlist"
         return "آهنگِ اپل موزیک" if fa else "an Apple Music track"
+    if platform == "castbox":
+        kind, _cid = castbox_ids(url)
+        if kind == "ch":
+            return "کانالِ کست‌باکس" if fa else "a Castbox channel"
+        return "اپیزودِ کست‌باکس" if fa else "a Castbox episode"
     label = platform_label(platform, lang)
     if platform == "other":
         return "لینک" if fa else "a link"
@@ -199,6 +206,12 @@ def platform_of(url: str) -> str:
     # `itunes.apple.com`ِ قدیمی — همه یک پلتفرم‌اند.
     if "music.apple.com" in host or "itunes.apple.com" in host:
         return "apple"
+    # `castbox.fm` و زیردامنه‌اش `d.castbox.fm` (صفحهٔ واسطهٔ dynamic-link) یک
+    # پلتفرم‌اند. همین یکی‌بودن است که گیتِ دامنه‌ای را برای SSRF بی‌فایده می‌کند:
+    # کاربر می‌تواند خودش `d.castbox.fm/dynamic-link/redirect?link=<هرچیزی>` را
+    # بسازد و هاستش **واقعاً** castbox.fm است — ببین `castbox_target`.
+    if "castbox.fm" in host:
+        return "castbox"
     return "other"
 
 
@@ -881,6 +894,109 @@ def apple_id(url: str) -> tuple[str | None, str | None, str | None]:
     if path_kind == "playlist":
         return ("playlist", path_id, sf)
     return (None, None, sf)          # artist/… — موجودیتی نیست که دانلود شود
+
+
+# ── کست‌باکس ─────────────────────────────────────────────────────────────
+# شش شکلِ URL به یک محتوا می‌رسند: `/vb/<eid>` و `/ep/<eid>` و
+# `/episode/<اسلاگ>-id<cid>-id<eid>` برای اپیزود، و `/va/<cid>` و `/ch/<cid>` و
+# `/channel/<اسلاگ>-id<cid>` برای کانال — به‌علاوهٔ صفحهٔ واسطهٔ
+# `d.castbox.fm/dynamic-link/redirect?link=<کدشدهٔ یکی از بالا>`.
+#
+# **تلهٔ دو-شناسه‌ای، اندازه‌گیری‌شده روی `webpage_url`ِ واقعیِ yt-dlp:** فرمِ
+# کانونیک `…-id5174947-id798014224` است، یعنی **اول شناسهٔ کانال و بعد اپیزود**.
+# الگوی طبیعیِ `id(\d+)` شناسهٔ **کانال** را برمی‌دارد (اجراشده: `5174947`) و
+# بی‌صدا فایلِ غلط را کش/دانلود می‌کند. لنگرِ `-id(\d+)$` تنها فرمِ درست است.
+# همان خانوادهٔ تلهٔ `acodec`ِ ساندکلاود و `srcset`ِ اینستاگرام: رفعی که ظاهراً
+# درست و عملاً غلط است، و فقط با اجرا روی دادهٔ واقعی دیده می‌شود.
+_CB_EP_RE = re.compile(r"^(?:www\.|m\.)?castbox\.fm/(?:vb|ep)/(\d+)$")
+_CB_EP_SLUG_RE = re.compile(r"^(?:www\.|m\.)?castbox\.fm/episode/.*-id(\d+)$")
+_CB_CH_RE = re.compile(r"^(?:www\.|m\.)?castbox\.fm/(?:va|ch)/(\d+)$")
+_CB_CH_SLUG_RE = re.compile(r"^(?:www\.|m\.)?castbox\.fm/channel/.*-id(\d+)$")
+
+
+def _castbox_hostpath(url: str) -> str:
+    """`host + path`ِ نرمال‌شده — همان شکلی که الگوهای بالا انتظار دارند."""
+    try:
+        p = urlsplit(url or "")
+    except ValueError:
+        return ""
+    host = (p.hostname or "").lower()
+    return f"{host}{(p.path or '').rstrip('/')}"
+
+
+def _castbox_direct_ids(url: str) -> tuple[str | None, str | None]:
+    """شکلِ **مستقیم** (بدونِ صفحهٔ واسطه) → ("ep"|"ch", id) یا (None, None)."""
+    hp = _castbox_hostpath(url)
+    for rx, kind in ((_CB_EP_RE, "ep"), (_CB_EP_SLUG_RE, "ep"),
+                     (_CB_CH_RE, "ch"), (_CB_CH_SLUG_RE, "ch")):
+        m = rx.match(hp)
+        if m:
+            return (kind, m.group(1))
+    return (None, None)
+
+
+def castbox_ids(url: str) -> tuple[str | None, str | None]:
+    """لینکِ کست‌باکس → ("ep"|"ch", id) یا (None, None). **خالص و بی‌شبکه.**
+
+    صفحهٔ واسطه یک بار — و **فقط** یک بار — باز می‌شود. عمقِ یک با ساختار تضمین
+    شده نه با انضباط: هیچ بازگشتی در کار نیست، فقط دو تلاشِ `_castbox_direct_ids`.
+    پس `link=`ی که خودش `link=` دارد باز نمی‌شود.
+    """
+    kind, cid = _castbox_direct_ids(url)
+    if kind:
+        return (kind, cid)
+    try:
+        q = parse_qs(urlsplit(url or "").query)
+    except ValueError:
+        return (None, None)
+    inner = (q.get("link") or [""])[0]
+    return _castbox_direct_ids(inner) if inner else (None, None)
+
+
+def castbox_target(url: str) -> str | None:
+    """لینکِ اپیزودِ کست‌باکس → فرمِ `‎/ep/<eid>` که **اندازه‌گیری‌شده کار می‌کند**.
+
+    کانال `None` می‌دهد (صداکننده باید پیش از هر کاری ردش کند) و هر چیزِ دیگری هم.
+
+    **این تابع URL را بازمی‌سازد، هرگز مقداری را عبور نمی‌دهد — و همین دفاعِ
+    اولیه است، نه گاردِ SSRF.** هاست این‌جا هاردکد است و شناسه `\\d+`، پس یک
+    `link=`ِ خصمانه (`…?link=http://169.254.169.254/`) اصلاً با الگوهای اپیزود/
+    کانال جور نمی‌شود و همین‌جا `None` می‌گیرد؛ چیزی برای عبوردادن نمی‌ماند.
+    گاردِ `is_safe_url_resolved` در `tasks_download.resolve_castbox` لایهٔ دومِ
+    مستقل است — ببین کامنتِ آن‌جا برای اینکه چه چیزِ متفاوتی را می‌گیرد.
+
+    عمداً بی‌شبکه: هیچ ریدایرکتی دنبال نمی‌شود. بهایش این است که اگر کست‌باکس
+    فرمِ کوتاهِ تازه‌ای بسازد، خودکار حل نمی‌شود و یک خطِ الگو می‌خواهد — ولی
+    شکستش **پرصداست نه خاموش**: کاربر `dl_bad_link` می‌گیرد.
+    """
+    kind, cid = castbox_ids(url)
+    return f"https://castbox.fm/ep/{cid}" if kind == "ep" and cid else None
+
+
+async def resolve_castbox(url: str, proxy: str | None = None) -> str | None:
+    """لینکِ اپیزودِ کست‌باکس → URLِ **امنِ** آمادهٔ موتور، یا `None`.
+
+    **یک نقطهٔ خروج با یک قرارداد** — عمداً، تا بازنویسی و اعتبارسنجی دو گامِ
+    ترتیبی نباشند که کسی بعداً یکی را جا بیندازد. هر مسیری (الگویی یا `link=`)
+    از همین‌جا رد می‌شود.
+
+    **گارد این‌جا ساختاراً زائد است و باید بدانی چرا هست.** `castbox_target`
+    هاست را هاردکد می‌کند و شناسه `\\d+` است، پس خروجی‌اش هرگز نمی‌تواند به جای
+    دیگری اشاره کند و مسیرِ الگویی سوراخی ندارد — این کامنت هست تا نفرِ بعد فکر
+    نکند آن مسیر خطرناک بوده. ولی گارد **دو** چیزِ واقعی می‌خرد: یک نقطهٔ خروج
+    با یک قرارداد به‌جای دو مسیر با دو سطحِ ایمنی؛ و تنها سناریویی که بازسازی
+    نمی‌گیردش — اگر خودِ `castbox.fm` روزی به آدرسِ **داخلی** resolve شود
+    (DNS rebinding/poisoning، همان چیزی که `evil.example` را بست). yt-dlp
+    زیرفرایند است و رزولورِ وتوکننده نمی‌گیرد، پس این تنها لایه‌ای است که آن
+    حالت را می‌گیرد.
+    """
+    target = castbox_target(url)
+    if not target:
+        return None
+    if not await is_safe_url_resolved(target, proxy=proxy):
+        log.warning("castbox: rewritten target failed the safety gate: %s", target[:90])
+        return None
+    return target
 
 
 async def _spotify_token(client_id: str, secret: str) -> str:

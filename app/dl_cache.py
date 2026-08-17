@@ -31,7 +31,7 @@ from .cards import message_media_id, send_card, update_card
 # و `engine_for` هم از همان می‌خواند — فهرستِ دومی این‌جا ساخته نمی‌شود، وگرنه دو
 # کپیِ دست‌نویس واگرا می‌شدند. حلقهٔ import نیست: `downloader` هیچ ارجاعی به
 # `dl_cache` ندارد (تست `test_no_import_cycle` همین را نگه می‌دارد).
-from .downloader import _MATCH_PLATFORMS, apple_id, platform_of, spotify_id
+from .downloader import _MATCH_PLATFORMS, apple_id, castbox_ids, platform_of, spotify_id
 from .models import DownloadCache, File
 
 log = logging.getLogger("telabzar.dlcache")
@@ -95,6 +95,18 @@ def _cache_url(url: str) -> str:
     kind, aid, _sf = apple_id(u)
     if kind and aid:
         return f"am:{kind}:{aid}"
+    # کست‌باکس: **شش** شکلِ URL به یک محتوا می‌رسند (`/vb/` `/ep/`
+    # `/episode/<اسلاگ>-id<cid>-id<eid>` + سه‌تای کانال) به‌علاوهٔ صفحهٔ واسطه —
+    # اندازه‌گیری‌شده که بدونِ این شاخه هفت کلیدِ متفاوت می‌سازند. از
+    # `castbox_ids` استفاده می‌شود نه الگوی تازه، تا دو کپی واگرا نشوند (همان
+    # دلیلِ `spotify_id`/`apple_id` بالا).
+    #
+    # دو قید: **اسلاگِ فارسیِ URL-encoded واردِ کلید نمی‌شود** (همان اپیزود
+    # می‌تواند اسلاگِ دیگری بگیرد و کلید را بشکند)، و `ep`/`ch` **جدا** می‌مانند
+    # چون دو فضای شناسهٔ متفاوت‌اند — همان استدلالِ `/sets/`ِ ساندکلاود.
+    kind, cid = castbox_ids(u)
+    if kind and cid:
+        return f"cb:{kind}:{cid}"
     try:
         p = urlsplit(u)
     except ValueError:
