@@ -2494,19 +2494,29 @@ async def save(request: web.Request) -> web.Response:
     store = settings_store.get_store()
     # فقط کلیدهایی که در فرم رندر شده‌اند (بقیه از /admin مدیریت می‌شوند و نباید ریست شوند)
     rendered = {key for _title, fields in GROUPS for key, _l, _h in fields}
-    for k in rendered:
+    # **اول همه را بسنج، بعد بنویس** — مثلِ `/buttons`. پیش از این، هر مقدارِ
+    # نامعتبر با یک `continue` بی‌صدا دور ریخته می‌شد و صفحه بی‌قیدوشرط بنرِ
+    # سبز می‌داد: ادمین «۱٬۰۰۰» می‌نوشت، «ذخیره شد» می‌دید، و مقدارِ قبلی
+    # همچنان برقرار بود. هیچ کرانی هم نبود، پس `max_file_mb = -1` پذیرفته و
+    # ذخیره و بازنمایش می‌شد انگار تنظیمی عمدی است.
+    pending, errors = [], []
+    for k in sorted(rendered):
         kind, default = RUNTIME_KEYS[k]
         if kind == "bool":
             val = "on" if form.get(k) == "on" else "off"
             changed = (val == "on") != bool(default)
         else:
             val = (form.get(k) or "").strip()
-            if k in ENUM_VALUES and val not in ENUM_VALUES[k]:
-                continue
-            if kind == "int" and not val.lstrip("-").isdigit():
+            err = settings_store.validate_value(k, val)
+            if err:
+                errors.append(err)
                 continue
             changed = str(val) != str(default)
-        if store is not None:
+        pending.append((k, val, changed))
+    if errors:
+        raise _result("/", err=" · ".join(errors[:3]))
+    if store is not None:
+        for k, val, changed in pending:
             if changed:
                 await store.set(k, val)
             else:

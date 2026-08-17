@@ -92,6 +92,7 @@ _PAL = "tests/test_panel_path_is_alive.py"
 _CHR = "tests/panel/test_security_characterization.py"
 _SEC = "tests/panel/test_security_headers.py"
 _SVF = "tests/panel/test_save_failures.py"
+_SBD = "tests/test_settings_bounds.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -1047,6 +1048,57 @@ CASES: list[dict] = [
      "new": "    if False:  # noqa\n        # هیچ نوشتنی انجام نشده",
      "target": _SVF,
      "expect": "test_a_rejected_label_is_reported_not_celebrated"},
+
+    # B-4: کفِ عددی برداشته شود.
+    {"name": "settings: the numeric floor stops being enforced",
+     "path": "app/settings_store.py",
+     "old": "        if n < lo:",
+     "new": "        if False:  # noqa",
+     "target": _SBD,
+     "expect": "test_a_negative_number_is_refused[max_file_mb]"},
+
+    # B-4: سقف برداشته شود.
+    {"name": "settings: the numeric ceiling stops being enforced",
+     "path": "app/settings_store.py",
+     "old": "        if hi is not None and n > hi:",
+     "new": "        if False:  # noqa",
+     "target": _SBD,
+     "expect": "test_a_percent_over_a_hundred_is_refused[safety_threshold]"},
+
+    # B-4: سقفِ حجم از سقفِ واقعیِ Bot API جدا شود — عدد باید به مستندش گره
+    # بخورد، وگرنه یک ثابتِ دستیِ دیگر است که می‌پوسد.
+    {"name": "settings: the upload ceiling drifts from the documented one",
+     "path": "app/settings_store.py",
+     "old": "_UPLOAD_CEILING_MB = 2000",
+     "new": "_UPLOAD_CEILING_MB = 20000",
+     "target": _SBD,
+     "expect": "test_the_upload_ceiling_matches_what_the_docs_state"},
+
+    # B-3: پنل دیگر اعتبارسنجی را صدا نزند — ادعای «وصل است» جدا از ادعای
+    # «تابع درست است».
+    {"name": "settings: the panel stops calling the validator",
+     "path": "app/admin_web.py",
+     "old": "            err = settings_store.validate_value(k, val)",
+     "new": "            err = None",
+     "target": _SVF,
+     "expect": "test_an_invalid_setting_is_refused_not_swallowed[max_file_mb=-1-negative]"},
+
+    # B-3/B-4: مسیرِ تلگرام دوباره از قاعدهٔ مشترک جدا شود.
+    {"name": "settings: the telegram path stops sharing the rule",
+     "path": "app/routers/admin.py",
+     "old": '    return escape(settings_store.validate_value(key, value) or "") or None',
+     "new": "    return None",
+     "target": _SBD,
+     "expect": "test_the_telegram_path_refuses_what_the_panel_refuses[negative]"},
+
+    # **کنترلِ معکوس:** مرتب‌سازیِ حلقهٔ `/save` جزئیاتِ بی‌ربط است؛ اگر چیزی
+    # بیندازد یعنی تستی به ترتیبِ پیمایش چسبیده، نه به رفتار.
+    {"name": "settings: iterate the form in set order (must break nothing)",
+     "path": "app/admin_web.py",
+     "old": "    for k in sorted(rendered):",
+     "new": "    for k in rendered:",
+     "target": _SVF,
+     "expect": None},
 ]
 
 

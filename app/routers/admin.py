@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import cookies as ck
 from .. import settings_store
 from ..callbacks import Ck
-from ..settings_store import ENUM_VALUES, RUNTIME_KEYS
+from ..settings_store import RUNTIME_KEYS
 
 router = Router(name="admin")
 
@@ -35,22 +35,14 @@ _HELP = (
 
 
 def _validate(key: str, value: str) -> str | None:
-    """پیامِ خطا در صورتِ نامعتبر بودن؛ None اگر معتبر."""
-    if key not in RUNTIME_KEYS:
-        return f"کلیدِ ناشناخته: <code>{escape(key)}</code>"
-    kind = RUNTIME_KEYS[key][0]
-    if kind == "int":
-        try:
-            int(value)
-        except ValueError:
-            return f"مقدارِ «{escape(key)}» باید عدد باشد."
-    elif kind == "bool":
-        if value.strip().lower() not in ("0", "1", "true", "false", "yes", "no", "on", "off"):
-            return f"مقدارِ «{escape(key)}» باید بولی باشد (on/off)."
-    if key in ENUM_VALUES and value not in ENUM_VALUES[key]:
-        allowed = " / ".join(v or "«خالی»" for v in ENUM_VALUES[key])
-        return f"مقدارِ «{escape(key)}» باید یکی از این‌ها باشد: {allowed}"
-    return None
+    """پیامِ خطا در صورتِ نامعتبر بودن؛ None اگر معتبر.
+
+    منطق در `settings_store.validate_value` است تا این مسیر و پنلِ وب **یک**
+    قاعده داشته باشند: تا امروز هر دو جدا نوشته شده بودند و هر دو کرانِ عددی
+    نداشتند، پس `/admin set max_file_mb -1` هم مثلِ فرمِ پنل قبول می‌شد. این‌جا
+    فقط خروجی برای تلگرام escape می‌شود (پیام با parse_mode=HTML می‌رود).
+    """
+    return escape(settings_store.validate_value(key, value) or "") or None
 
 
 async def _effective(key: str) -> str:
