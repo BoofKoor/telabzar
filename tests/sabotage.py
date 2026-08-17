@@ -90,6 +90,7 @@ _ORP = "tests/test_probe_orphan.py"
 _HYG = "tests/test_repo_hygiene.py"
 _PAL = "tests/test_panel_path_is_alive.py"
 _CHR = "tests/panel/test_security_characterization.py"
+_SEC = "tests/panel/test_security_headers.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -1004,6 +1005,38 @@ CASES: list[dict] = [
      "new": "    if not pubkey:",
      "target": _CHR,
      "expect": "test_an_oversized_pubkey_also_leaves_the_token_usable"},
+
+    # ── فاز ۲: بقیهٔ هدرهای امنیتی ─────────────────────────────────────────
+    {"name": "phase2 headers: drop X-Frame-Options (panel becomes frameable)",
+     "path": "app/admin_web.py",
+     "old": '    "X-Frame-Options": "DENY",',
+     "new": "",
+     "target": _SEC,
+     "expect": "test_the_hardening_headers_are_on_an_ordinary_page"},
+
+    {"name": "phase2 headers: send HSTS unconditionally",
+     "path": "app/admin_web.py",
+     "old": '    if request.secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https":\n'
+            '        headers["Strict-Transport-Security"] = _HSTS',
+     "new": '    headers["Strict-Transport-Security"] = _HSTS',
+     "target": _SEC,
+     "expect": "test_hsts_is_sent_only_over_https"},
+
+    {"name": "phase2 headers: a CSP that would blank the panel",
+     "path": "app/admin_web.py",
+     "old": '"default-src \'self\'; img-src \'self\' data:; style-src \'self\' \'unsafe-inline\'; "',
+     "new": '"default-src \'self\'; img-src \'self\' data:; style-src \'self\'; "',
+     "target": _SEC,
+     "expect": "test_the_csp_permits_what_the_panel_actually_serves"},
+
+    # **کنترلِ معکوس:** یک منبعِ خارجی که CSP بلاکش می‌کند باید گرفته شود.
+    {"name": "phase2 headers: add an external CDN reference",
+     "path": "app/admin_web.py",
+     "old": "<title>{% block title %}پنلِ مدیریت{% endblock %}",
+     "new": '<script src="https://cdn.example.com/x.js"></script>'
+            "<title>{% block title %}پنلِ مدیریت{% endblock %}",
+     "target": _SEC,
+     "expect": "test_the_panel_has_no_external_resources_for_the_csp_to_break"},
 
     # **کنترلِ معکوس:** تغییری در همان تابع که هیچ ادعای ثبت‌شده‌ای را جابه‌جا
     # نمی‌کند. اگر چیزی بیندازد یعنی تستی به جزئیاتِ بی‌ربط چسبیده.

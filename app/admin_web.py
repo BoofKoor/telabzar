@@ -2500,7 +2500,27 @@ async def _on_cleanup(app: web.Application) -> None:
 #: هدر جلوی تکرارِ همین رده را برای هر مسیرِ آیندهٔ پنل می‌گیرد.
 _SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
+    # پنل قابلِ iframe شدن بود. چون توکنِ CSRF ندارد و کلِ دفاعش
+    # `SameSite=Lax`ِ کوکی است، یک کلیکِ فریب‌خورده روی «بلاکِ کاربر» یا «حذفِ
+    # اکانتِ کوکی» کافی بود.
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    # CSP سخت‌گیرانه است چون پنل **هیچ منبعِ خارجی ندارد** (اندازه‌گیری‌شده:
+    # صفر ارجاعِ http(s) در قالب‌ها؛ فونت از /static می‌آید). `unsafe-inline`
+    # برای style لازم است چون کلِ طراحی یک `<style>`ِ درون‌خطی است، و برای
+    # script هم چون صفحهٔ /buttons یک بلاکِ inline دارد — هر دو ساختاری‌اند و
+    # بیرون‌بردنشان تغییرِ جداست، نه بخشی از این سخت‌سازی.
+    "Content-Security-Policy": (
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; "
+        "form-action 'self'"
+    ),
 }
+
+#: HSTS فقط روی HTTPS. روی HTTPِ ساده فرستادنش بی‌اثر است و بدتر: اگر پنل
+#: عمداً روی HTTP سرو شود (نصب بدونِ دامنه)، مرورگر را برای همان هاست به
+#: HTTPSِ ناموجود قفل می‌کند. `_ssl_context()` تصمیم را از قبل گرفته.
+_HSTS = "max-age=31536000; includeSubDomains"
 
 
 @web.middleware
@@ -2511,12 +2531,16 @@ async def _security_headers(request: web.Request, handler):
     دقیقاً همان‌هایی‌اند که در جریانِ نودها ساخته می‌شوند — پس اگر فقط مسیرِ
     موفق پوشش داده شود، جایی که بیشترین اهمیت را دارد بی‌هدر می‌ماند.
     """
+    headers = dict(_SECURITY_HEADERS)
+    # همان قاعده‌ای که کوکیِ نشست دارد: اسکیمِ **واقعی**، با احتسابِ پروکسی.
+    if request.secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https":
+        headers["Strict-Transport-Security"] = _HSTS
     try:
         resp = await handler(request)
     except web.HTTPException as exc:
-        exc.headers.update(_SECURITY_HEADERS)
+        exc.headers.update(headers)
         raise
-    resp.headers.update(_SECURITY_HEADERS)
+    resp.headers.update(headers)
     return resp
 
 
