@@ -524,11 +524,38 @@ async def probe(url: str, opts: dict, timeout: float = 120) -> dict:
         _cleanup_cookie(ck)
 
 
-def _selector_to_format(sel: str) -> str:
+# ساندکلاود: زنجیرهٔ ترجیحِ **MP3 → هر MP3ی → هرچه هست**.
+#
+# چرا لازم است: `ba/b`ِ عمومی روی همان ترک `hls_aac_96k` را برمی‌دارد (سنجیده‌شده
+# روی سرور *و* با موتورِ انتخابگرِ خودِ yt-dlp)، که یعنی ۲۶ فرگمنتِ HLS + یک
+# ترنسکدِ کاملِ AAC→MP3؛ در حالی که `http_mp3_0_0` یک GETِ ساده است. اندازه‌گیریِ
+# اپراتور روی همان ترک: ۱٫۳۹MB/۶ثانیه در برابرِ ۴٫۰۲MB/۲ثانیه. حجمِ بزرگ‌تر
+# **آگاهانه پذیرفته شده** — ساندکلاود سرویسِ موسیقی است و ۱۲۸k بدونِ انکدِ دوباره
+# از ۹۶kِ ترنسکدشده بهتر است.
+#
+# دو تلهٔ خاموش که این فرم دورشان می‌زند (هر دو با اجرا اثبات شدند، §۷):
+#   ۱) `[acodec^=mp3]` **کار نمی‌کند**: در `SoundcloudBaseIE` مقدارِ `acodec` از
+#      `codecs="…"`ِ داخلِ mime-type می‌آید و mp3 مایم‌تایپش `audio/mpeg` است که
+#      چنین attributeی ندارد → `acodec is None` → شرط بی‌صدا رد می‌شود و باز
+#      همان AAC انتخاب می‌شود. تمایزدهندهٔ درست `ext` است.
+#   ۲) `[protocol^=http]` **زائد به‌نظر می‌رسد ولی نیست**: بدونش انتخاب به ترتیبی
+#      که yt-dlp فرمت‌ها را مرتب می‌کند وابسته می‌شود و با جابه‌جاییِ آن ترتیب به
+#      `hls_mp3_0_0` می‌افتد (اجراشده). همان درسِ لنگرِ `regexp`: به پیش‌فرضِ
+#      مرتب‌سازیِ کتابخانه تکیه نکن.
+#
+# دُمِ `ba/b` عمداً دست‌نخوردهٔ امروز است: وقتی ساندکلاود MP3 را حذف کند (اعلام
+# کرده)، این زنجیره خودش به AAC برمی‌گردد و `--audio-format mp3` همان‌جا ترنسکد
+# می‌کند — بدونِ تغییرِ کد.
+_SOUNDCLOUD_AUDIO = "ba[ext=mp3][protocol^=http]/ba[ext=mp3]/ba/b"
+
+
+def _selector_to_format(sel: str, platform: str | None = None) -> str:
     if sel in ("best", ""):
         return "bv*+ba/b"
     if sel == "audio":
-        return "ba/b"
+        # فقط ساندکلاود. بقیهٔ `AUDIO_PLATFORMS` چشمِ‌بستهٔ ما هستند (منظرِ فرمتشان
+        # اندازه‌گیری نشده)، پس بیت‌به‌بیت همان `ba/b`ِ قبلی را می‌گیرند.
+        return _SOUNDCLOUD_AUDIO if platform == "soundcloud" else "ba/b"
     if sel.isdigit():
         return f"bv*[height<={sel}]+ba/b[height<={sel}]/b"
     return "bv*+ba/b"
@@ -691,7 +718,7 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
     cmd = [YTDLP, "--newline", "--progress-template", "dl:%(progress._percent_str)s",
            "--concurrent-fragments", "4",  # دانلودِ موازیِ قطعه‌های DASH → سریع‌تر
            "--write-info-json", "--write-thumbnail", "--convert-thumbnails", "jpg",
-           "-o", outtmpl, "-f", _selector_to_format(selector)]
+           "-o", outtmpl, "-f", _selector_to_format(selector, platform_of(url))]
     if audio_only:
         cmd += ["-x", "--audio-format", "mp3"]
     else:

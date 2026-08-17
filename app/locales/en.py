@@ -222,6 +222,7 @@ MESSAGES: dict[str, str] = {
     "dl_probe_failed": "❌ Couldn't read the link's info.",
     "dl_failed": "❌ Download failed.",
     "dl_need_cookies": "🔒 “{platform}” requires a logged-in account to download; an admin must add cookies.",
+    "dl_login_unsupported": "🔒 “{platform}” wants a logged-in account for this link, and the bot has none for this service. Try another public link.",
     "dl_too_large": "⚠️ Output ({mb}MB) exceeds the {cap}MB limit — pick a lower quality.",
     "dl_direct_too_large": "⚠️ This file is {mb}MB, over the {cap}MB limit — an admin can raise it.",
     "dl_bad_response": "⚠️ “{platform}” returned an invalid response. Usually the session is no longer valid or the downloader needs updating — let an admin know.",

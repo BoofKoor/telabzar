@@ -43,6 +43,15 @@ _YT_RE = re.compile(
 _IG_RE = re.compile(r"instagram\.com/(?:[^/]+/)?(?:p|reels?|tv)/([A-Za-z0-9_-]+)")
 _X_RE = re.compile(r"(?:twitter|x)\.com/[^/]+/status/(\d+)")
 _TT_RE = re.compile(r"tiktok\.com/@[^/]+/video/(\d+)")
+# ساندکلاود: `<user>/<slug>` محتوا را کامل تعیین می‌کند، پس زیردامنه (`www.`/`m.`)
+# و کوئری بی‌اهمیت‌اند — همان استدلالِ `sp:`/`am:`. زیرمسیرِ `/sets/` عمداً **جدا**
+# می‌ماند (یک ست با یک ترک یکی نیست).
+#
+# `on.soundcloud.com/<code>` این‌جا **جور نمی‌شود و نمی‌تواند بشود**: آن کد یک
+# توکنِ مبهمِ ریدایرکت است، نه شناسهٔ محتوا. راهش نوشتنِ کلیدِ دوم از
+# `webpage_url` بعد از دانلود است (`put_cached`)، نه یک الگوی دیگر این‌جا.
+_SC_RE = re.compile(
+    r"^(?:www\.|m\.)?soundcloud\.com/([^/?#]+/(?:sets/)?[^/?#]+)/?$")
 
 # پارامترهای «به‌اشتراک‌گذاری/ترکینگ» که محتوا را عوض نمی‌کنند. عمداً فهرستِ **بسته**:
 # پارامترِ ناشناخته حفظ می‌شود، چون بدترین حالتِ نگه‌داشتن یک miss است ولی بدترین
@@ -93,6 +102,11 @@ def _cache_url(url: str) -> str:
     host = (p.hostname or "").lower()
     if host.startswith("www."):
         host = host[4:]
+    # ساندکلاود، بعد از برداشتنِ اسکیم — سه شکلِ `soundcloud.com` / `m.soundcloud.com`
+    # / `…?utm_*` امروز سه کلیدِ متفاوت می‌سازند (اندازه‌گیری‌شده).
+    m = _SC_RE.match(f"{host}{p.path.rstrip('/')}")
+    if m:
+        return f"sc:{m.group(1).lower()}"
     qs = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
           if k.lower() not in _DROP_PARAMS and not k.lower().startswith("utm_")]
     query = "&".join(f"{k}={v}" for k, v in sorted(qs))
@@ -176,14 +190,37 @@ async def _upsert(session: AsyncSession, url: str, selector: str, **vals) -> Non
     await session.commit()
 
 
-async def put_cached(session: AsyncSession, url: str, selector: str, f: File) -> None:
-    """تک‌فایل را کش کن — **هر نوعی** (ویدیو، صوت، عکس، سند، PDF، آرشیو)."""
+async def put_cached(session: AsyncSession, url: str, selector: str, f: File,
+                     canonical_url: str | None = None) -> None:
+    """تک‌فایل را کش کن — **هر نوعی** (ویدیو، صوت، عکس، سند، PDF، آرشیو).
+
+    `canonical_url` = `webpage_url`ی که موتور برگرداند. وقتی با URLِ درخواستی
+    فرق کند، ردیفِ **دومی** هم زیرِ کلیدِ آن نوشته می‌شود.
+
+    چرا لازم است: `on.soundcloud.com/<code>` — یعنی همان چیزی که دکمهٔ Shareِ اپ
+    تولید می‌کند — بدونِ resolveِ ریدایرکت قابلِ نرمال‌سازی **نیست**، پس هر لینکِ
+    کوتاه کلیدِ خودش را می‌گیرد و لینکِ کاملِ همان ترک هرگز به آن نمی‌خورد.
+    yt-dlp ریدایرکت را خودش دنبال می‌کند و `webpage_url` فرمِ کانونیک را می‌دهد،
+    پس این ردیفِ دوم **رایگان** است: صفر درخواستِ شبکهٔ اضافه، صفر سطحِ SSRF.
+
+    پوشش: تکرارِ همان لینکِ کوتاه (کلیدِ اول) · لینکِ کاملِ همان ترک (کلیدِ دوم).
+    شورت‌کدِ **متفاوتِ** همان ترک همچنان miss می‌خورد — بدونِ resolve ممکن نیست
+    و صادقانه ثبت می‌شود.
+
+    **کلیدِ دوم از همان `cache_key` رد می‌شود، نه از URLِ خام.** وگرنه ردیفِ دوم
+    زیرِ یک شکلِ خاص می‌نشیند و لینکِ کاملی که کاربر بعداً می‌فرستد شکلِ دیگری
+    می‌سازد و باز miss می‌خورد — یعنی نرمال‌سازی و نوشتنِ دوم باید از **یک** مسیر
+    بروند، نه دو تا.
+    """
     if not f.file_id:
         return
-    await _upsert(session, url, selector, file_id=f.file_id, file_unique_id=f.file_unique_id,
+    fields = dict(file_id=f.file_id, file_unique_id=f.file_unique_id,
                   kind=f.kind, name=f.name, size=f.size, width=f.width, height=f.height,
                   duration=f.duration, post_caption=f.post_caption, platform=f.platform,
                   items=None)
+    await _upsert(session, url, selector, **fields)
+    if canonical_url and cache_key(canonical_url, selector) != cache_key(url, selector):
+        await _upsert(session, canonical_url, selector, **fields)
 
 
 async def put_album_cached(session: AsyncSession, url: str, selector: str, items: list[dict],

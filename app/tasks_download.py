@@ -585,6 +585,57 @@ def _post_text(info: dict, gallery_caption: str | None) -> str | None:
     return D.clean_caption("\n".join(lines)) if lines else None
 
 
+async def _no_account_possible(redis, platform: str) -> bool:
+    """آیا این سطل نه اکانتی دارد و نه هرگز داشته؟
+
+    همان تفکیکِ سه‌حالتهٔ `_alert_if_low`، این‌بار برای **متنِ پیامِ کاربر**:
+    «۰ از N» = استخرِ سوخته و «۰ از ۰ ولی زمانی پر بوده» = یک قابلیت از کار
+    افتاده — هر دو واقعاً دربارهٔ سشن‌اند و پیامِ فعلی درست است. فقط
+    «۰ از ۰ و هرگز پر نشده» است که پیامِ سشن‌محور را به دروغ تبدیل می‌کند.
+
+    خطا → `False`، یعنی برگشت به پیامِ امروزی. یک Redisِ در دسترس‌نبودن نباید
+    متنِ خطا را عوض کند.
+
+    **و آن fail-safe یک `ping` لازم دارد، نه فقط `try`.** هم `pool_counts` و هم
+    `was_stocked` خطای Redis را خودشان می‌بلعند و به‌ترتیب `(0, 0)` و `False`
+    می‌دهند — یعنی «سطل خالی است» و «Redis خواب است» از بیرون **یکی** به‌نظر
+    می‌رسند و `try`ِ بیرونی هرگز شلیک نمی‌کند. بدونِ این پروب، یک قطعیِ گذرای
+    Redis باعث می‌شد به کاربر بگوییم «این سرویس پشتیبانی نمی‌شود». تستِ خودِ این
+    ادعا همین را گرفت. `ping` عمداً به‌جای خواندنِ مستقیمِ کلیدِ `ckseen:` است تا
+    نامِ کلید کپیِ دومی پیدا نکند (§۷: دو کپیِ دست‌نویس واگرا می‌شوند). هزینه‌اش
+    یک رفت‌وبرگشت است، فقط روی مسیرِ **شکستِ** دانلود.
+    """
+    if redis is None:
+        return False
+    try:
+        await redis.ping()
+        total, _usable = await ck.pool_counts(redis, platform)
+        return not total and not await ck.was_stocked(redis, platform)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _canonical_url(info: dict, platform: str | None) -> str | None:
+    """`webpage_url`ی که موتور برگرداند — برای نوشتنِ کلیدِ دومِ کش.
+
+    yt-dlp ریدایرکت را خودش دنبال می‌کند، پس یک لینکِ کوتاه (`on.soundcloud.com/…`،
+    `youtu.be/…`) این‌جا به فرمِ کانونیکش برمی‌گردد و کش می‌تواند دفعهٔ بعد لینکِ
+    کاملِ همان محتوا را هم اصابت بدهد — بدونِ حتی یک درخواستِ شبکهٔ اضافه.
+
+    **گیتِ `_MATCH_PLATFORMS` باربر است، نه احتیاط.** برای اسپاتیفای/اپل، فایل از
+    **یوتیوب** دانلود می‌شود، پس `webpage_url` آدرسِ یک ویدیوی یوتیوب است و نه
+    آدرسِ ترکِ مبدأ. نوشتنِ ردیفی زیرِ کلیدِ یوتیوب برای دانلودِ اسپاتیفای یعنی
+    آن ردیف **نسخه‌دار نمی‌شود** (`_MATCH_VERSION` فقط برای پلتفرم‌های ماچ واردِ
+    کلید می‌شود)، یعنی تغییرِ ماچر دیگر باطلش نمی‌کند — دقیقاً همان «جوابِ کهنه
+    برای همیشه» که نسخه‌دارکردن برای بستنش ساخته شد. قاعده به **علت** گره خورده
+    نه به نامِ پلتفرم: «`webpage_url` وقتی ماچ شده متعلق به پلتفرمِ دیگری است».
+    """
+    if platform in D._MATCH_PLATFORMS:
+        return None
+    wu = info.get("webpage_url")
+    return wu if isinstance(wu, str) and wu else None
+
+
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
                  kind: str, info: dict, lang: str, thumb_path: str | None = None,
                  post_caption: str | None = None, platform: str | None = None,
@@ -617,7 +668,8 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
             if fuid:
                 f.file_unique_id = fuid
             if url and f.file_id:
-                await dl_cache.put_cached(s, url, selector or "best", f)  # دفعهٔ بعد آنی
+                await dl_cache.put_cached(s, url, selector or "best", f,  # دفعهٔ بعد آنی
+                                          canonical_url=_canonical_url(info, platform))
         except Exception:  # noqa: BLE001
             log.exception("dl spawn-card send failed")
         await s.commit()
@@ -656,7 +708,8 @@ async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int
             if fuid:
                 f.file_unique_id = fuid
             await s.commit()
-            await dl_cache.put_cached(s, url, selector, f)  # دفعهٔ بعد آنی
+            await dl_cache.put_cached(s, url, selector, f,  # دفعهٔ بعد آنی
+                                      canonical_url=_canonical_url(info, platform))
         except Exception:  # noqa: BLE001
             log.exception("dl in-place delivery failed")
 
@@ -1114,10 +1167,16 @@ async def run_download(ctx: dict, payload: dict) -> None:
                         _p = os.path.join(workdir, _n)
                         shutil.rmtree(_p, ignore_errors=True) if os.path.isdir(_p) \
                             else os.remove(_p)
-                await _edit(bot, chat_id, status_mid,
-                            progress_note(t(lang, "dl_retry_account"), None, None,
-                                          time.monotonic() - nstart, 0),
-                            kb=download_cancel_kb(ref, lang))
+                # فقط وقتی که واقعاً اکانتی در بازی بوده. با استخرِ **خالی**
+                # (ساندکلاود و هفت پلتفرمِ دیگری که پنل سطلشان را نمی‌سازد)
+                # `cookie_name` تهی است و «اکانتِ دیگری را امتحان می‌کنم» حرفِ
+                # بی‌معنایی است: اکانتی نیست، و دورِ بعدِ حلقه هم `cookieless_used`
+                # می‌شکندش. پس این پیام یک وعدهٔ دروغ بود، نه گزارشِ وضعیت.
+                if cookie_name:
+                    await _edit(bot, chat_id, status_mid,
+                                progress_note(t(lang, "dl_retry_account"), None, None,
+                                              time.monotonic() - nstart, 0),
+                                kb=download_cancel_kb(ref, lang))
                 continue        # ← اکانتِ بعدی؛ اتمامِ استخر را سرِ حلقه می‌فهمیم
 
         if paths is None:
@@ -1157,6 +1216,17 @@ async def run_download(ctx: dict, payload: dict) -> None:
                             t(lang, "dl_spotify_setup") + f"\n<code>{escape(msg[:200])}</code>")
             elif D.is_youtube_botcheck(msg, platform):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
+            elif await _no_account_possible(redis, _cookie_platform(platform)) and (
+                    any(h in low for h in _TRANSIENT_HINTS)
+                    or any(h in low for h in _LOGIN_HINTS)):
+                # **پیش از هر دو شاخهٔ زیر**، وگرنه به کاربر/ادمین کارِ نشدنی
+                # می‌دهیم: هر دو پیامِ بعدی دربارهٔ «سشن» حرف می‌زنند، ولی این
+                # سطل هیچ اکانتی ندارد و پنل هم نمی‌تواند برایش بسازد
+                # (`admin_web.COOKIE_PLATFORMS` شش‌تاست، `_cookie_platform` چهارده
+                # تا می‌خواهد). «ادمین باید کوکی تنظیم کند» آن‌جا دستورِ اجراناپذیر
+                # است و «سشن دیگر معتبر نیست» درباره‌ی سشنی حرف می‌زند که وجود ندارد.
+                await _edit(bot, chat_id, status_mid,
+                            t(lang, "dl_login_unsupported", platform=plabel))
             elif any(h in low for h in _TRANSIENT_HINTS):
                 # همهٔ اکانت‌ها همین را دادند → یا هیچ سشنی معتبر نیست، یا مشکل
                 # سمتِ سایت/موتور است. پیام هر دو را می‌گوید تا ادمین بداند کجا را
