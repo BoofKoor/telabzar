@@ -81,6 +81,8 @@ def sabotage(path: str | Path, old: str, new: str, *, count: int = 1):
 _IGW = "tests/test_ig_anon_wiring.py"
 _PCB = "tests/test_probe_cookie_blame.py"
 _LNK = "tests/test_link_filter.py"
+_SCP = "tests/test_soundcloud_path.py"
+_DEM = "tests/test_deadend_messages.py"
 
 CASES: list[dict] = [
     # ── فاز ۲: مسیرِ ناشناسِ اینستاگرام. یکی به‌ازای هر قیدِ سخت. ──
@@ -413,6 +415,102 @@ CASES: list[dict] = [
      "new": "@router.message()",
      "target": _LNK,
      "expect": "test_a_bare_link_still_reaches_the_handler[bare-short-link]"},
+
+    # ── ساندکلاود: انتخابگرِ فرمت ──
+    {"name": "soundcloud: back to the generic ba/b (AAC + transcode)",
+     "path": "app/downloader.py",
+     "old": '        return _SOUNDCLOUD_AUDIO if platform == "soundcloud" else "ba/b"',
+     "new": '        return "ba/b"',
+     "target": _SCP,
+     "expect": "test_soundcloud_takes_progressive_mp3_when_it_exists"},
+
+    # کنترلِ معکوس: همان خرابکاری نباید ادعای **fallback** را بیندازد. اگر
+    # بیفتد، آن تست دارد ترجیحِ mp3 را می‌سنجد نه بازگشت به AAC — یعنی روزی که
+    # ساندکلاود mp3 را حذف کند چیزی از ما محافظت نمی‌کند.
+    {"name": "soundcloud: generic selector — but the AAC fallback claim stays green",
+     "path": "app/downloader.py",
+     "old": '        return _SOUNDCLOUD_AUDIO if platform == "soundcloud" else "ba/b"',
+     "new": '        return "ba/b"',
+     "target": _SCP + "::test_soundcloud_falls_back_to_aac_when_mp3_is_gone",
+     "expect": None},
+
+    # تلهٔ خاموش: `acodec` به‌جای `ext`. روی فهرستِ امروز **تصادفاً** همان
+    # فرمتِ درست درمی‌آید، پس فقط تستِ ترتیب می‌گیردش — که دقیقاً دلیلِ وجودِ
+    # آن تست است.
+    {"name": "soundcloud: acodec instead of ext (matches nothing, silently)",
+     "path": "app/downloader.py",
+     "old": '_SOUNDCLOUD_AUDIO = "ba[ext=mp3][protocol^=http]/ba[ext=mp3]/ba/b"',
+     "new": '_SOUNDCLOUD_AUDIO = "ba[acodec^=mp3][protocol^=http]/ba[acodec^=mp3]/ba/b"',
+     "target": _SCP,
+     "expect": "test_the_choice_does_not_depend_on_the_order_yt_dlp_hands_us"},
+
+    {"name": "soundcloud: drop the explicit protocol clause",
+     "path": "app/downloader.py",
+     "old": '_SOUNDCLOUD_AUDIO = "ba[ext=mp3][protocol^=http]/ba[ext=mp3]/ba/b"',
+     "new": '_SOUNDCLOUD_AUDIO = "ba[ext=mp3]/ba/b"',
+     "target": _SCP,
+     "expect": "test_the_choice_does_not_depend_on_the_order_yt_dlp_hands_us"},
+
+    {"name": "soundcloud: the engine stops passing the platform",
+     "path": "app/downloader.py",
+     "old": '"-o", outtmpl, "-f", _selector_to_format(selector, platform_of(url))]',
+     "new": '"-o", outtmpl, "-f", _selector_to_format(selector)]',
+     "target": _SCP,
+     "expect": "test_the_engine_is_asked_for_the_platform_of_the_url"},
+
+    # ── ساندکلاود: کلیدِ کش ──
+    {"name": "cache: the sc: normaliser is gone",
+     "path": "app/dl_cache.py",
+     "old": "    m = _SC_RE.match(f\"{host}{p.path.rstrip('/')}\")\n    if m:",
+     "new": "    m = _SC_RE.match(f\"{host}{p.path.rstrip('/')}\")\n    if False:",
+     "target": _SCP,
+     "expect": "test_the_second_key_goes_through_the_same_normaliser"},
+
+    {"name": "cache: a match platform writes a youtube-keyed row",
+     "path": "app/tasks_download.py",
+     "old": "    if platform in D._MATCH_PLATFORMS:\n        return None",
+     "new": "    if False:\n        return None",
+     "target": _SCP,
+     "expect": "test_a_match_platform_never_writes_a_youtube_keyed_row"},
+
+    # ── پیام‌های بن‌بست ──
+    {"name": "messages: promise another account even with an empty pool",
+     "path": "app/tasks_download.py",
+     "old": "                if cookie_name:\n                    await _edit(bot, chat_id, status_mid,\n"
+            '                                progress_note(t(lang, "dl_retry_account")',
+     "new": "                if True:\n                    await _edit(bot, chat_id, status_mid,\n"
+            '                                progress_note(t(lang, "dl_retry_account")',
+     "target": _DEM,
+     "expect": "test_an_empty_pool_never_promises_another_account"},
+
+    {"name": "messages: the unstockable-bucket branch is gone",
+     "path": "app/tasks_download.py",
+     "old": "            elif await _no_account_possible(redis, _cookie_platform(platform)) and (",
+     "new": "            elif False and (",
+     "target": _DEM,
+     "expect": "test_an_unstockable_bucket_does_not_order_the_admin_to_add_cookies"},
+
+    # کنترلِ معکوس: گارد روی «قابلِ‌استفاده» به‌جای «کل» — همان اشتباهی که
+    # یک‌بار در `_alert_if_low` بود. باید استخرِ **سوخته** را هم «پشتیبانی
+    # نمی‌شود» بخواند، یعنی سیگنالِ واقعی را خفه کند.
+    {"name": "messages: guard on usable instead of total (silences a burned pool)",
+     "path": "app/tasks_download.py",
+     "old": "        total, _usable = await ck.pool_counts(redis, platform)\n"
+            "        return not total and not await ck.was_stocked(redis, platform)",
+     "new": "        _total, usable = await ck.pool_counts(redis, platform)\n"
+            "        return not usable",
+     "target": _DEM,
+     "expect": "test_a_burned_pool_is_not_called_unsupported"},
+
+    # کنترلِ معکوس: `ping` فقط برای fail-safe است. برداشتنش نباید هیچ ادعای
+    # رفتاریِ دیگری را بیندازد — اگر بیندازد یعنی آن تست‌ها به Redisِ سالم
+    # وابسته‌اند از راهی که فکر نمی‌کردیم.
+    {"name": "messages: drop the liveness ping (only the fail-safe claim breaks)",
+     "path": "app/tasks_download.py",
+     "old": "        await redis.ping()\n        total, _usable = await ck.pool_counts(redis, platform)",
+     "new": "        total, _usable = await ck.pool_counts(redis, platform)",
+     "target": _DEM,
+     "expect": "test_a_redis_failure_falls_back_to_todays_message"},
 ]
 
 
