@@ -861,6 +861,60 @@ CASES: list[dict] = [
      "new": "pip install -r requirements-admin.txt -r requirements-dev.txt",
      "target": _PAL,
      "expect": None},
+
+    # ── تست‌های characterization ────────────────────────────────────────────
+    # این‌ها شکلِ **معکوس** دارند: «خرابکاری» در واقع همان **رفعِ فاز ۲** است، و
+    # ادعا این است که تستِ `..._TODAY_...` مربوطه آشکارا قرمز می‌شود. اگر یکی از
+    # این‌ها «نگرفت» بدهد یعنی آن تست رفتارِ امروز را pin نمی‌کند و فاز ۲
+    # می‌تواند بی‌صدا از کنارش رد شود.
+    #
+    # ⚠️ این چهار مورد `tests/panel/` را هدف می‌گیرند، پس **به
+    # `requirements-admin.txt` نیاز دارند**؛ در محیطِ فقط-dev با خطای collect
+    # می‌افتند و نتیجه بی‌معناست.
+    {"name": "char: A-1 fix — stop deriving the session key from the bot token",
+     "path": "app/admin_web.py",
+     "old": "    seed = settings.admin_secret or settings.bot_token",
+     "new": "    seed = settings.admin_secret",
+     "target": _CHR,
+     "expect": "test_TODAY_an_empty_admin_secret_falls_back_to_the_bot_token"},
+
+    {"name": "char: A-2 fix — keep the join token out of the redirect URL",
+     "path": "app/admin_web.py",
+     "old": '    raise web.HTTPFound(f"/nodes?tok={tok}")',
+     "new": '    raise web.HTTPFound("/nodes")',
+     "target": _CHR,
+     "expect": "test_TODAY_the_join_token_is_handed_back_in_the_redirect_url"},
+
+    {"name": "char: A-2 fix — stop returning service config from /node/join",
+     "path": "app/admin_web.py",
+     "old": "    cfg = node_mod.node_config(role, ip)",
+     "new": '    cfg = {"services": {}}',
+     "target": _CHR,
+     "expect": "test_TODAY_an_unauthenticated_caller_can_redeem_that_token"},
+
+    {"name": "char: A-3 fix — validate the request before consuming the token",
+     "path": "app/admin_web.py",
+     "old": '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n'
+            '    if payload is None:\n'
+            '        return web.json_response({"error": "invalid or used token"}, status=403)\n'
+            '    if not pubkey or len(pubkey) > 64:\n'
+            '        return web.json_response({"error": "missing pubkey"}, status=400)',
+     "new": '    if not pubkey or len(pubkey) > 64:\n'
+            '        return web.json_response({"error": "missing pubkey"}, status=400)\n'
+            '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n'
+            '    if payload is None:\n'
+            '        return web.json_response({"error": "invalid or used token"}, status=403)',
+     "target": _CHR,
+     "expect": "test_TODAY_a_malformed_join_burns_the_token"},
+
+    # **کنترلِ معکوس:** تغییری در همان تابع که هیچ ادعای ثبت‌شده‌ای را جابه‌جا
+    # نمی‌کند. اگر چیزی بیندازد یعنی تستی به جزئیاتِ بی‌ربط چسبیده.
+    {"name": "char: rename a local in node_join (must break nothing)",
+     "path": "app/admin_web.py",
+     "old": '        nid = secrets.token_urlsafe(9)[:12]',
+     "new": '        nid = secrets.token_urlsafe(9)[:12]  # noqa',
+     "target": _CHR,
+     "expect": None},
 ]
 
 
