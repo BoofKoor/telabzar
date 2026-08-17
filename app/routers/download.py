@@ -21,7 +21,8 @@ from .. import dl_cache, nodes, safety, settings_store
 from ..callbacks import Dl
 from ..config import settings
 from ..downloader import (
-    AUDIO_PLATFORMS, describe_link, engine_for, find_url, is_safe_url_resolved, platform_of,
+    AUDIO_PLATFORMS, castbox_ids, describe_link, engine_for, find_url, is_safe_url_resolved,
+    platform_of, resolve_castbox,
 )
 from ..i18n import t
 from ..models import User
@@ -174,6 +175,28 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     if platform == "apple" and not await settings_store.get_bool(
             "apple_enabled", settings.apple_enabled):
         return
+    # ── کست‌باکس: بازنویسی به فرمِ کارآمد، **در همین درِ ورودی** ──────────
+    # چرا این‌جا و نه در ورکر: کانال باید **پیش از هر کاری** رد شود (بدونِ جاب،
+    # بدونِ صف، جوابِ آنی)، و بازنویسی هم چون رشته‌ای و بی‌شبکه است هزینه‌ای
+    # ندارد. سودِ جانبی‌اش این است که URLِ بازنویسی‌شده در `dlctx` و payload
+    # می‌نشیند، پس همهٔ مسیرهای پایین‌دست همان فرمِ سنجیده‌شده را می‌بینند.
+    #
+    # `is_safe_url_resolved` این‌جا **دومین** فراخوانی است، ولی روی همان هاست
+    # (`castbox.fm`) و کشِ ۶۰ثانیه‌ایِ DNS از فراخوانیِ بالا داغ است — یعنی
+    # عملاً رایگان.
+    if platform == "castbox":
+        kind, _cid = castbox_ids(url)
+        if kind == "ch":
+            # اندازه‌گیری‌شده: yt-dlp روی صفحهٔ واسطه می‌ایستد و اصلاً به صفحهٔ
+            # کانال نمی‌رسد، و آن صفحه هم تگِ <audio> ندارد. پس چیزی برای
+            # برداشتن نیست — پیامِ روشن، نه سکوت و نه stderrِ خام.
+            await message.reply(t(lang, "dl_castbox_channel"))
+            return
+        target = await resolve_castbox(url, proxy=proxy)
+        if not target:
+            await message.reply(t(lang, "dl_bad_link"))
+            return
+        url = target
     uid = user.tg_user_id if user else 0
     owner_id = user.id if user else 0
     block = await _precheck(arq_pool, uid, lang)

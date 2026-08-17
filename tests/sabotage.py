@@ -83,6 +83,7 @@ _PCB = "tests/test_probe_cookie_blame.py"
 _LNK = "tests/test_link_filter.py"
 _SCP = "tests/test_soundcloud_path.py"
 _DEM = "tests/test_deadend_messages.py"
+_CBX = "tests/test_castbox_path.py"
 
 CASES: list[dict] = [
     # ── فاز ۲: مسیرِ ناشناسِ اینستاگرام. یکی به‌ازای هر قیدِ سخت. ──
@@ -511,6 +512,116 @@ CASES: list[dict] = [
      "new": "        total, _usable = await ck.pool_counts(redis, platform)",
      "target": _DEM,
      "expect": "test_a_redis_failure_falls_back_to_todays_message"},
+
+    # ── کست‌باکس: دو دفاعِ SSRF، تلهٔ دو-شناسه‌ای، و بقیهٔ قیدها ──
+    # **دفاعِ اول، ایزوله** — بازسازیِ URL. اولین اجرای دفترچه نشان داد که هدفِ
+    # این سابوتاژ نباید تستِ انتها‌به‌انتها باشد: با برداشتنِ دفاعِ اول، **گارد**
+    # payload را می‌گیرد و آن تست سبز می‌ماند. پس هدف تستِ ایزوله است، وگرنه
+    # یک سابوتاژِ کاملاً موفق «نگرفت» گزارش می‌شد.
+    {"name": "castbox: pass the unwrapped link= through instead of rebuilding",
+     "path": "app/downloader.py",
+     "old": '    kind, cid = castbox_ids(url)\n'
+            '    return f"https://castbox.fm/ep/{cid}" if kind == "ep" and cid else None',
+     "new": '    from urllib.parse import parse_qs as _pq, urlsplit as _us\n'
+            '    inner = (_pq(_us(url or "").query).get("link") or [""])[0]\n'
+            '    if inner:\n'
+            '        return inner\n'
+            '    kind, cid = castbox_ids(url)\n'
+            '    return f"https://castbox.fm/ep/{cid}" if kind == "ep" and cid else None',
+     "target": _CBX,
+     "expect": "test_the_rebuild_alone_rejects_the_payloads[cloud-metadata]"},
+
+    # **هر دو لایه با هم** — تنها چیزی که ادعای انتها‌به‌انتها را می‌شکند.
+    {"name": "castbox: drop BOTH the rebuild and the guard",
+     "path": "app/downloader.py",
+     "old": "    target = castbox_target(url)\n"
+            "    if not target:\n"
+            "        return None\n"
+            "    if not await is_safe_url_resolved(target, proxy=proxy):\n"
+            '        log.warning("castbox: rewritten target failed the safety gate: %s", target[:90])\n'
+            "        return None\n"
+            "    return target",
+     "new": '    from urllib.parse import parse_qs as _pq, urlsplit as _us\n'
+            '    inner = (_pq(_us(url or "").query).get("link") or [""])[0]\n'
+            "    return inner or castbox_target(url)",
+     "target": _CBX,
+     "expect": "test_the_ssrf_payloads_never_reach_the_engine[cloud-metadata]"},
+
+    # **دفاعِ دوم** — گارد. عمداً موردِ جدا: این تنها چیزی است که بازسازی
+    # نمی‌گیردش (خودِ castbox.fm داخلی شود). اگر با موردِ بالا یکی بود،
+    # برداشتنِ گارد «نگرفت» گزارش می‌شد در حالی که دفاعِ دیگری کار کرده بود.
+    {"name": "castbox: drop the SSRF guard from resolve_castbox",
+     "path": "app/downloader.py",
+     "old": "    if not await is_safe_url_resolved(target, proxy=proxy):\n"
+            '        log.warning("castbox: rewritten target failed the safety gate: %s", target[:90])\n'
+            "        return None\n",
+     "new": "",
+     "target": _CBX,
+     "expect": "test_the_guard_rejects_a_castbox_that_resolves_internal"},
+
+    # تلهٔ دو-شناسه‌ای: الگوی ساده‌لوحانه شناسهٔ **کانال** را برمی‌دارد.
+    {"name": "castbox: naive id pattern takes the channel id, not the episode",
+     "path": "app/downloader.py",
+     "old": r'_CB_EP_SLUG_RE = re.compile(r"^(?:www\.|m\.)?castbox\.fm/episode/.*-id(\d+)$")',
+     "new": r'_CB_EP_SLUG_RE = re.compile(r"^(?:www\.|m\.)?castbox\.fm/episode/.*?id(\d+)")',
+     "target": _CBX,
+     "expect": "test_the_naive_id_pattern_would_take_the_channel_id"},
+
+    # عمقِ بازکردن باید یک بماند.
+    {"name": "castbox: unwrap link= recursively",
+     "path": "app/downloader.py",
+     "old": "    inner = (q.get(\"link\") or [\"\"])[0]\n"
+            "    return _castbox_direct_ids(inner) if inner else (None, None)",
+     "new": "    inner = (q.get(\"link\") or [\"\"])[0]\n"
+            "    return castbox_ids(inner) if inner else (None, None)",
+     "target": _CBX,
+     "expect": "test_the_unwrap_depth_is_one"},
+
+    # کلیدِ کش: بدونِ شاخهٔ `cb:` هر شکل کلیدِ خودش را می‌گیرد.
+    {"name": "castbox: drop the cache-key normalisation",
+     "path": "app/dl_cache.py",
+     "old": '    kind, cid = castbox_ids(u)\n    if kind and cid:\n        return f"cb:{kind}:{cid}"\n',
+     "new": "",
+     "target": _CBX,
+     "expect": "test_every_episode_form_reaches_one_cache_key[vb-short]"},
+
+    # ردِ کانال: بدونش کاربر خطای خامِ yt-dlp می‌گیرد.
+    {"name": "castbox: let a channel link fall through to the engine",
+     "path": "app/routers/download.py",
+     "old": '        if kind == "ch":',
+     "new": "        if False:",
+     "target": _CBX,
+     "expect": "test_a_channel_link_gets_a_clear_message[va-short]"},
+
+    # بازنویسی واقعاً باید اعمال شود، نه فقط محاسبه.
+    {"name": "castbox: compute the rewrite but never apply it",
+     "path": "app/routers/download.py",
+     "old": "        url = target\n",
+     "new": "",
+     "target": _CBX,
+     "expect": "test_a_short_episode_link_is_enqueued_rewritten"},
+
+    # عضویت در `AUDIO_PLATFORMS` باید به selectorِ جاب برسد. توجه: این **انتخابِ
+    # فرمت** را عوض نمی‌کند (اجراشده: `audio` و `best` هر دو همان تک‌فرمت را
+    # می‌دهند، و خودِ `test_the_production_selector_…` هر دو را assert می‌کند)،
+    # پس چیزی که این‌جا می‌شکند ادعای UX است نه ادعای انتخابگر.
+    {"name": "castbox: not an audio platform (selector of the enqueued job)",
+     "path": "app/downloader.py",
+     "old": 'AUDIO_PLATFORMS = {"soundcloud", "bandcamp", "spotify", "apple", "castbox"}',
+     "new": 'AUDIO_PLATFORMS = {"soundcloud", "bandcamp", "spotify", "apple"}',
+     "target": _CBX,
+     "expect": "test_a_short_episode_link_is_enqueued_rewritten"},
+
+    # گاردِ **هارنس**، نه گاردِ سورس — و تنها موردی که فایلِ تست را خراب می‌کند.
+    # هاردکدکردنِ فلگ دقیقاً همان false failی است که یک‌بار به یک مشکلِ خیالی
+    # رساند؛ این مورد ثابت می‌کند آن گارد زنده است و دوباره نمی‌گذارد بلغزد.
+    {"name": "castbox: hardcode incomplete_formats in the harness (harness guard)",
+     "path": "tests/test_castbox_path.py",
+     "old": '            "incomplete_formats": (all(f.get("vcodec") == "none" for f in formats)\n'
+            '                                   or all(f.get("acodec") == "none" for f in formats))}',
+     "new": '            "incomplete_formats": False}',
+     "target": _CBX,
+     "expect": "test_the_harness_computes_the_flag_like_yt_dlp_does"},
 ]
 
 
