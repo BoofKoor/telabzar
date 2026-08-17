@@ -80,6 +80,7 @@ def sabotage(path: str | Path, old: str, new: str, *, count: int = 1):
 #: (نام, فایل, الگو, جایگزین, تعدادِ تطبیق, تستِ هدف, تستی که باید بیفتد)
 _IGW = "tests/test_ig_anon_wiring.py"
 _PCB = "tests/test_probe_cookie_blame.py"
+_LNK = "tests/test_link_filter.py"
 
 CASES: list[dict] = [
     # ── فاز ۲: مسیرِ ناشناسِ اینستاگرام. یکی به‌ازای هر قیدِ سخت. ──
@@ -372,6 +373,46 @@ CASES: list[dict] = [
      "count": 1,
      "target": _PCB + "::test_a_probe_transient_does_not_bench_the_whole_pool",
      "expect": None},
+
+    # ── درِ ورودیِ لینک: لنگرِ `regexp` ──
+    # پیش‌فرضِ `magic_filter.regexp` برابرِ `pattern.match` است، پس بدونِ
+    # `mode="search"` متن باید **با** لینک شروع شود.
+    {"name": "link filter: back to the anchored default (match)",
+     "path": "app/routers/download.py",
+     "old": 'F.text.regexp(r"https?://", mode="search")',
+     "new": 'F.text.regexp(r"https?://")',
+     "target": _LNK,
+     "expect": "test_a_link_anywhere_in_the_text_reaches_the_download_handler"
+               "[soundcloud-app-two-line]"},
+
+    # همان خرابکاری، این‌بار روی گاردِ کشف‌محور — تا اگر روزی تستِ رفتاری حذف
+    # شود، هنوز چیزی جلوی برگشتنِ پیش‌فرض را بگیرد.
+    {"name": "link filter: the AST guard notices the missing mode",
+     "path": "app/routers/download.py",
+     "old": 'F.text.regexp(r"https?://", mode="search")',
+     "new": 'F.text.regexp(r"https?://")',
+     "target": _LNK,
+     "expect": "test_every_regexp_filter_states_its_mode_explicitly"},
+
+    # کنترلِ معکوس ۱: `search=True` شکلِ **هم‌ارزِ** (deprecated) همان چیز است.
+    # هیچ تستی نباید بیفتد — اگر بیفتد یعنی تست رشتهٔ `mode="search"` را
+    # می‌سنجد نه رفتارِ فیلتر را، که همان تستِ توخالی است با ظاهرِ سالم.
+    {"name": "link filter: the equivalent search=True form stays green",
+     "path": "app/routers/download.py",
+     "old": 'F.text.regexp(r"https?://", mode="search")',
+     "new": 'F.text.regexp(r"https?://", search=True)',
+     "target": _LNK,
+     "expect": None},
+
+    # کنترلِ معکوس ۲ (به‌شکلِ مثبت): برداشتنِ کلِ فیلتر باید تست را بیندازد.
+    # این اثبات می‌کند `_link_filter()` واقعاً ثبتِ **زندهٔ** روتر را می‌خواند؛
+    # اگر الگو را دستی در تست نوشته بودیم، این‌جا سبز می‌ماند.
+    {"name": "link filter: the filter is read from the live registration",
+     "path": "app/routers/download.py",
+     "old": '@router.message(F.text.regexp(r"https?://", mode="search"))',
+     "new": "@router.message()",
+     "target": _LNK,
+     "expect": "test_a_bare_link_still_reaches_the_handler[bare-short-link]"},
 ]
 
 
