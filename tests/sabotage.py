@@ -988,6 +988,23 @@ CASES: list[dict] = [
      "target": _CHR,
      "expect": "test_every_response_carries_a_referrer_policy"},
 
+    # ── فاز ۲: A-3 (اعتبارسنجی پیش از مصرف) ────────────────────────────────
+    {"name": "phase2 A-3: consume the token before validating again",
+     "path": "app/admin_web.py",
+     "old": '    if not pubkey or len(pubkey) > 64:\n        return web.json_response({"error": "missing pubkey"}, status=400)\n    payload = await node_mod.consume_join_token(request.app["redis"], token)\n    if payload is None:\n        return web.json_response({"error": "invalid or used token"}, status=403)',
+     "new": '    payload = await node_mod.consume_join_token(request.app["redis"], token)\n    if payload is None:\n        return web.json_response({"error": "invalid or used token"}, status=403)\n    if not pubkey or len(pubkey) > 64:\n        return web.json_response({"error": "missing pubkey"}, status=400)',
+     "target": _CHR,
+     "expect": "test_a_malformed_join_does_not_burn_the_token"},
+
+    # نیمهٔ دومِ همان `if`. اگر فقط شاخهٔ «غایب» تست می‌شد، یک نصفه‌رفع بی‌صدا
+    # از کنارش رد می‌شد.
+    {"name": "phase2 A-3: drop the length half of the pubkey check",
+     "path": "app/admin_web.py",
+     "old": "    if not pubkey or len(pubkey) > 64:",
+     "new": "    if not pubkey:",
+     "target": _CHR,
+     "expect": "test_an_oversized_pubkey_also_leaves_the_token_usable"},
+
     # **کنترلِ معکوس:** تغییری در همان تابع که هیچ ادعای ثبت‌شده‌ای را جابه‌جا
     # نمی‌کند. اگر چیزی بیندازد یعنی تستی به جزئیاتِ بی‌ربط چسبیده.
     {"name": "char: rename a local in node_join (must break nothing)",

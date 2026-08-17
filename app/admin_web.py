@@ -2114,11 +2114,15 @@ async def node_join(request: web.Request) -> web.Response:
     token = (data.get("token") or "").strip()
     pubkey = (data.get("pubkey") or "").strip()
     name = (data.get("name") or "").strip()[:64]
+    # اعتبارسنجی **پیش از** مصرف. برعکسش یعنی یک درخواستِ ناقص — یا یک ریتریِ
+    # نصب‌کننده روی خطای گذرا — توکن را می‌سوزاند، و نودِ واقعی بعدش
+    # «invalid or used token» می‌گیرد بی‌آنکه بفهمد چرا. مصرف باید آخرین کاری
+    # باشد که پیش از پذیرش انجام می‌شود، نه اولین.
+    if not pubkey or len(pubkey) > 64:
+        return web.json_response({"error": "missing pubkey"}, status=400)
     payload = await node_mod.consume_join_token(request.app["redis"], token)
     if payload is None:
         return web.json_response({"error": "invalid or used token"}, status=403)
-    if not pubkey or len(pubkey) > 64:
-        return web.json_response({"error": "missing pubkey"}, status=400)
     role = payload["role"]
     async with Sessionmaker() as s:
         used = {ip for (ip,) in (await s.execute(select(Node.wg_ip))).all()}

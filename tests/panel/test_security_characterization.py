@@ -243,17 +243,40 @@ async def test_a_join_token_cannot_be_replayed(panel, join_token):
 
 
 # ── A-3: ترتیبِ مصرف و اعتبارسنجیِ توکن ────────────────────────────────────
-async def test_TODAY_a_malformed_join_burns_the_token(panel, join_token):
-    """وضعِ فعلی: توکن **پیش از** اعتبارسنجیِ درخواست مصرف می‌شود.
-
-    ⚠️ رفتارِ باگ‌دار: یک درخواستِ ناقص (بدونِ pubkey) توکن را می‌سوزاند، پس
-    تلاشِ بعدیِ نودِ واقعی «invalid or used token» می‌گیرد. **رفعِ فاز ۲ باید
-    این را قرمز کند** — یعنی بعد از یک ۴۰۰، همان توکن باید هنوز کار کند.
-    """
+# A-3 **رفع شد ۲۰۲۶-۰۸-۱۷**: تستِ `TODAY` حذف شد، رفتارِ درست جایش نشست.
+async def test_a_malformed_join_does_not_burn_the_token(panel, join_token):
+    """درخواستِ ناقص توکن را نمی‌سوزاند؛ تلاشِ بعدیِ نودِ واقعی موفق می‌شود."""
     bad = await panel.client.post("/node/join", json={"token": join_token})  # بدونِ pubkey
     assert bad.status == 400
 
     retry = await panel.client.post("/node/join", json={"token": join_token, "pubkey": "c" * 44})
-    assert retry.status == 403, (
-        "اگر این ۲۰۰ شد یعنی ترتیب اصلاح شده و توکن دیگر با یک درخواستِ ناقص "
-        "نمی‌سوزد — این تست را به‌روز کن.")
+    assert retry.status == 200, (
+        "توکن باید بعد از یک درخواستِ ناقص هنوز معتبر باشد.")
+
+
+async def test_an_oversized_pubkey_also_leaves_the_token_usable(panel, join_token):
+    """همان قاعده برای شاخهٔ دومِ اعتبارسنجی، نه فقط شاخهٔ «غایب».
+
+    دو شرط در یک `if`اند؛ تستِ تک‌شاخه‌ای با نصفه‌رفعِ آینده سبز می‌ماند.
+    """
+    bad = await panel.client.post("/node/join",
+                                  json={"token": join_token, "pubkey": "x" * 65})
+    assert bad.status == 400
+    retry = await panel.client.post("/node/join", json={"token": join_token, "pubkey": "d" * 44})
+    assert retry.status == 200
+
+
+async def test_an_invalid_token_is_still_rejected_before_anything_is_created(panel, no_wireguard):
+    """کنترل: جابه‌جاییِ ترتیب نباید اعتبارسنجیِ خودِ توکن را شل کند.
+
+    توکنِ نامعتبر با pubkeyِ **درست** باید همچنان ۴۰۳ بگیرد و هیچ ردیفی نسازد.
+    """
+    from sqlalchemy import select as _select
+
+    from app.models import Node as _Node
+    resp = await panel.client.post("/node/join",
+                                   json={"token": "bad.token", "pubkey": "e" * 44})
+    assert resp.status == 403
+    async with panel.aw.Sessionmaker() as s:
+        rows = (await s.execute(_select(_Node))).scalars().all()
+    assert rows == []
