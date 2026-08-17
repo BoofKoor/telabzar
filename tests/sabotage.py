@@ -91,6 +91,7 @@ _HYG = "tests/test_repo_hygiene.py"
 _PAL = "tests/test_panel_path_is_alive.py"
 _CHR = "tests/panel/test_security_characterization.py"
 _SEC = "tests/panel/test_security_headers.py"
+_SVF = "tests/panel/test_save_failures.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -1029,6 +1030,23 @@ CASES: list[dict] = [
      "new": 'raise web.HTTPFound("/cookies?ok=del")',
      "target": _HYG,
      "expect": "test_the_panel_has_one_result_redirect"},
+
+    # B-1: متنِ ردشده دوباره به «حذفِ override» ترجمه شود (شکلِ پیش از رفع).
+    {"name": "buttons: a rejected label goes back to resetting the override",
+     "path": "app/admin_web.py",
+     "old": '            errors.append(f"«{default}»: {err}")',
+     "new": '            texts.append((key, None))',
+     "target": _SVF,
+     "expect": "test_a_rejected_label_does_not_delete_the_healthy_one"},
+
+    # B-1: خطا جمع شود ولی نادیده گرفته شود — ادعای گزارش‌دادن و اتمیک‌بودن را
+    # جدا از ادعای حذف می‌سنجد (این یکی overrideِ سالم را پاک **نمی‌کند**).
+    {"name": "buttons: the collected errors stop being reported",
+     "path": "app/admin_web.py",
+     "old": "    if errors:\n        # هیچ نوشتنی انجام نشده",
+     "new": "    if False:  # noqa\n        # هیچ نوشتنی انجام نشده",
+     "target": _SVF,
+     "expect": "test_a_rejected_label_is_reported_not_celebrated"},
 ]
 
 

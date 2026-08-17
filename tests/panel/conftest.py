@@ -108,6 +108,13 @@ async def panel(tmp_path, monkeypatch):
 
     redis = fr.FakeRedis(decode_responses=True)
     monkeypatch.setattr(settings_store, "_store", settings_store.SettingsStore(redis))
+    # `textstore` سه دیکشنریِ **سطحِ ماژول** دارد که بینِ تست‌ها زنده می‌مانند، در
+    # حالی که DB برای هر تست تازه است. بدونِ خالی‌کردنشان، overrideی که تستِ قبلی
+    # ساخته در تستِ بعدی «از قبل موجود» دیده می‌شود — یعنی پیش‌شرطِ یک تست را
+    # تستِ همسایه‌اش تعیین می‌کند و ترتیبِ اجرا نتیجه را عوض می‌کند. با اجرا پیدا
+    # شد نه با خواندن: دو تست جدا سبز بودند و کنارِ هم قرمز.
+    for _name in ("_overrides", "_button_styles", "_menu_layout"):
+        monkeypatch.setattr(textstore, _name, type(getattr(textstore, _name))())
     monkeypatch.setattr(textstore, "_loaded_ver", None, raising=False)
 
     monkeypatch.setattr(admin_web.settings, "admin_ids", str(ADMIN_ID))

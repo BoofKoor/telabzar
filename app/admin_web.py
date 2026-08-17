@@ -2011,21 +2011,41 @@ async def buttons_save(request: web.Request) -> web.Response:
     for op, _k in OPS_BY_KIND.get(kind, []):  # هر opِ جاافتاده را ته اضافه کن
         if op not in order:
             order.append(op)
-    layout, styles = [], {}
+    # **اول همه را بسنج، بعد بنویس.** پیش از این، اعتبارسنجی و نوشتن در یک حلقه
+    # بودند و شاخهٔ `elif` هر متنی را که `validate()` رد می‌کرد به «حذفِ override»
+    # ترجمه می‌کرد — یعنی یک تایپ در placeholder، برچسبِ سالمِ قبلی را پاک می‌کرد
+    # و صفحه بنرِ **سبز** نشان می‌داد. حالا سه چیز از هم جدا شده‌اند: «مقدارِ
+    # معتبر» و «خالی/برابرِ پیش‌فرض → حذفِ عمدی» و «نامعتبر → خطا».
+    #
+    # اتمیک است نه جزئی: فرم کلِ منو را یک‌جا می‌فرستد، پس «۱۱ تا از ۱۲ تا ذخیره
+    # شد» خودش یک شکستِ نیمه‌خاموشِ دیگر است — ادمین نمی‌تواند بگوید کدام یکی جا
+    # ماند. یا همه اعمال می‌شود یا هیچ‌کدام، با دلیل.
+    layout, styles, texts, errors = [], {}, [], []
     for op in order:
         layout.append({"op": op, "hidden": form.get(f"show_{op}") != "on",
                        "width": textstore.clean_width(form.get(f"width_{op}", "third"))})
         styles[op] = textstore.clean_button(form.get(f"style_{op}", ""), form.get(f"emoji_{op}", ""))
-        # متنِ لیبل (per-lang) — فقط وقتی واقعاً عوض شده set/reset کن (تا bumpِ بی‌خود نزنیم)
         key = key_by_op[op]
         val = (form.get(f"text_{op}") or "").replace("\r\n", "\n").strip()
         default = _text_default(lang, key)
-        cur = textstore.get_override(lang, key)
-        if val and val != default.strip() and textstore.validate(default, val) is None:
-            if cur != val:
-                await textstore.set_text(lang, key, val)
-        elif cur is not None:
-            await textstore.reset_text(lang, key)
+        if not val or val == default.strip():   # خالی یا برابرِ پیش‌فرض = حذفِ override
+            texts.append((key, None))
+            continue
+        err = textstore.validate(default, val)
+        if err:
+            errors.append(f"«{default}»: {err}")
+        else:
+            texts.append((key, val))
+    if errors:
+        # هیچ نوشتنی انجام نشده — نه چیدمان، نه رنگ، نه متن.
+        raise _result("/buttons", kind=kind, lang=lang, err=" · ".join(errors[:3]))
+    for key, val in texts:
+        cur = textstore.get_override(lang, key)   # فقط وقتی واقعاً عوض شده، تا bumpِ بی‌خود نزنیم
+        if val is None:
+            if cur is not None:
+                await textstore.reset_text(lang, key)
+        elif cur != val:
+            await textstore.set_text(lang, key, val)
     await textstore.set_menu_layout(kind, layout)
     await textstore.set_button_styles(styles)
     raise _result("/buttons", kind=kind, lang=lang, ok="1")
