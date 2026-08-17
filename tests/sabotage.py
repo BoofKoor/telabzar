@@ -87,6 +87,9 @@ _CBX = "tests/test_castbox_path.py"
 _CAP = "tests/test_caption_html.py"
 _COV = "tests/test_audio_cover.py"
 _ORP = "tests/test_probe_orphan.py"
+_HYG = "tests/test_repo_hygiene.py"
+_PAL = "tests/test_panel_path_is_alive.py"
+_CHR = "tests/panel/test_security_characterization.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -800,6 +803,64 @@ CASES: list[dict] = [
      "new": "    if False:\n        try:\n            proc.kill()",
      "target": _ORP,
      "expect": "test_the_harness_can_observe_a_kill"},
+
+    # ── فاز ۳: مسیرِ تستِ رفتاریِ پنل ───────────────────────────────────────
+    # این موردها فقط `tests/` را می‌خوانند و هیچ‌کدام به استکِ ادمین نیاز ندارند،
+    # پس در همان محیطِ `requirements-dev.txt` اجرا می‌شوند. موردهایی که خودِ
+    # `tests/panel/` را هدف بگیرند **به `requirements-admin.txt` نیاز دارند**،
+    # چون `_run_case` واقعاً pytest را روی آن مسیر می‌دواند.
+    {"name": "panel: drop the tests/panel exemption from the import guard",
+     "path": "tests/test_repo_hygiene.py",
+     "old": '_PANEL_DIR = "tests/panel"',
+     "new": '_PANEL_DIR = "tests/nowhere"',
+     "target": _HYG,
+     "expect": "test_no_test_imports_a_module_the_ci_runner_does_not_have"},
+
+    {"name": "panel: stop the guard reading conftest.py",
+     "path": "tests/test_repo_hygiene.py",
+     "old": 'return sorted({*tests_dir.rglob("test_*.py"), *tests_dir.rglob("conftest.py")})',
+     "new": 'return sorted(tests_dir.rglob("test_*.py"))',
+     "target": _HYG,
+     "expect": "test_the_guard_also_reads_conftest_files"},
+
+    {"name": "panel: blind the guard to the from-package import form again",
+     "path": "tests/test_repo_hygiene.py",
+     "old": "            for alias in node.names:\n"
+            "                yield f\"{node.module}.{alias.name}\", node.lineno",
+     "new": "            pass",
+     "target": _HYG,
+     "expect": "test_the_guard_sees_the_from_package_import_form"},
+
+    {"name": "panel: make the CI panel job depend on the main job",
+     "path": ".github/workflows/tests.yml",
+     "old": "  panel:\n    runs-on: ubuntu-latest",
+     "new": "  panel:\n    needs: pytest\n    runs-on: ubuntu-latest",
+     "target": _PAL,
+     "expect": "test_the_panel_job_runs_in_parallel_with_the_main_job"},
+
+    {"name": "panel: drop the collected-count gate from the CI job",
+     "path": ".github/workflows/tests.yml",
+     "old": "          n=$(pytest tests/panel --collect-only -q | grep -c '::')",
+     "new": "          n=5",
+     "target": _PAL,
+     "expect": "test_the_panel_job_asserts_a_nonzero_collection"},
+
+    {"name": "panel: stop pytest.ini ignoring the panel dir by default",
+     "path": "pytest.ini",
+     "old": "addopts = --ignore=tests/panel",
+     "new": "addopts =",
+     "target": _PAL,
+     "expect": "test_pytest_ini_keeps_the_panel_directory_out_of_the_default_run"},
+
+    # **کنترلِ معکوس:** جابه‌جاییِ ترتیبِ دو کلیدِ requirements در همان دستور
+    # نباید چیزی را بشکند — گاردها **حضور** را می‌سنجند نه ترتیب را. اگر این
+    # چیزی بیندازد یعنی گاردی به شکلِ رشته چسبیده که نباید.
+    {"name": "panel: reorder the two requirements files in the install step (must break nothing)",
+     "path": ".github/workflows/tests.yml",
+     "old": "pip install -r requirements-dev.txt -r requirements-admin.txt",
+     "new": "pip install -r requirements-admin.txt -r requirements-dev.txt",
+     "target": _PAL,
+     "expect": None},
 ]
 
 

@@ -125,6 +125,105 @@ def test_operationally_critical_keys_are_documented():
 # ── ردهٔ کورِ «فقط روی CI می‌افتد» ───────────────────────────────
 _ADMIN_ONLY = ("app.admin_web", "cryptography", "jinja2")
 
+#: تنها مسیرِ **مجاز** برای importِ استکِ پنل. استثنا روی یک **پوشه** است نه
+#: فهرستِ فایل، پس تستِ تازه‌ای که آن‌جا اضافه شود خودبه‌خود پوشش می‌گیرد و
+#: کسی وسوسه نمی‌شود اسمِ فایلش را به فهرست اضافه کند (همان پوسیدگیِ
+#: `_KNOWN_UNREACHABLE`). این پوشه در `pytest.ini` از اجرای پیش‌فرض بیرون است و
+#: jobِ `panel` در CI با `requirements-admin.txt` اجرایش می‌کند —
+#: `tests/test_panel_path_is_alive.py` هر سهٔ این بند را به هم گره می‌زند تا
+#: هیچ‌کدام بی‌صدا از بقیه جدا نشود.
+_PANEL_DIR = "tests/panel"
+
+
+def _imported_modules(tree: ast.AST):
+    """(نامِ کاملِ ماژول, خط) برای هر importِ درختِ AST.
+
+    `from app import admin_web` هم باید «app.admin_web» بدهد، نه فقط «app» —
+    وگرنه گارد یک **شکافِ واقعی** دارد: اندازه‌گیری‌شده، فرمِ
+    `import app.admin_web` گرفته می‌شد ولی `from app import admin_web` بی‌صدا
+    رد می‌شد، و دقیقاً همان فرمی است که آدم طبیعی می‌نویسد.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield alias.name, node.lineno
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            yield node.module, node.lineno
+            for alias in node.names:
+                yield f"{node.module}.{alias.name}", node.lineno
+
+
+def _scannable(tests_dir: Path) -> list[Path]:
+    """فایل‌هایی که گارد باید بخواند: تست‌ها **و** conftestها."""
+    return sorted({*tests_dir.rglob("test_*.py"), *tests_dir.rglob("conftest.py")})
+
+
+def _admin_only_offenders(paths, *, panel: Path | None) -> list[str]:
+    """importهای ممنوعه در `paths`، با معافیتِ هرچه زیرِ `panel` است."""
+    offenders = []
+    for path in paths:
+        if panel is not None and panel in path.resolve().parents:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for mod, lineno in _imported_modules(tree):
+            if any(mod == a or mod.startswith(a + ".") for a in _ADMIN_ONLY):
+                offenders.append(f"{path.name}:{lineno} → {mod}")
+    return sorted(set(offenders))
+
+
+def test_the_guard_also_reads_conftest_files(tmp_path):
+    """الگوی قبلی `test_*.py` بود، پس conftest **کاملاً** نادیده گرفته می‌شد.
+
+    و conftest دقیقاً جایی است که هارنس می‌نشیند — یعنی محتمل‌ترین جای یک
+    importِ ممنوعه، نه یک حالتِ نظری.
+    """
+    (tmp_path / "test_a.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "conftest.py").write_text("y = 2\n", encoding="utf-8")
+    (tmp_path / "helper.py").write_text("z = 3\n", encoding="utf-8")
+    names = {p.name for p in _scannable(tmp_path)}
+    assert names == {"test_a.py", "conftest.py"}, names
+
+
+def test_the_guard_sees_the_from_package_import_form(tmp_path):
+    """`from app import admin_web` باید گرفته شود، نه فقط `import app.admin_web`.
+
+    اندازه‌گیری‌شده روی فرمِ قبلیِ گارد: دومی گرفته می‌شد و اولی بی‌صدا رد
+    می‌شد — و اولی همان چیزی است که آدم طبیعی می‌نویسد.
+    """
+    f = tmp_path / "test_x.py"
+    f.write_text("from app import admin_web\n", encoding="utf-8")
+    assert _admin_only_offenders([f], panel=None) == ["test_x.py:1 → app.admin_web"]
+
+
+def test_the_guard_still_sees_the_plain_and_submodule_forms(tmp_path):
+    """کنترل: فرم‌هایی که از قبل گرفته می‌شدند نباید از دست بروند."""
+    f = tmp_path / "test_y.py"
+    f.write_text("import app.admin_web\nfrom cryptography.fernet import Fernet\n",
+                 encoding="utf-8")
+    hits = _admin_only_offenders([f], panel=None)
+    assert any("app.admin_web" in h for h in hits)
+    assert any("cryptography" in h for h in hits)
+
+
+def test_an_ordinary_import_is_not_flagged(tmp_path):
+    """کنترلِ معکوس: گارد نباید هر چیزی زیرِ `app` را بگیرد."""
+    f = tmp_path / "test_z.py"
+    f.write_text("from app import cookies\nimport app.downloader\n", encoding="utf-8")
+    assert _admin_only_offenders([f], panel=None) == []
+
+
+def test_the_panel_directory_is_exempt(tmp_path):
+    """معافیت روی **پوشه** است، پس تستِ تازهٔ آن‌جا خودبه‌خود مجاز است."""
+    panel = tmp_path / "panel"
+    panel.mkdir()
+    f = panel / "test_p.py"
+    # عمداً فرمِ `import app.admin_web` نه `from app import ...`: این تست دربارهٔ
+    # **معافیتِ مسیر** است، پس نباید به رفعِ فرمِ from-package گره بخورد — وگرنه
+    # یک سابوتاژ دو تست را می‌اندازد و معلوم نمی‌شود کدام ادعا شکسته.
+    f.write_text("import app.admin_web\n", encoding="utf-8")
+    assert _admin_only_offenders([f], panel=None) != []      # بدونِ معافیت: گرفته می‌شود
+    assert _admin_only_offenders([f], panel=panel.resolve()) == []
+
 
 def test_no_test_imports_a_module_the_ci_runner_does_not_have():
     """هیچ تستی نباید چیزی را import کند که فقط در `requirements-admin.txt` است.
@@ -142,22 +241,13 @@ def test_no_test_imports_a_module_the_ci_runner_does_not_have():
 
     عمداً روی `tests/` است نه `app/`: خودِ پنل باید این‌ها را import کند.
     """
-    offenders = []
-    for path in sorted((ROOT / "tests").rglob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            mods = []
-            if isinstance(node, ast.Import):
-                mods = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-                mods = [node.module]
-            for m in mods:
-                if any(m == a or m.startswith(a + ".") for a in _ADMIN_ONLY):
-                    offenders.append(f"{path.name}:{node.lineno} → {m}")
+    offenders = _admin_only_offenders(_scannable(ROOT / "tests"),
+                                      panel=(ROOT / _PANEL_DIR).resolve())
     assert not offenders, (
         "این‌ها روی رانرِ CI موجود نیستند و فقط آن‌جا می‌افتند:\n  "
-        + "\n  ".join(offenders)
-        + "\nسورس را با AST بخوان (نمونه: tests/test_phase2a._func_src).")
+        + "\n  ".join(sorted(set(offenders)))
+        + f"\nیا سورس را با AST بخوان (نمونه: tests/test_phase2a._func_src)، "
+          f"یا تست را در {_PANEL_DIR}/ بگذار که jobِ خودش را دارد.")
 
 
 # ── حذفِ اکانتِ کوکی باید از یک جا باشد ────────────────────────────
