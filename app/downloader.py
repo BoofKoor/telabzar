@@ -517,7 +517,16 @@ def _stderr_summary(raw: bytes | str, limit: int = 300) -> str:
 
 
 async def probe(url: str, opts: dict, timeout: float = 120) -> dict:
-    """اطلاعاتِ رسانه بدونِ دانلود (‎-J) → دیکشنریِ نرمال‌شده."""
+    """اطلاعاتِ رسانه بدونِ دانلود (‎-J) → دیکشنریِ نرمال‌شده.
+
+    مثلِ `_run_dl` روی هر خروجِ غیرعادی زیرفرایند را می‌کُشد. تا امروز فقط
+    `asyncio.TimeoutError` را می‌گرفت، پس روی `CancelledError` — یعنی
+    `job_timeout`ِ ARQ یا **خاموشیِ ورکر، که هر `telabzar update` است** —
+    yt-dlp یتیم می‌ماند. و این مسیر `--cookies` می‌فرستد
+    (`_common_flags`)، پس یتیمش همان چیزی را می‌سوزاند که `_run_dl` می‌سوزاند:
+    سهمیهٔ یک اکانتِ سشن، بی‌آنکه جایی ثبت شود.
+    """
+    from . import processing as _P     # تنبل — مثلِ `_run_dl`، تا به PIL گره نخوریم
     ck = _writable_cookie(opts.get("cookies"))  # /cookies فقط‌خواندنی → کپیِ نوشتنی
     if ck:
         opts = {**opts, "cookies": ck}
@@ -531,6 +540,9 @@ async def probe(url: str, opts: dict, timeout: float = 120) -> dict:
             proc.kill()
             await proc.wait()
             raise RuntimeError("probe timed out") from None
+        except BaseException:
+            _P.kill_orphan(proc)
+            raise
         if proc.returncode != 0:
             raise RuntimeError(f"probe failed: {_stderr_summary(err) or 'unknown'}")
         return normalize_probe(json.loads(out.decode("utf-8", "ignore") or "{}"))
@@ -634,13 +646,8 @@ async def _run_dl(cmd: list[str], progress=None, cancel=None, timeout: float = 3
         # ورکر، yt-dlpِ یتیم **به دانلود ادامه می‌دهد** — پهنای‌باند می‌خورد و
         # مهم‌تر از آن سهمیهٔ همان اکانتِ کوکی را می‌سوزاند که گران‌ترین منبعِ
         # ماست، بی‌آنکه هیچ‌جا ثبت شود (جاب مرده، پس `mark_ok/mark_fail` هم
-        # صدا زده نمی‌شود). عمداً `await proc.wait()` نمی‌زنیم — در مسیرِ لغو
-        # خودِ آن await می‌تواند دوباره `CancelledError` بگیرد.
-        if proc.returncode is None:
-            try:
-                proc.kill()
-            except (ProcessLookupError, OSError):   # از قبل مرده
-                pass
+        # صدا زده نمی‌شود).
+        _P.kill_orphan(proc)
         raise
     finally:
         watch.stop()
@@ -2147,7 +2154,21 @@ def _rank_candidates(candidates: list[dict], track: dict) -> list[tuple[float, d
 
 
 async def _yt_search_candidates(query: str, opts: dict, limit: int = 6, timeout: float = 60) -> list[dict]:
-    """جست‌وجوی مسطحِ یوتیوب → فهرستِ نامزدها (id/title/duration/channel) بدونِ دانلود."""
+    """جست‌وجوی مسطحِ یوتیوب → فهرستِ نامزدها (id/title/duration/channel) بدونِ دانلود.
+
+    مثلِ `probe`، روی هر خروجِ غیرعادی زیرفرایند کشته می‌شود. این‌جا شدتِ مسئله
+    از ضرب می‌آید: در یک جابِ پلی‌لیست تا `match_max_tracks` بار (پیش‌فرض ۲۰)
+    صدا زده می‌شود و هر بار تا دو شکلِ کوئری — یعنی تا ۴۰ زیرفرایند در **یک**
+    جاب، هرکدام با `--cookies` (پایین‌تر). خاموشیِ ورکر وسطِ آن، همان تعداد
+    یتیم می‌گذاشت.
+
+    **`cancel` عمداً نمی‌گیرد و آن تغییرِ جداست** — ببین
+    `tests/test_probe_orphan.py` و §۷: رفعِ یتیم به `cancel` نیازی ندارد
+    (`except BaseException` مستقل از آن است)، و دکمهٔ لغو حینِ «در حالِ تطبیق»
+    با افزودنِ یک پارامتر این‌جا **حل نمی‌شود**، چون هزینهٔ غالبِ
+    `_gather_candidates` مالِ `_ytmusic_search` است که در `asyncio.to_thread`
+    می‌دود و اصلاً لغوشدنی نیست.
+    """
     ck = _writable_cookie(opts.get("cookies"))
     flags = ["--flat-playlist", "-J", "--no-warnings"]
     if opts.get("proxy"):
@@ -2157,6 +2178,7 @@ async def _yt_search_candidates(query: str, opts: dict, limit: int = 6, timeout:
     if ck or opts.get("cookies"):
         flags += ["--cookies", ck or opts["cookies"]]
     cmd = [YTDLP, *flags, f"ytsearch{limit}:{query}"]
+    from . import processing as _P     # تنبل — مثلِ `_run_dl`، تا به PIL گره نخوریم
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -2166,6 +2188,9 @@ async def _yt_search_candidates(query: str, opts: dict, limit: int = 6, timeout:
             proc.kill()
             await proc.wait()
             return []
+        except BaseException:
+            _P.kill_orphan(proc)
+            raise
     finally:
         _cleanup_cookie(ck)
     if proc.returncode != 0:

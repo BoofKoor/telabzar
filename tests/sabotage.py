@@ -86,6 +86,17 @@ _DEM = "tests/test_deadend_messages.py"
 _CBX = "tests/test_castbox_path.py"
 _CAP = "tests/test_caption_html.py"
 _COV = "tests/test_audio_cover.py"
+_ORP = "tests/test_probe_orphan.py"
+
+# برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
+# ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
+# دو کپیِ دست‌نویس واگرا می‌شوند و آن‌وقت رجیستری چیزِ دیگری می‌سنجد.
+_CTX_PATCH = {
+    "path": _SCP,
+    "old": "    got = ydl._select_formats(formats, ydl.build_format_selector(expr))",
+    "new": ('    got = list(ydl.build_format_selector(expr)('
+            '{"formats": formats, "incomplete_formats": False}))'),
+}
 
 CASES: list[dict] = [
     # ── فاز ۲: مسیرِ ناشناسِ اینستاگرام. یکی به‌ازای هر قیدِ سخت. ──
@@ -419,6 +430,30 @@ CASES: list[dict] = [
      "target": _LNK,
      "expect": "test_a_bare_link_still_reaches_the_handler[bare-short-link]"},
 
+    # ── ساندکلاود: خودِ هارنس ──
+    # این سه مورد دربارهٔ کدِ تولید نیستند، دربارهٔ **ابزارِ اندازه‌گیری**اند: یک
+    # ctxِ دست‌ساز روی منبعِ تک‌نوع یک نقصِ خیالی می‌سازد (§۶، ردهٔ false fail).
+    # هر سه یک خرابکاری‌اند (`_CTX_PATCH`) با سه ادعای متفاوت.
+    {**_CTX_PATCH,
+     "name": "harness: the yt-dlp ctx is hardcoded again",
+     "target": _SCP,
+     "expect": "test_a_hardcoded_ctx_invents_a_defect_that_does_not_exist[b]"},
+
+    # ادعای دومِ همان ctx، جدا: کلیدِ **غایب** (نه مقدارِ غلط) — `[]` نه `.get()`.
+    {**_CTX_PATCH,
+     "name": "harness: hardcoded ctx — the omitted key is a KeyError, not falsy",
+     "target": _SCP,
+     "expect": "test_a_hardcoded_ctx_omits_a_key_the_selector_reads_directly"},
+
+    # **کنترلِ معکوس، و مهم‌ترین موردِ این سه‌تا.** همان خرابکاری نباید ادعای
+    # اصلیِ #۱۱۵ را بیندازد — اثباتِ اجراییِ اینکه نقصِ هارنس نتیجهٔ آن کار را
+    # عوض نمی‌کند (`ba` بی‌اعتنا به این فلگ‌ها جور می‌شود). اگر روزی این بیفتد،
+    # یعنی انتخابِ تولید به ctx حساس شده و باید دوباره اندازه گرفته شود.
+    {**_CTX_PATCH,
+     "name": "harness: hardcoded ctx — but the #115 production choice stays green",
+     "target": _SCP + "::test_soundcloud_takes_progressive_mp3_when_it_exists",
+     "expect": None},
+
     # ── ساندکلاود: انتخابگرِ فرمت ──
     {"name": "soundcloud: back to the generic ba/b (AAC + transcode)",
      "path": "app/downloader.py",
@@ -618,10 +653,9 @@ CASES: list[dict] = [
     # هاردکدکردنِ فلگ دقیقاً همان false failی است که یک‌بار به یک مشکلِ خیالی
     # رساند؛ این مورد ثابت می‌کند آن گارد زنده است و دوباره نمی‌گذارد بلغزد.
     {"name": "castbox: hardcode incomplete_formats in the harness (harness guard)",
-     "path": "tests/test_castbox_path.py",
-     "old": '            "incomplete_formats": (all(f.get("vcodec") == "none" for f in formats)\n'
-            '                                   or all(f.get("acodec") == "none" for f in formats))}',
-     "new": '            "incomplete_formats": False}',
+     "path": _CBX,
+     "old": "    return seen",
+     "new": '    return {**seen, "incomplete_formats": False}',
      "target": _CBX,
      "expect": "test_the_harness_computes_the_flag_like_yt_dlp_does"},
 
@@ -719,6 +753,53 @@ CASES: list[dict] = [
      "new": 'cmd += ["-x", "--embed-thumbnail", "--audio-format", "mp3"]',
      "target": _COV,
      "expect": None},
+
+    # ── دو زیرفرایندِ یتیمِ باقی‌مانده ────────────────────────────────
+    # الگوها عمداً با خطِ **قبلشان** لنگر می‌خورند: بلوکِ
+    # `except BaseException:` عیناً دو بار در فایل هست (probe و جست‌وجوی
+    # تطبیق) و الگوی کوتاه هر دو را می‌زد — یعنی همان تلهٔ `trim_video`/
+    # `trim_audio` که `patch_source` برای گرفتنش ساخته شد.
+    {"name": "orphan: probe stops killing its child (pre-fix form)",
+     "path": "app/downloader.py",
+     "old": '            raise RuntimeError("probe timed out") from None\n'
+            '        except BaseException:\n'
+            '            _P.kill_orphan(proc)\n'
+            '            raise\n',
+     "new": '            raise RuntimeError("probe timed out") from None\n',
+     "target": _ORP,
+     "expect": "test_probe_does_not_leave_yt_dlp_running_after_cancellation"},
+
+    # کنترلِ معکوس: خرابکاریِ probe نباید ادعای **جست‌وجو** را بیندازد. اگر
+    # بیفتد، دو مسیر یک assert مشترک دارند و هرکدام جدا اثبات نشده‌اند (§۷:
+    # دفاع در عمق، تست در عمق).
+    {"name": "orphan: probe unfixed — but the match-search claim stays green",
+     "path": "app/downloader.py",
+     "old": '            raise RuntimeError("probe timed out") from None\n'
+            '        except BaseException:\n'
+            '            _P.kill_orphan(proc)\n'
+            '            raise\n',
+     "new": '            raise RuntimeError("probe timed out") from None\n',
+     "target": _ORP + "::test_the_match_search_does_not_leave_yt_dlp_running",
+     "expect": None},
+
+    {"name": "orphan: the match search stops killing its child (pre-fix form)",
+     "path": "app/downloader.py",
+     "old": '            return []\n'
+            '        except BaseException:\n'
+            '            _P.kill_orphan(proc)\n'
+            '            raise\n',
+     "new": '            return []\n',
+     "target": _ORP,
+     "expect": "test_the_match_search_does_not_leave_yt_dlp_running"},
+
+    # هلپرِ مشترک باربر است، نه آرایش: خنثی‌کردنش باید **کنترلِ مثبت** را
+    # بیندازد — یعنی مسیرِ از-قبل-رفع‌شدهٔ `_run_dl` هم واقعاً از آن رد می‌شود.
+    {"name": "orphan: the shared kill_orphan helper is neutered",
+     "path": "app/processing.py",
+     "old": "    if proc.returncode is None:\n        try:\n            proc.kill()",
+     "new": "    if False:\n        try:\n            proc.kill()",
+     "target": _ORP,
+     "expect": "test_the_harness_can_observe_a_kill"},
 ]
 
 

@@ -120,6 +120,32 @@ class CancelWatch:
             self.task = None
 
 
+def kill_orphan(proc) -> None:
+    """در `except BaseException` صدا زده شود: فرایندِ زنده را بکُش، بعد raise.
+
+    **مکانیزمِ یکتای «یتیم نگذار» برای هر چهار زیرفرایندِ پروژه** — ffmpeg در
+    `_run`، و در `downloader`: `_run_dl` (دانلود)، `probe` (فازِ probe) و
+    `_yt_search_candidates` (مسیرِ تطبیقِ اسپاتیفای/اپل). مثلِ
+    `start_cancel_watcher` عمداً یک پیاده‌سازی است: چهار کپیِ دست‌نویس از یک
+    قاعدهٔ ایمنی سرانجام واگرا می‌شوند، و این‌جا از قبل واگرا شده بودند — دو تا
+    رفع را گرفتند و دو تا نه.
+
+    محرکِ واقعی `CancelledError` است: `job_timeout`ِ ARQ یا **خاموشیِ ورکر**،
+    یعنی هر `telabzar update`. بدونِ این، `finally` فقط ناظر را می‌بندد نه خودِ
+    فرایند را.
+
+    عمداً `await proc.wait()` **نمی‌زند**: در مسیرِ لغو خودِ آن await می‌تواند
+    دوباره `CancelledError` بگیرد و رفع را بی‌اثر کند. SIGKILL فرایند را
+    می‌کُشد و child watcherِ asyncio درویش می‌کند — چیزی که اهمیت دارد پروسهٔ
+    **زنده** است، نه zombieِ لحظه‌ای.
+    """
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except (ProcessLookupError, OSError):   # از قبل مرده
+            pass
+
+
 def start_cancel_watcher(proc, cancel) -> CancelWatch:
     """هر `_CANCEL_POLL` ثانیه لغو را می‌پرسد و در صورتِ True فرایند را می‌کُشد.
 
@@ -215,17 +241,9 @@ async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: f
         # هر خروجِ غیرعادی — به‌ویژه `CancelledError` از `job_timeout`ِ ARQ یا
         # خاموشیِ ورکر — وگرنه ffmpeg **یتیم** می‌ماند و تا آخر CPU می‌سوزاند.
         # `finally` تنها ناظر را می‌بست، نه خودِ فرایند را؛ بازتولید شد: بعد از
-        # `task.cancel()` یک پروسهٔ ffmpeg زنده باقی می‌ماند.
-        #
-        # عمداً `await proc.wait()` نمی‌زنیم: در مسیرِ لغو، خودِ await می‌تواند
-        # دوباره `CancelledError` بگیرد و رفع را بی‌اثر کند. SIGKILL فرایند را
-        # می‌کُشد و child watcherِ asyncio درویش می‌کند — که همان چیزی است که
-        # اهمیت دارد (پروسهٔ زنده، نه zombieِ لحظه‌ای).
-        if proc.returncode is None:
-            try:
-                proc.kill()
-            except (ProcessLookupError, OSError):   # از قبل مرده
-                pass
+        # `task.cancel()` یک پروسهٔ ffmpeg زنده باقی می‌ماند. («چرا بدونِ
+        # `await proc.wait()`» در داکس‌استرینگِ `kill_orphan`.)
+        kill_orphan(proc)
         raise
     finally:
         watch.stop()
