@@ -98,6 +98,14 @@ install_master() {
   # شده؛ بازتولیدِ آن هنگامِ reconfigure اتصالِ دیتابیس را می‌شکند).
   local PG_PASS
   PG_PASS=$(env_get POSTGRES_PASSWORD); [[ -n "$PG_PASS" ]] || PG_PASS=$(rand 18)
+  # ADMIN_SECRET/NODE_SECRET هم همین رفتار را دارند: اگر هستند حفظ می‌شوند،
+  # وگرنه تولید. تا امروز اصلاً نوشته نمی‌شدند و کدْ بی‌صدا به BOT_TOKEN
+  # برمی‌گشت — یعنی هر دارندهٔ توکنِ ربات (از جمله هر نود) می‌توانست نشستِ
+  # ادمین جعل کند. عوض‌کردنِ ADMIN_SECRET نشست‌های باز را باطل می‌کند و
+  # عوض‌شدنِ NODE_SECRET توکن‌های joinِ صادرشده را؛ هر دو کوتاه‌عمرند.
+  local ADMIN_SECRET NODE_SECRET
+  ADMIN_SECRET=$(env_get ADMIN_SECRET); [[ -n "$ADMIN_SECRET" ]] || ADMIN_SECRET=$(rand 32)
+  NODE_SECRET=$(env_get NODE_SECRET);   [[ -n "$NODE_SECRET" ]]  || NODE_SECRET=$(rand 32)
 
   umask 077
   cat > .env <<EOF
@@ -111,6 +119,10 @@ MAX_FILE_MB=${MAX_FILE_MB}
 POSTGRES_USER=telabzar
 POSTGRES_PASSWORD=${PG_PASS}
 POSTGRES_DB=telabzar
+# اسرارِ تولیدشده. خالی‌گذاشتنشان یعنی کد به BOT_TOKEN برمی‌گردد، و پنل با
+# ADMIN_SECRETِ خالی عمداً بالا **نمی‌آید**.
+ADMIN_SECRET=${ADMIN_SECRET}
+NODE_SECRET=${NODE_SECRET}
 # نکته: DOMAIN عمداً نوشته نمی‌شود — فقط ورودیِ همین اسکریپت است تا PUBLIC_BASE
 # و مسیرِ سرتیفیکیت از آن ساخته شوند؛ هیچ کدی آن را از .env نمی‌خواند.
 PUBLIC_BASE=${PUBLIC_BASE}

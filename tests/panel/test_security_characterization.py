@@ -17,22 +17,52 @@ from __future__ import annotations
 import pytest
 
 
-# ── A-1: مشتقِ کلیدِ سشن ────────────────────────────────────────────────────
-async def test_TODAY_an_empty_admin_secret_falls_back_to_the_bot_token(panel, monkeypatch):
-    """وضعِ فعلی: با `ADMIN_SECRET`ِ خالی، کلیدِ سشن از `BOT_TOKEN` مشتق می‌شود.
+# ── A-1: مشتقِ کلیدِ سشن — **رفع شد ۲۰۲۶-۰۸-۱۷** ───────────────────────────
+# تستِ `TODAY` این بند حذف شد چون ادعایش دیگر صادق نیست: با رازِ خالی، کلید از
+# `BOT_TOKEN` مشتق **نمی‌شود** و پنل اصلاً سرو نمی‌کند. جایش سه ادعای رفتارِ
+# درست نشسته، به‌علاوهٔ کنترل‌هایی که از قبل بودند و باید سبز بمانند.
+async def test_an_empty_admin_secret_no_longer_yields_a_usable_key(panel, monkeypatch):
+    """با رازِ خالی، ساختِ کلید **می‌ترکد** — نه اینکه به `BOT_TOKEN` بیفتد."""
+    monkeypatch.setattr(panel.aw.settings, "admin_secret", "")
+    with pytest.raises(RuntimeError, match="ADMIN_SECRET"):
+        panel.aw._fernet()
 
-    ⚠️ رفتارِ باگ‌دار. **رفعِ فاز ۲ باید این را قرمز کند** — یعنی کوکیِ
-    مشتق‌شده از `BOT_TOKEN` دیگر پذیرفته نشود (و ترجیحاً پنل با رازِ خالی اصلاً
-    بالا نیاید).
 
-    توجه: روی تولید `ADMIN_SECRET` از ۲۰۲۶-۰۸-۱۷ ست شده، پس این مسیر آن‌جا
-    فعال نیست؛ ولی خطِ fallback هنوز در کد است و این تست همان را می‌سنجد.
+async def test_a_bot_token_cookie_is_rejected_when_the_secret_is_empty(panel, monkeypatch):
+    """و مسیرِ درخواست **بسته** برمی‌گردد، نه ۵۰۰.
+
+    نبودِ راز باید به «هیچ‌کس نمی‌تواند وارد شود» ترجمه شود؛ رگبارِ ۵۰۰ هم
+    نشتِ اطلاعات است هم اپراتور را گمراه می‌کند.
     """
     monkeypatch.setattr(panel.aw.settings, "admin_secret", "")
     forged = panel.forged_cookies(panel.aw.settings.bot_token)
     resp = await panel.client.get("/", cookies=forged, allow_redirects=False)
-    assert resp.status == 200, (
-        "اگر این افتاد یعنی fallback رفع شده — این تست را حذف/به‌روز کن.")
+    assert resp.status == 302
+    assert resp.headers["Location"] == "/login"
+
+
+async def test_the_panel_refuses_to_start_without_a_secret(panel, monkeypatch):
+    """`main()` پیش از سرو کردن متوقف می‌شود، و پیام دستورِ رفع را دارد."""
+    monkeypatch.setattr(panel.aw.settings, "admin_secret", "")
+    with pytest.raises(SystemExit) as exc:
+        panel.aw._require_admin_secret()
+    assert exc.value.code == 1
+    # کنترلِ جهتِ عکس: با رازِ ست‌شده نباید متوقف شود.
+    monkeypatch.setattr(panel.aw.settings, "admin_secret", "c" * 64)
+    panel.aw._require_admin_secret()
+
+
+def test_the_refusal_message_tells_the_operator_what_to_run():
+    """پیامِ خطا باید **دستورِ اجرایی** بدهد نه فقط شکایت.
+
+    اپراتوری که این را در `docker compose logs admin` می‌بیند باید بتواند
+    بدونِ باز کردنِ سورس رفعش کند.
+    """
+    from app import admin_web
+    msg = admin_web._NO_SECRET
+    assert "openssl rand -hex 32" in msg
+    assert "ADMIN_SECRET" in msg and ".env" in msg
+    assert "docker compose up -d admin" in msg
 
 
 async def test_a_set_admin_secret_makes_the_bot_token_useless(panel, monkeypatch):

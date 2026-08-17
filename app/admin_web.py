@@ -172,10 +172,46 @@ ENUM_LABELS = {
 
 
 # ── سشنِ رمزنگاری‌شده (کوکی؛ بدونِ نیاز به ذخیرهٔ سمتِ سرور) ──────
+#: پیامِ واحدِ «رازِ نشست خالی است» — هم در startup چاپ می‌شود هم در استثنا، تا
+#: هرکس از هر مسیری به آن بخورد **همان** دستورِ رفع را ببیند.
+_NO_SECRET = (
+    "ADMIN_SECRET is empty. The panel refuses to start.\n"
+    "With it empty the session key would be derived from BOT_TOKEN, which every\n"
+    "node holds — anyone with it could forge an admin session.\n"
+    "Fix (one line, then restart just this container):\n"
+    '  echo "ADMIN_SECRET=$(openssl rand -hex 32)" >> /root/telabzar/.env\n'
+    "  docker compose up -d admin"
+)
+
+
 def _fernet() -> Fernet:
-    seed = settings.admin_secret or settings.bot_token
+    """کلیدِ Fernetِ کوکیِ نشست.
+
+    **هیچ fallbackی به `BOT_TOKEN` ندارد و نباید داشته باشد.** آن fallback یعنی
+    هر دارندهٔ `BOT_TOKEN` می‌تواند کوکیِ ادمین بسازد — و `BOT_TOKEN` عمداً به
+    هر نود داده می‌شود (`nodes.node_config`)، پس «راز» نیست. تولید از
+    ۲۰۲۶-۰۸-۱۷ `ADMIN_SECRET` را ست دارد و `install.sh` از این پس خودش
+    می‌سازدش؛ این استثنا برای هر مسیرِ دیگری است که به این‌جا برسد.
+    """
+    seed = settings.admin_secret
+    if not seed:
+        raise RuntimeError(_NO_SECRET)
     key = base64.urlsafe_b64encode(hashlib.sha256(f"telabzar-admin:{seed}".encode()).digest())
     return Fernet(key)
+
+
+def _require_admin_secret() -> None:
+    """پیش از سرو کردن، نبودِ راز را **بلند** اعلام و پروسه را متوقف می‌کند.
+
+    عمداً refuse-to-start است نه هشدار. سه چیز این را کم‌هزینه می‌کند و هر سه
+    اندازه‌گیری شده‌اند: شعاعش فقط کانتینرِ `admin` است (هیچ ماژولِ دیگری
+    `admin_web` را import نمی‌کند)، `/admin`ِ تلگرام دست‌نخورده می‌ماند پس
+    اپراتور کنترلِ ربات را از دست نمی‌دهد، و «‏.env گم شد» از قبل هم کشنده بود
+    چون `BOT_TOKEN` پیش‌فرض ندارد و `Settings()` سرِ import می‌ترکد.
+    """
+    if not settings.admin_secret:
+        log.critical("FATAL: %s", _NO_SECRET)
+        raise SystemExit(1)
 
 
 def _make_session(admin_id: int) -> str:
@@ -190,6 +226,11 @@ def _session_admin(request: web.Request) -> int | None:
         data = json.loads(_fernet().decrypt(tok.encode(), ttl=_SESSION_TTL))
         aid = int(data["id"])
     except (InvalidToken, ValueError, KeyError):
+        return None
+    except RuntimeError:
+        # رازِ خالی. `main()` از قبل جلوی بالا آمدن را می‌گیرد، پس این‌جا فقط
+        # برای مسیرهای دیگر (embed/تست) است: **بسته** برمی‌گردیم نه ۵۰۰، تا
+        # نبودِ راز به «هیچ‌کس نمی‌تواند وارد شود» ترجمه شود نه به رگبارِ خطا.
         return None
     # هر درخواست دوباره عضویت را چک کن: ادمینِ حذف‌شده از ADMIN_IDS نباید تا انقضای
     # کوکی (۸ ساعت) دسترسی داشته باشد.
@@ -2467,6 +2508,7 @@ def _ssl_context() -> ssl.SSLContext | None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _require_admin_secret()      # پیش از هر کاری — با رازِ خالی اصلاً سرو نکن
     ctx = _ssl_context()
     log.info("Admin panel on :%s (tls=%s, admins=%d)",
              settings.admin_port, bool(ctx), len(settings.admin_id_set))

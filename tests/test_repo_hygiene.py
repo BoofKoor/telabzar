@@ -122,6 +122,87 @@ def test_operationally_critical_keys_are_documented():
     assert not missing, f"کلیدِ عملیاتیِ مستندنشده: {sorted(missing)}"
 
 
+#: اسراری که نصب‌کننده باید **تولید** کند (نه فقط بنویسد). فهرست صریح است، و
+#: `test_no_new_bot_token_fallback_escapes_the_list` نگه‌داری‌اش می‌کند.
+_GENERATED_SECRETS = {"ADMIN_SECRET", "NODE_SECRET"}
+
+
+def _bot_token_fallbacks() -> set[str]:
+    """تنظیماتی که کد روی خالی‌بودنشان به `BOT_TOKEN` برمی‌گردد."""
+    found: set[str] = set()
+    for path in (ROOT / "app").rglob("*.py"):
+        for name in re.findall(r"settings\.([a-z_]+)\s+or\s+settings\.bot_token",
+                               path.read_text(encoding="utf-8")):
+            found.add(name.upper())
+    return found
+
+
+def test_every_generated_secret_is_actually_generated_by_the_installer():
+    """هر رازِ این فهرست باید در `install.sh` تولید **و** حفظ شود.
+
+    **این گارد از یک شکافِ واقعی درآمد.** `.env.example` از روزِ اول
+    `ADMIN_SECRET` را مستند می‌کرد و `test_operationally_critical_keys_are_documented`
+    هم نگهش می‌داشت — ولی `install.sh`، یعنی مسیری که هر نصبِ واقعی از آن
+    می‌گذرد، **هرگز نمی‌نوشتش**. نتیجه: هر استقرارِ ساخته‌شده با نصب‌کننده
+    کلیدِ نشستش را از `BOT_TOKEN` می‌گرفت، و `BOT_TOKEN` عمداً به هر نود داده
+    می‌شود.
+
+    گاردِ قبلی فقط **جهتِ رفت** را می‌بست (کلیدِ مرده ننویس). این یکی جهتِ
+    برگشت است: چیزی که باید نوشته شود، نوشته می‌شود — و نه فقط نوشته، بلکه با
+    مقدارِ **تولیدشده**، چون `X=` خالی همان تنزل را می‌دهد.
+    """
+    src = (ROOT / "install.sh").read_text()
+    written = _install_env_keys()
+    offenders = []
+    for key in sorted(_GENERATED_SECRETS):
+        if key not in written:
+            offenders.append(f"{key}: در .env نوشته نمی‌شود")
+        elif not re.search(rf"{key}=\$\(env_get {key}\).*\|\| {key}=\$\(rand", src):
+            offenders.append(f"{key}: نوشته می‌شود ولی تولید/حفظ نمی‌شود")
+    assert not offenders, (
+        "این اسرار باید توسطِ نصب‌کننده تولید شوند:\n  " + "\n  ".join(offenders))
+
+
+def test_no_new_bot_token_fallback_escapes_the_list():
+    """نیمهٔ کشف‌محور — و **جهتش عمدی است**.
+
+    نسخهٔ اولِ این گارد فهرست را از خودِ الگوی `settings.X or settings.bot_token`
+    **کشف** می‌کرد، و با سابوتاژ معلوم شد خودتخریب است: رفعِ A-1 همان الگو را
+    از `admin_web` برداشت، پس گارد دیگر `ADMIN_SECRET` را نمی‌خواست و
+    برداشتنِ خطِ نصب‌کننده هیچ‌چیز را قرمز نمی‌کرد. معیاری که با رفعِ باگ ناپدید
+    شود، از فردای رفع محافظت نمی‌کند.
+
+    پس جهت برعکس شد: فهرست صریح است، و کشف کارِ **نگه‌داری**اش را می‌کند —
+    هر fallbackِ تازه‌ای به `BOT_TOKEN` باید عضوِ فهرست باشد، وگرنه این تست
+    می‌افتد و می‌گوید تولیدش را هم به نصب‌کننده اضافه کن.
+    """
+    escaped = _bot_token_fallbacks() - _GENERATED_SECRETS
+    assert not escaped, (
+        f"این‌ها روی خالی‌بودن به BOT_TOKEN تنزل می‌کنند ولی در "
+        f"_GENERATED_SECRETS نیستند: {sorted(escaped)} — یا fallback را بردار، "
+        f"یا به فهرست اضافه‌شان کن تا نصب‌کننده تولیدشان کند.")
+
+
+def test_main_refuses_to_serve_without_the_session_secret():
+    """`main()` باید `_require_admin_secret` را صدا بزند، پیش از `run_app`.
+
+    با AST، نه تطبیقِ رشته — و **جدا از** تستِ رفتاریِ خودِ تابع: آن یکی تابع را
+    مستقیم صدا می‌زند، پس اگر کسی فراخوانی را از `main()` بردارد ساکت می‌ماند.
+    سابوتاژ دقیقاً همین را نشان داد.
+    """
+    tree = ast.parse((ROOT / "app" / "admin_web.py").read_text(encoding="utf-8"))
+    main = next(n for n in tree.body
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    guard = [n.lineno for n in ast.walk(main)
+             if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_require_admin_secret"]
+    serve = [n.lineno for n in ast.walk(main)
+             if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "run_app"]
+    assert guard, (
+        "main() دیگر رازِ نشست را چک نمی‌کند — پنل با ADMIN_SECRETِ خالی سرو می‌کند.")
+    assert serve, "main() دیگر run_app صدا نمی‌زند — این تست باید به‌روز شود"
+    assert min(guard) < min(serve), "چک باید **پیش از** سرو کردن باشد"
+
+
 # ── ردهٔ کورِ «فقط روی CI می‌افتد» ───────────────────────────────
 _ADMIN_ONLY = ("app.admin_web", "cryptography", "jinja2")
 

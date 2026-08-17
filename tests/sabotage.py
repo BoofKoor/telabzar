@@ -907,6 +907,43 @@ CASES: list[dict] = [
      "target": _CHR,
      "expect": "test_TODAY_a_malformed_join_burns_the_token"},
 
+    # ── فاز ۲: بستنِ زنجیرهٔ راز ────────────────────────────────────────────
+    # ⚠️ موردهای `tests/panel/` به `requirements-admin.txt` نیاز دارند.
+    {"name": "phase2 A-1: restore the bot-token fallback in _fernet",
+     "path": "app/admin_web.py",
+     "old": "    seed = settings.admin_secret\n    if not seed:\n        raise RuntimeError(_NO_SECRET)",
+     "new": "    seed = settings.admin_secret or settings.bot_token",
+     "target": _CHR,
+     "expect": "test_an_empty_admin_secret_no_longer_yields_a_usable_key"},
+
+    {"name": "phase2 A-1: let an empty secret 500 instead of failing closed",
+     "path": "app/admin_web.py",
+     "old": "    except RuntimeError:\n        # رازِ خالی.",
+     "new": "    except (ValueError,):\n        # رازِ خالی.",
+     "target": _CHR,
+     "expect": "test_a_bot_token_cookie_is_rejected_when_the_secret_is_empty"},
+
+    {"name": "phase2 A-1: main() serves anyway with an empty secret",
+     "path": "app/admin_web.py",
+     "old": "    _require_admin_secret()      # پیش از هر کاری",
+     "new": "    pass                         # پیش از هر کاری",
+     "target": _HYG,
+     "expect": "test_main_refuses_to_serve_without_the_session_secret"},
+
+    {"name": "phase2 A-1: drop the actionable command from the refusal message",
+     "path": "app/admin_web.py",
+     "old": "openssl rand -hex 32",
+     "new": "some random value",
+     "target": _CHR,
+     "expect": "test_the_refusal_message_tells_the_operator_what_to_run"},
+
+    {"name": "phase2 A-1: installer stops generating the secret",
+     "path": "install.sh",
+     "old": '  ADMIN_SECRET=$(env_get ADMIN_SECRET); [[ -n "$ADMIN_SECRET" ]] || ADMIN_SECRET=$(rand 32)',
+     "new": '  ADMIN_SECRET=$(env_get ADMIN_SECRET)',
+     "target": _HYG,
+     "expect": "test_every_generated_secret_is_actually_generated_by_the_installer"},
+
     # **کنترلِ معکوس:** تغییری در همان تابع که هیچ ادعای ثبت‌شده‌ای را جابه‌جا
     # نمی‌کند. اگر چیزی بیندازد یعنی تستی به جزئیاتِ بی‌ربط چسبیده.
     {"name": "char: rename a local in node_join (must break nothing)",
