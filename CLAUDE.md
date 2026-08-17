@@ -413,6 +413,17 @@ Pin the quoted `'3.12'` — unquoted `3.10` becomes the float
   زنده بماند بی‌آنکه هیچ عددی تکان بخورد. همین رده است که تفکیکِ «۱ از ۳ لینکِ
   ساندکلاود» را هم بی‌معنا می‌کند: آن کسر فقط جاب‌های اجراشده را می‌شمارد، و
   `safety.check_url` هم که در روتر رد می‌کند هیچ `dlstat`ی نمی‌نویسد.
+- **تا دفترچهٔ سابوتاژ می‌دود، `git status`/`git diff` وضعیتِ *گذرا* نشان می‌دهد — نه
+  کارِ تو.** `python -m tests.sabotage` هر مورد را با بازنویسیِ **واقعیِ** فایلِ سورس
+  اعمال می‌کند و در `finally` برمی‌گرداند (`tests/sabotage.py`)، و چون ۳۵ مورد هرکدام
+  یک اجرای pytest می‌خواهند، پنجره چند دقیقه باز است. اتفاقی که افتاد: وسطِ همان اجرا
+  `git diff` گرفتم و `app/instagram_anon.py` را «تغییرکرده» دیدم، فایلی که اصلاً لمسش
+  نکرده بودم. این‌بار بی‌ضرر تمام شد چون `finally` کارش را کرد، ولی شکلِ خطرناکش این
+  است که کسی آن تغییرِ موقت را **باگ** بخواند و دنبالش بگردد، یا بدتر، وسطِ همان پنجره
+  `git add -A` بزند و یک سورسِ خراب‌شده را کامیت کند. قاعده: **وضعیتِ درخت را فقط
+  بعد از تمام‌شدنِ دفترچه بسنج** — و اگر اجرا در پس‌زمینه است، اول تمام‌شدنش را تأیید
+  کن، بعد `git status`. همین دلیلِ دیگری است بر اینکه دفترچه هرگز نباید در CI یا موازی
+  اجرا شود، که §۶ از قبل می‌گوید.
 - **Local Bot API server**: files are on its disk; `bot.get_file(file_id)` can trigger a full download from Telegram DC on first call (slow) — workers/gateway use long `request_timeout` (600 s). Upload ceiling ≈ `MAX_FILE_MB` (2000); larger files can't be carded/served.
 - **Read-only `/cookies` mount**: yt-dlp/gallery-dl must copy the cookie to a writable temp first (`downloader._writable_cookie`), else `OSError: read-only file system`.
 - **Updating a node ≠ `telabzar update`**: `telabzar update` on the master rebuilds only the master's containers. A **node runs its own separately-built image** (`telabzar-node:<role>`, built by `node/install.sh` on the node host), so any fix that changes code **running on the node** (`run_download`/`_pick_cookies`, `run_op`, `gateway_node`, …) does **not** reach the node until the node's image is rebuilt. Run `cd /opt/telabzar-node/repo && sudo git pull && sudo bash node/update.sh` on the node — it reads the running container's env/image/command, pulls, rebuilds the role's Dockerfile, and recreates the container (no re-join, same WG identity). Master-only changes (routing in `download.py`, compose, `nodes.py` reaper) need only the master update.
