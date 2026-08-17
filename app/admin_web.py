@@ -21,6 +21,7 @@ import shutil
 import ssl
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 import aiohttp
 import redis.asyncio as aioredis
@@ -421,6 +422,7 @@ _SETTINGS = """{% extends 'base' %}{% block title %}تنظیمات{% endblock %}
 {% block body %}<div class=grid2>
 <div class=col>
   {% if saved %}<div class=saved>✅ تغییرات ذخیره شد (بدونِ ری‌استارت اعمال شد).</div>{% endif %}
+  {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
   <form method=post action=/save>
   {% for title, fields in groups %}
     <div class=card><h3>{{title}}{% if loop.first %}<span class=tag>بدونِ ری‌استارت</span>{% endif %}</h3><div class=rows>
@@ -1005,6 +1007,7 @@ _BUTTONS ="""{% extends 'base' %}{% block title %}کلیدها{% endblock %}{% b
       <option value=fa {% if lang=='fa' %}selected{% endif %}>فارسی</option>
       <option value=en {% if lang=='en' %}selected{% endif %}>English</option></select></div>
   {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
+  {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
   <form method=post action=/buttons/save id=btnform>
     <input type=hidden name=kind value="{{kind}}">
     <input type=hidden name=lang value="{{lang}}">
@@ -1107,6 +1110,7 @@ _NODES = """{% extends 'base' %}{% block title %}نودها{% endblock %}{% bloc
   <h3>🖧 نودها <span class=tag>{{nodes|length}} نود · {{online}} آنلاین</span>
     {% if reaped %}<span class=tag style="background:#fef3c7;color:#92400e">↩ {{reaped}} جابِ برگردانده‌شده</span>{% endif %}</h3>
   <div class=pad>
+    {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
     {% if not master_ready %}<div class=errbox>⚠️ WireGuardِ مستر پیکربندی نشده (WG_MASTER_PUBKEY / WG_ENDPOINT / ADMIN_BASE). راهنما در README.</div>{% endif %}
     {% if not nodes %}<div class=empty>هنوز نودی وصل نشده. با «افزودن نود» یک دستورِ نصب بساز.</div>{% endif %}
     {% for n in nodes %}
@@ -1158,6 +1162,31 @@ def _render(name: str, **ctx) -> web.Response:
     ctx.setdefault("pfa", _PLATFORM_FA)
     html = ENV.get_template(name).render(**ctx)
     return web.Response(text=html, content_type="text/html")
+
+
+def _result(path: str, *, ok: str = "", err: str = "", **state) -> web.HTTPFound:
+    """ریدایرکتِ «نتیجهٔ یک ذخیره» — **تنها** راهِ ساختنِ `ok=`/`err=` در پنل.
+
+    یک تابع، نه چند کپیِ دست‌نویس. انگیزه‌اش ممیزیِ خودِ همین خوشه است:
+    `texts_save` مسیرِ خطا را داشت و `buttons_save` نداشت، و آن ناسازگاری —
+    نه محدودیتِ طراحی — چیزی بود که B-1 را ساخت. همان درسِ
+    `cookies.delete_account` و `_search_queries`: قاعده‌ای که در N نقطه دست‌نویس
+    شود، در N نقطه واگرا می‌شود و هیچ‌کدام دیگری را خبر نمی‌کند. گاردِ ASTیِ
+    `test_the_panel_has_one_result_redirect` در `tests/test_repo_hygiene.py`
+    مانعِ کپیِ بعدی می‌شود.
+
+    `state` پارامترهای وضعیتِ خودِ صفحه است (`kind`/`lang`/`q`/…) تا کاربر بعد از
+    خطا به همان نمایی برگردد که در آن بود؛ مقدارِ تهی حذف می‌شود تا URL شلوغ نشود.
+    کوئری با `urlencode` ساخته می‌شود، پس فاصله و «»ِ پیام‌های فارسی یک‌جا و
+    یک‌شکل انکود می‌شوند به‌جای الحاقِ رشته‌ایِ هر مسیر.
+    """
+    params = {k: str(v) for k, v in state.items() if v not in ("", None)}
+    if ok:
+        params["ok"] = ok
+    if err:
+        params["err"] = err
+    q = urlencode(params)
+    return web.HTTPFound(f"{path}?{q}" if q else path)
 
 
 # ── هلث ─────────────────────────────────────────────────────────
@@ -1701,7 +1730,8 @@ async def dashboard(request: web.Request) -> web.Response:
                    pill_ok=health["all_ok"], groups=GROUPS, meta=RUNTIME_KEYS,
                    enums=ENUM_VALUES, labels=ENUM_LABELS, longtext=LONGTEXT_KEYS,
                    v=await _effective(),
-                   health=health, saved=request.query.get("saved") == "1")
+                   health=health, saved=request.query.get("ok") == "1",
+                   error=request.query.get("err", ""))
 
 
 async def health_page(request: web.Request) -> web.Response:
@@ -1826,13 +1856,7 @@ def _texts_groups(lang: str, q: str) -> list[dict]:
 
 
 def _texts_redirect(lang: str, q: str, **extra) -> web.HTTPFound:
-    from urllib.parse import quote_plus
-    params = [f"lang={lang}"]
-    if q:
-        params.append("q=" + quote_plus(q))
-    for k, v in extra.items():
-        params.append(f"{k}=" + quote_plus(str(v)))
-    return web.HTTPFound("/texts?" + "&".join(params))
+    return _result("/texts", lang=lang, q=q, **extra)
 
 
 async def texts_page(request: web.Request) -> web.Response:
@@ -1970,7 +1994,8 @@ async def buttons_page(request: web.Request) -> web.Response:
                    pill_ok=await _pill_ok(request.app), kind=kind, lang=lang, kinds=_KIND_TABS,
                    kindlabel=_KIND_LABEL[kind], items=items, pv_rows=pv_rows,
                    hidden_items=hidden_items, close_label=_t(lang, "btn_close"),
-                   prev_msg="🎬 نمونهٔ کارتِ فایل", saved=saved)
+                   prev_msg="🎬 نمونهٔ کارتِ فایل", saved=saved,
+                   error=request.query.get("err", ""))
 
 
 async def buttons_save(request: web.Request) -> web.Response:
@@ -2003,7 +2028,7 @@ async def buttons_save(request: web.Request) -> web.Response:
             await textstore.reset_text(lang, key)
     await textstore.set_menu_layout(kind, layout)
     await textstore.set_button_styles(styles)
-    raise web.HTTPFound(f"/buttons?kind={kind}&lang={lang}&ok=1")
+    raise _result("/buttons", kind=kind, lang=lang, ok="1")
 
 
 async def buttons_reset(request: web.Request) -> web.Response:
@@ -2014,7 +2039,7 @@ async def buttons_reset(request: web.Request) -> web.Response:
     lang = (form.get("lang") or "fa").strip()
     if kind in _KIND_LABEL:
         await textstore.reset_menu_layout(kind)
-    raise web.HTTPFound(f"/buttons?kind={kind}&lang={lang}&ok=r")
+    raise _result("/buttons", kind=kind, lang=lang, ok="r")
 
 
 # ── نودهای توزیع‌شده (master/node روی WireGuard) ────────────────
@@ -2068,7 +2093,7 @@ async def nodes_page(request: web.Request) -> web.Response:
                    pill_ok=await _pill_ok(request.app), nodes=items,
                    online=sum(1 for i in items if i["online"]), roles=node_mod.ROLES,
                    token=token, install_cmd=install_cmd, master_ready=master_ready,
-                   reaped=reaped)
+                   reaped=reaped, error=request.query.get("err", ""))
 
 
 async def nodes_add(request: web.Request) -> web.Response:
@@ -2326,7 +2351,7 @@ async def cookies_identity(request: web.Request) -> web.Response:
     meta["proxy"] = (form.get("proxy") or "").strip()[:200]
     meta["user_agent"] = (form.get("user_agent") or "").strip()[:300]
     await ck_pool.set_meta(redis, name, meta)
-    raise web.HTTPFound("/cookies?ok=ident")
+    raise _result("/cookies", ok="ident")
 
 
 async def cookies_resync(request: web.Request) -> web.Response:
@@ -2334,7 +2359,7 @@ async def cookies_resync(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     await _mirror_all_cookies(request.app["redis"])
-    raise web.HTTPFound("/cookies?ok=sync")
+    raise _result("/cookies", ok="sync")
 
 
 async def cookies_unfreeze(request: web.Request) -> web.Response:
@@ -2350,7 +2375,7 @@ async def cookies_unfreeze(request: web.Request) -> web.Response:
             await redis.delete(f"ckcheck:{name}")   # هشدارِ بعدی دوباره مجاز شود
         except Exception:  # noqa: BLE001
             pass
-    raise web.HTTPFound("/cookies?ok=fix")
+    raise _result("/cookies", ok="fix")
 
 
 async def cookies_add(request: web.Request) -> web.Response:
@@ -2358,18 +2383,18 @@ async def cookies_add(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     if not _cookies_dir_ok():
-        raise web.HTTPFound("/cookies?err=" + "پوشهٔ کوکی‌ها نوشتنی نیست.")
+        raise _result("/cookies", err="پوشهٔ کوکی‌ها نوشتنی نیست.")
     form = await request.post()
     platform = (form.get("platform") or "other").strip()
     label = (form.get("label") or "").strip()
     text, err = _normalize_cookie_text(form.get("content") or "")
     if err:
-        raise web.HTTPFound("/cookies?err=" + err)
+        raise _result("/cookies", err=err)
     if platform not in {k for k, _ in COOKIE_PLATFORMS}:
         platform = "other"
     err = _check_required(text, platform)
     if err:
-        raise web.HTTPFound("/cookies?err=" + err)
+        raise _result("/cookies", err=err)
     # نامِ فایل با پیشوندِ پلتفرم (استخر با همین پلتفرم را تشخیص می‌دهد)
     stem = platform if platform != "other" else "cookies"
     if label:
@@ -2380,13 +2405,13 @@ async def cookies_add(request: web.Request) -> web.Response:
     redis = request.app["redis"]
     err = await _save_cookie(redis, name, text)
     if err:
-        raise web.HTTPFound("/cookies?err=" + err)
+        raise _result("/cookies", err=err)
     meta = await ck_pool.get_meta(redis, name)
     meta.update({"label": label or os.path.splitext(name)[0], "platform": platform,
                  "added": int(time.time()), "fail_streak": 0, "disabled": False})
     await ck_pool.set_meta(redis, name, meta)
     log.info("cookie account added: %s (%d bytes)", name, len(text))
-    raise web.HTTPFound("/cookies?ok=up")
+    raise _result("/cookies", ok="up")
 
 
 async def cookies_replace(request: web.Request) -> web.Response:
@@ -2394,23 +2419,23 @@ async def cookies_replace(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     if not _cookies_dir_ok():
-        raise web.HTTPFound("/cookies?err=" + "پوشهٔ کوکی‌ها نوشتنی نیست.")
+        raise _result("/cookies", err="پوشهٔ کوکی‌ها نوشتنی نیست.")
     form = await request.post()
     name = _safe_cookie_name(form.get("name") or "")
     text, err = _normalize_cookie_text(form.get("content") or "")
     if not name or err:
-        raise web.HTTPFound("/cookies?err=" + (err or "اکانت نامعتبر."))
+        raise _result("/cookies", err=err or "اکانت نامعتبر.")
     redis = request.app["redis"]
     meta = await ck_pool.get_meta(redis, name)
     err = _check_required(text, meta.get("platform") or ck_pool.guess_platform(name))
     if err:
-        raise web.HTTPFound("/cookies?err=" + err)
+        raise _result("/cookies", err=err)
     err = await _save_cookie(redis, name, text)
     if err:
-        raise web.HTTPFound("/cookies?err=" + err)
+        raise _result("/cookies", err=err)
     await ck_pool.mark_ok(redis, name)      # کوکیِ تازه → سالم + کول‌داون پاک
     log.info("cookie replaced for %s", name)
-    raise web.HTTPFound("/cookies?ok=rep")
+    raise _result("/cookies", ok="rep")
 
 
 async def cookies_delete(request: web.Request) -> web.Response:
@@ -2421,7 +2446,7 @@ async def cookies_delete(request: web.Request) -> web.Response:
     if name:
         # هر سه گام (آینه + فایل + متا) از یک جا — همان تابعِ مشترکِ مسیرِ ربات
         await ck_pool.delete_account(request.app["redis"], name)
-    raise web.HTTPFound("/cookies?ok=del")
+    raise _result("/cookies", ok="del")
 
 
 async def cookies_cooldown(request: web.Request) -> web.Response:
@@ -2439,7 +2464,7 @@ async def cookies_cooldown(request: web.Request) -> web.Response:
                 await r.set(f"ckcd:{name}", "1", ex=1800)
         except Exception:  # noqa: BLE001
             pass
-    raise web.HTTPFound("/cookies?ok=cd")
+    raise _result("/cookies", ok="cd")
 
 
 async def save(request: web.Request) -> web.Response:
@@ -2466,7 +2491,7 @@ async def save(request: web.Request) -> web.Response:
                 await store.set(k, val)
             else:
                 await store.reset(k)
-    raise web.HTTPFound("/?saved=1")
+    raise _result("/", ok="1")
 
 
 async def healthz(_: web.Request) -> web.Response:

@@ -1020,6 +1020,15 @@ CASES: list[dict] = [
      "new": '        nid = secrets.token_urlsafe(9)[:12]  # noqa',
      "target": _CHR,
      "expect": None},
+
+    # ── خوشهٔ شکستِ خاموش (B-1/B-3/B-4/B-5) ──
+    # گاردِ واگرایی: یک محلِ فراخوانی دوباره دستی نوشته شود.
+    {"name": "panel: a result redirect goes back to being hand-written",
+     "path": "app/admin_web.py",
+     "old": 'raise _result("/cookies", ok="del")',
+     "new": 'raise web.HTTPFound("/cookies?ok=del")',
+     "target": _HYG,
+     "expect": "test_the_panel_has_one_result_redirect"},
 ]
 
 
