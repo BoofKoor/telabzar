@@ -86,6 +86,7 @@ _DEM = "tests/test_deadend_messages.py"
 _CBX = "tests/test_castbox_path.py"
 _CAP = "tests/test_caption_html.py"
 _COV = "tests/test_audio_cover.py"
+_ORP = "tests/test_probe_orphan.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -752,6 +753,53 @@ CASES: list[dict] = [
      "new": 'cmd += ["-x", "--embed-thumbnail", "--audio-format", "mp3"]',
      "target": _COV,
      "expect": None},
+
+    # ── دو زیرفرایندِ یتیمِ باقی‌مانده ────────────────────────────────
+    # الگوها عمداً با خطِ **قبلشان** لنگر می‌خورند: بلوکِ
+    # `except BaseException:` عیناً دو بار در فایل هست (probe و جست‌وجوی
+    # تطبیق) و الگوی کوتاه هر دو را می‌زد — یعنی همان تلهٔ `trim_video`/
+    # `trim_audio` که `patch_source` برای گرفتنش ساخته شد.
+    {"name": "orphan: probe stops killing its child (pre-fix form)",
+     "path": "app/downloader.py",
+     "old": '            raise RuntimeError("probe timed out") from None\n'
+            '        except BaseException:\n'
+            '            _P.kill_orphan(proc)\n'
+            '            raise\n',
+     "new": '            raise RuntimeError("probe timed out") from None\n',
+     "target": _ORP,
+     "expect": "test_probe_does_not_leave_yt_dlp_running_after_cancellation"},
+
+    # کنترلِ معکوس: خرابکاریِ probe نباید ادعای **جست‌وجو** را بیندازد. اگر
+    # بیفتد، دو مسیر یک assert مشترک دارند و هرکدام جدا اثبات نشده‌اند (§۷:
+    # دفاع در عمق، تست در عمق).
+    {"name": "orphan: probe unfixed — but the match-search claim stays green",
+     "path": "app/downloader.py",
+     "old": '            raise RuntimeError("probe timed out") from None\n'
+            '        except BaseException:\n'
+            '            _P.kill_orphan(proc)\n'
+            '            raise\n',
+     "new": '            raise RuntimeError("probe timed out") from None\n',
+     "target": _ORP + "::test_the_match_search_does_not_leave_yt_dlp_running",
+     "expect": None},
+
+    {"name": "orphan: the match search stops killing its child (pre-fix form)",
+     "path": "app/downloader.py",
+     "old": '            return []\n'
+            '        except BaseException:\n'
+            '            _P.kill_orphan(proc)\n'
+            '            raise\n',
+     "new": '            return []\n',
+     "target": _ORP,
+     "expect": "test_the_match_search_does_not_leave_yt_dlp_running"},
+
+    # هلپرِ مشترک باربر است، نه آرایش: خنثی‌کردنش باید **کنترلِ مثبت** را
+    # بیندازد — یعنی مسیرِ از-قبل-رفع‌شدهٔ `_run_dl` هم واقعاً از آن رد می‌شود.
+    {"name": "orphan: the shared kill_orphan helper is neutered",
+     "path": "app/processing.py",
+     "old": "    if proc.returncode is None:\n        try:\n            proc.kill()",
+     "new": "    if False:\n        try:\n            proc.kill()",
+     "target": _ORP,
+     "expect": "test_the_harness_can_observe_a_kill"},
 ]
 
 
