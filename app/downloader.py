@@ -734,7 +734,22 @@ async def download_ytdlp(url: str, workdir: str, selector: str, opts: dict,
            "--write-info-json", "--write-thumbnail", "--convert-thumbnails", "jpg",
            "-o", outtmpl, "-f", _selector_to_format(selector, platform_of(url))]
     if audio_only:
-        cmd += ["-x", "--audio-format", "mp3"]
+        # `--embed-thumbnail` **فقط این‌جا** — نه در مسیرِ ویدیو. دلیلش نظری نیست:
+        # `EmbedThumbnailPP` برای پسوندی که پشتیبانی نمی‌کند `PostProcessingError`
+        # می‌دهد، و چون `--ignore-errors` نمی‌فرستیم (`_common_flags`)،
+        # `YoutubeDL.run_pp` دوباره raise می‌کند و **کلِ دانلود می‌شکند** —
+        # پرصدا، نه خاموش. مسیرِ ویدیو روی منبعِ فقط‌صوتی می‌تواند `opus`/`webm`
+        # بدهد (همان حالتی که `_newest(..., _MEDIA_EXTS)` پایین‌تر برایش fallback
+        # دارد)، و `ogg/opus/flac` بدونِ mutagen raise می‌کند.
+        #
+        # این‌جا امن است چون خروجی **اثباتاً همیشه mp3** است: در
+        # `FFmpegExtractAudioPP.run` هم شاخهٔ copy (ورودیِ از قبل mp3) و هم شاخهٔ
+        # تبدیل، پسوندِ `mp3` می‌دهند. و برای mp3، `EmbedThumbnailPP` مستقیم
+        # ffmpeg با `-c copy` می‌زند — یعنی **AtomicParsley لازم نیست** (نصب هم
+        # نیست) و **صوت دوباره انکد نمی‌شود**، پس بردِ بدونِ ترنسکدِ ساندکلاود
+        # دست‌نخورده می‌ماند (اندازه‌گیریِ اپراتور: پیامِ «Not converting audio»
+        # سرِ جایش ماند و حجم فقط +۴٪ شد، که همان یک استریمِ تصویر است).
+        cmd += ["-x", "--audio-format", "mp3", "--embed-thumbnail"]
     else:
         # faststart = اتمِ moov جلوی فایل → استریمِ مرورگری بلافاصله شروع می‌شود (نه پس از دانلودِ کامل)
         cmd += ["-S", _FORMAT_SORT,          # h264/aac/mp4 را در همان رزولوشن ترجیح بده

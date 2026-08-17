@@ -85,6 +85,7 @@ _SCP = "tests/test_soundcloud_path.py"
 _DEM = "tests/test_deadend_messages.py"
 _CBX = "tests/test_castbox_path.py"
 _CAP = "tests/test_caption_html.py"
+_COV = "tests/test_audio_cover.py"
 
 CASES: list[dict] = [
     # ── فاز ۲: مسیرِ ناشناسِ اینستاگرام. یکی به‌ازای هر قیدِ سخت. ──
@@ -679,6 +680,45 @@ CASES: list[dict] = [
      "new": '    return "\\n".join(ln.rstrip() for ln in out.splitlines())',
      "target": _CAP,
      "expect": "test_the_real_description_has_no_leading_indent"},
+
+    # ── کاورِ صوتی ─────────────────────────────────────────────────
+    {"name": "cover: drop --embed-thumbnail entirely",
+     "path": "app/downloader.py",
+     "old": 'cmd += ["-x", "--audio-format", "mp3", "--embed-thumbnail"]',
+     "new": 'cmd += ["-x", "--audio-format", "mp3"]',
+     "target": _COV,
+     "expect": "test_the_audio_path_embeds_the_cover"},
+
+    # گیتِ `audio_only` — قیدِ سختِ این کار. بدونش مسیرِ ویدیو روی منبعِ
+    # فقط‌صوتی `opus`/`webm` می‌گیرد و `EmbedThumbnailPP` raise می‌کند، که با
+    # نبودِ `--ignore-errors` یعنی کلِ دانلود می‌شکند.
+    {"name": "cover: embed on the video path too (drops the audio_only gate)",
+     "path": "app/downloader.py",
+     "old": '        cmd += ["-S", _FORMAT_SORT,          # h264/aac/mp4 را در همان رزولوشن ترجیح بده\n'
+            '                "--merge-output-format", "mp4",',
+     "new": '        cmd += ["-S", _FORMAT_SORT, "--embed-thumbnail",\n'
+            '                "--merge-output-format", "mp4",',
+     "target": _COV,
+     "expect": "test_the_video_path_never_embeds[best]"},
+
+    # گاردِ **هارنس**: اگر ffprobeِ جعلی همیشه mp3 بدهد، کنترلِ منفی مرده است و
+    # «ffmpeg صدا زده نشد» دیگر چیزی ثابت نمی‌کند.
+    {"name": "cover: harness always reports mp3 (kills the negative control)",
+     "path": "tests/test_audio_cover.py",
+     "old": "    pp.get_audio_codec = lambda path: src_acodec",
+     "new": '    pp.get_audio_codec = lambda path: "mp3"',
+     "target": _COV,
+     "expect": "test_the_harness_can_tell_a_transcode_from_a_copy"},
+
+    # **کنترلِ معکوس:** جای فلگ در همان شاخه مهم نیست — تست‌ها **حضور** را
+    # می‌سنجند نه ترتیب. اگر این چیزی را بیندازد یعنی تستی به ترتیبِ آرگومان
+    # چسبیده که نباید.
+    {"name": "cover: reorder the flag within the audio branch (must break nothing)",
+     "path": "app/downloader.py",
+     "old": 'cmd += ["-x", "--audio-format", "mp3", "--embed-thumbnail"]',
+     "new": 'cmd += ["-x", "--embed-thumbnail", "--audio-format", "mp3"]',
+     "target": _COV,
+     "expect": None},
 ]
 
 
