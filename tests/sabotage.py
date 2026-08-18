@@ -94,6 +94,7 @@ _SEC = "tests/panel/test_security_headers.py"
 _SVF = "tests/panel/test_save_failures.py"
 _LRL = "tests/panel/test_login_rate_limit.py"
 _POT = "tests/panel/test_pot_health.py"
+_USR = "tests/panel/test_users_page.py"
 _SBD = "tests/test_settings_bounds.py"
 _UPD = "tests/test_upload_direction.py"
 _UPC = "tests/test_upload_ceiling.py"
@@ -1325,6 +1326,50 @@ CASES: list[dict] = [
      "new": "    pass",
      "target": _LRL + "::test_exhausting_the_guesses_leaves_a_fresh_code_working",
      "expect": None},
+
+    # ── C-4: ایندکسِ `last_seen` و کشِ صفحهٔ کاربران ───────────────────────
+    {"name": "users: the last_seen index goes away",
+     "path": "app/db.py",
+     "old": '    "CREATE INDEX IF NOT EXISTS ix_users_last_seen ON users (last_seen)",\n',
+     "new": "",
+     "target": _USR,
+     "expect": "test_the_index_matches_the_column_the_page_orders_by"},
+
+    {"name": "users: the page queries the database on every load again",
+     "path": "app/admin_web.py",
+     "old": '    data = await _users_cached(request.app, page, request.query.get("q", ""))',
+     "new": '    data = await _users_list(page, request.query.get("q", ""))',
+     "target": _USR,
+     "expect": "test_a_repeat_load_does_not_hit_the_database"},
+
+    # باطل‌سازی برداشته شود: کش صفحه را از «کند» به **غلط** می‌برد.
+    {"name": "users: blocking no longer busts the cache",
+     "path": "app/admin_web.py",
+     "old": '                await _users_cache_bust(request.app.get("redis"))',
+     "new": "                pass",
+     "target": _USR,
+     "expect": "test_blocking_a_user_shows_up_immediately"},
+
+    {"name": "users: the cache key drops the version counter",
+     "path": "app/admin_web.py",
+     "old": '    key = f"userscache:{await _users_cache_ver(redis)}:{page}:{q}"',
+     "new": '    key = f"userscache:{page}:{q}"',
+     "target": _USR,
+     "expect": "test_unblocking_is_visible_immediately_too"},
+
+    {"name": "users: every page and query share one cache key",
+     "path": "app/admin_web.py",
+     "old": '    key = f"userscache:{await _users_cache_ver(redis)}:{page}:{q}"',
+     "new": '    key = f"userscache:{await _users_cache_ver(redis)}"',
+     "target": _USR,
+     "expect": "test_different_pages_and_queries_are_cached_separately"},
+
+    {"name": "users: the cached page never expires",
+     "path": "app/admin_web.py",
+     "old": "        await redis.set(key, json.dumps(data, default=str), ex=_USERS_TTL)",
+     "new": "        await redis.set(key, json.dumps(data, default=str))",
+     "target": _USR,
+     "expect": "test_the_cache_expires_on_the_modelled_clock"},
 
     # ── C-3: سلامتِ pot-provider نباید صفحه را نگه دارد ────────────────────
     # ⚠️ این موارد هم `tests/panel/` را هدف می‌گیرند (به `requirements-admin.txt`

@@ -1654,6 +1654,66 @@ async def _stats_cached(app, rng: str) -> dict:
     return s
 
 
+# ── کشِ صفحهٔ کاربران ─────────────────────────────────────────────────────
+# هم‌شکلِ `_stats_cached`، و به همان دلیل: صفحه‌ای که ادمین پشتِ‌هم رفرش می‌کند
+# نباید هر بار جدول را بپیماید. ولی **آنچه گران است سورت نیست، شمارش است** —
+# اندازه‌گیری‌شده روی Postgres 16 با ۲۰۰هزار ردیف، پس از افزودنِ ایندکس:
+#
+#   count(*) → ۱۲٫۵ ms · count(*) بلاک‌شده‌ها → ۱۲٫۷ ms
+#   کوئریِ خودِ صفحه → ۰٫۴۵ ms · شمارشِ فایل‌ها → ۰٫۴۱ ms
+#
+# یعنی دو `count(*)` حدودِ ۹۶٪ کارِ صفحه‌اند و ایندکس کاری با آن‌ها ندارد؛ این
+# کش دقیقاً همان‌هاست که برمی‌دارد. روی جدولِ **امروزِ** تولید (۱۶۶۸ ردیف) کلِ
+# صفحه ~۲٫۷ ms است، پس این بیمه برای رشد است نه رفعِ یک دردِ فعلی — و همین‌جا
+# نوشته می‌شود تا نفرِ بعد فکر نکند عددی را که ندیده بهبود داده‌ایم.
+_USERS_TTL = 30
+_USERS_VER = "userscache:ver"
+
+
+async def _users_cache_ver(redis) -> str:
+    """شمارندهٔ نسخه — همان الگوی `txtver` که `textstore` از قبل دارد.
+
+    باطل‌کردن با **نسخه** انجام می‌شود نه با پیمایش و حذفِ کلیدها: `users_block`
+    فقط یک `INCR` می‌زند و همهٔ صفحه‌های کش‌شده در همان لحظه یتیم می‌شوند، بدونِ
+    اینکه لازم باشد بدانیم کدام صفحه/جست‌وجو کش شده. کلیدهای کهنه خودشان با TTL
+    می‌روند.
+
+    این باطل‌سازی **شرطِ درستی است نه بهینه‌سازی**: بدونِ آن، ادمین «بلاک» را
+    می‌زند، به `/users` برمی‌گردد و همان کاربر را هنوز آزاد می‌بیند — یعنی صفحه
+    دربارهٔ کاری که همین الان انجام شد دروغ می‌گوید.
+    """
+    try:
+        return str(await redis.get(_USERS_VER) or "0")
+    except Exception:  # noqa: BLE001
+        return "0"
+
+
+async def _users_cache_bust(redis) -> None:
+    try:
+        await redis.incr(_USERS_VER)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _users_cached(app, page: int, q: str) -> dict:
+    redis = app.get("redis")
+    if redis is None:
+        return await _users_list(page, q)
+    key = f"userscache:{await _users_cache_ver(redis)}:{page}:{q}"
+    try:
+        raw = await redis.get(key)
+        if raw:
+            return json.loads(raw)
+    except Exception:  # noqa: BLE001
+        pass
+    data = await _users_list(page, q)
+    try:
+        await redis.set(key, json.dumps(data, default=str), ex=_USERS_TTL)
+    except Exception:  # noqa: BLE001
+        pass
+    return data
+
+
 async def _users_list(page: int, q: str) -> dict:
     per = 40
     q = (q or "").strip()
@@ -1944,7 +2004,7 @@ async def users_page(request: web.Request) -> web.Response:
         page = max(0, int(request.query.get("page", "0")))
     except ValueError:
         page = 0
-    data = await _users_list(page, request.query.get("q", ""))
+    data = await _users_cached(request.app, page, request.query.get("q", ""))
     done = {"block": "کاربر بلاک شد.", "unblock": "بلاکِ کاربر برداشته شد."}.get(
         request.query.get("done", ""), "")
     return _render("users", admin_id=_session_admin(request), active="users",
@@ -1967,6 +2027,9 @@ async def users_block(request: web.Request) -> web.Response:
                 u.is_blocked = (action == "block")
                 await db.commit()
                 outcome = action
+                # پیش از ریدایرکت، وگرنه صفحهٔ بعدی نمای کهنه را نشان می‌دهد و
+                # ادمین فکر می‌کند بلاک نگرفت.
+                await _users_cache_bust(request.app.get("redis"))
     # بازسازیِ URL از فیلدهای امن (نه ret کاربر → بدونِ open-redirect)
     params = []
     if page.isdigit() and int(page):
