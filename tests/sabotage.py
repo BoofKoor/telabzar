@@ -93,6 +93,7 @@ _CHR = "tests/panel/test_security_characterization.py"
 _SEC = "tests/panel/test_security_headers.py"
 _SVF = "tests/panel/test_save_failures.py"
 _LRL = "tests/panel/test_login_rate_limit.py"
+_POT = "tests/panel/test_pot_health.py"
 _SBD = "tests/test_settings_bounds.py"
 _UPD = "tests/test_upload_direction.py"
 _UPC = "tests/test_upload_ceiling.py"
@@ -1324,6 +1325,67 @@ CASES: list[dict] = [
      "new": "    pass",
      "target": _LRL + "::test_exhausting_the_guesses_leaves_a_fresh_code_working",
      "expect": None},
+
+    # ── C-3: سلامتِ pot-provider نباید صفحه را نگه دارد ────────────────────
+    # ⚠️ این موارد هم `tests/panel/` را هدف می‌گیرند (به `requirements-admin.txt`
+    # نیاز دارند).
+    #
+    # برگرداندنِ پروبِ درجا — شکلِ دقیقِ پیش از رفع. تنها ادعایی که با سوکتِ
+    # **واقعی** و ساعتِ واقعی سنجیده می‌شود، پس تنها ادعایی هم هست که این
+    # سابوتاژ می‌تواند بیندازد.
+    {"name": "pot: the health check blocks the page again",
+     "path": "app/admin_web.py",
+     "old": '    h["pot"] = await _pot_health(app)',
+     "new": ('    h["pot"] = None\n'
+             "    if settings.pot_provider_url:\n"
+             '        h["pot"] = False\n'
+             "        try:\n"
+             "            async with aiohttp.ClientSession("
+             "timeout=aiohttp.ClientTimeout(total=3)) as s:\n"
+             '                async with s.get(settings.pot_provider_url + "/ping") as resp:\n'
+             '                    h["pot"] = resp.status == 200\n'
+             "        except Exception:  # noqa: BLE001\n"
+             '            h["pot"] = False'),
+     "target": _POT,
+     "expect": "test_a_really_hung_provider_does_not_slow_the_dashboard"},
+
+    {"name": "pot: a fresh cache no longer skips the probe",
+     "path": "app/admin_web.py",
+     "old": "    if not fresh:\n        _schedule_pot_refresh(app)",
+     "new": "    _schedule_pot_refresh(app)",
+     "target": _POT,
+     "expect": "test_a_fresh_cached_result_makes_no_probe_at_all"},
+
+    # دو کلید به یکی تا شود: آن‌وقت کهنه‌شدنِ کش مقدارِ شناخته‌شده را هم می‌برد.
+    {"name": "pot: the last-known value expires with the freshness key",
+     "path": "app/admin_web.py",
+     "old": '        await r.set(_POT_LAST, "1" if ok else "0")',
+     "new": '        await r.set(_POT_LAST, "1" if ok else "0", ex=_POT_FRESH_TTL)',
+     "target": _POT,
+     "expect": "test_the_last_known_value_outlives_the_freshness_window"},
+
+    {"name": "pot: background refreshes pile up on every page load",
+     "path": "app/admin_web.py",
+     "old": "    task = app.get(_POT_TASK)\n    if task is not None and not task.done():\n        return",
+     "new": "    pass",
+     "target": _POT,
+     "expect": "test_only_one_background_refresh_runs_at_a_time"},
+
+    # «نسنجیده» دوباره با «پیکربندی‌نشده» یکی شود — یعنی پنل دربارهٔ سرویسی که
+    # پیکربندی **شده** دروغ بگوید.
+    {"name": "pot: an unprobed provider is reported as unconfigured again",
+     "path": "app/admin_web.py",
+     "old": "    return POT_UNKNOWN if last is None else last == \"1\"",
+     "new": "    return None if last is None else last == \"1\"",
+     "target": _POT,
+     "expect": "test_a_configured_but_unprobed_provider_is_not_called_unconfigured"},
+
+    {"name": "pot: cleanup stops cancelling the background refresh",
+     "path": "app/admin_web.py",
+     "old": "    task = app.get(_POT_TASK)\n    if task is not None and not task.done():\n        task.cancel()",
+     "new": "    pass",
+     "target": _POT,
+     "expect": "test_the_cleanup_hook_cancels_a_running_refresh"},
 
     # ⚠️ **موردِ «هر دو لایه با هم» این‌جا ثبت نشد، و دلیلش محدودیتِ ابزار است.**
     # هر مورد یک وصلهٔ **پیوسته** می‌خورد (`_run_case` یک `sabotage()` می‌سازد)، و

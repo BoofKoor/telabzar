@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import glob
 import hashlib
@@ -388,6 +389,7 @@ _HEALTH_CARDS = """
   <div class=svc>⚡ Redis <span class="badge {{'ok' if health.redis else 'warn'}}">{{'آنلاین' if health.redis else 'خطا'}}</span></div>
   <div class=svc>🔑 pot-provider (یوتیوب)
     {% if health.pot is none %}<span class="badge dim">پیکربندی‌نشده</span>
+    {% elif health.pot == "?" %}<span class="badge dim">در حالِ بررسی…</span>
     {% else %}<span class="badge {{'ok' if health.pot else 'warn'}}">{{'آنلاین' if health.pot else 'خطا'}}</span>{% endif %}</div>
 </div></div>
 <div class=card><h3>📦 صف و دیسک</h3><div class=rows>
@@ -1202,6 +1204,82 @@ async def _pill_ok(app: web.Application) -> bool:
         return False
 
 
+# ── سلامتِ pot-provider: هرگز روی مسیرِ درخواست ───────────────────────────
+# این چک تنها فراخوانیِ **شبکهٔ بیرونیِ** پنل است، و درجا داخلِ `_health` زده
+# می‌شد — یعنی داشبورد منتظرِ یک سرویسِ خارجی می‌ماند. اندازه‌گیری‌شده روی سورسِ
+# پیش از این تغییر، با سوکتی که accept می‌کند و هرگز جواب نمی‌دهد:
+#
+#   `/` (داشبورد) → ۳۱۵۱ ms   ·   `/health` → ۳۰۲۳ ms   ·   بدونِ pot → ۲۱ ms
+#
+# «گیرکرده» بدترین حالت است نه نادرترین: سرویسِ مرده اتصال را rejectمی‌کند و
+# سریع برمی‌گردد، ولی کانتینری که زنده است و پاسخ نمی‌دهد دقیقاً همان تایم‌اوتِ
+# ۳ ثانیه را خرج می‌کند — و صفحهٔ اولِ پنل جایی نیست که منتظرِ آن بمانیم.
+#
+# **کوتاه‌کردنِ تایم‌اوت رفع نیست، فقط عدد را کم می‌کند.** پس نتیجه کش می‌شود و
+# تازه‌سازی به **پس‌زمینه** می‌رود: مسیرِ درخواست همیشه صفر بایتِ شبکه دارد.
+#
+# دو کلید، نه یکی، و تفکیکشان باربر است: `fresh` (با TTL) می‌گوید «تازه
+# سنجیده‌ایم» و `last` (بی‌انقضا) آخرین نتیجهٔ **شناخته‌شده** را نگه می‌دارد. با
+# یک کلیدِ TTLدار، هر بار که کش می‌پرید صفحه «نامعلوم» می‌شد؛ با این دو، صفحه
+# آخرین چیزی را که می‌دانیم نشان می‌دهد و هم‌زمان در پس‌زمینه تازه می‌شود.
+_POT_FRESH_TTL = 30
+_POT_LAST = "potping:last"
+_POT_FRESH = "potping:fresh"
+_POT_TASK = "pot_refresh_task"
+#: «تنظیم شده ولی هنوز نسنجیده‌ایم» — با `None` («پیکربندی‌نشده») یکی نیست، و
+#: یکی‌کردنشان یعنی پنل در پنجرهٔ کوتاهِ پس از ری‌استارت **دروغِ** «پیکربندی‌نشده»
+#: می‌گوید دربارهٔ سرویسی که پیکربندی شده است.
+POT_UNKNOWN = "?"
+
+
+async def _pot_probe(url: str) -> bool:
+    """همان GETِ قبلی، با همان تایم‌اوت — فقط دیگر روی مسیرِ درخواست نیست."""
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:
+            async with s.get(url + "/ping") as resp:
+                return resp.status == 200  # 404/403 = خطا، نه «آنلاین»
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _pot_refresh(app: web.Application) -> None:
+    ok = await _pot_probe(settings.pot_provider_url)
+    try:
+        r: aioredis.Redis = app["redis"]
+        await r.set(_POT_LAST, "1" if ok else "0")
+        await r.set(_POT_FRESH, "1", ex=_POT_FRESH_TTL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _schedule_pot_refresh(app: web.Application) -> None:
+    """یک تازه‌سازیِ پس‌زمینه، و نه بیشتر.
+
+    ارجاعِ تسک روی `app` نگه داشته می‌شود نه رها: asyncio فقط ارجاعِ ضعیف نگه
+    می‌دارد و یک تسکِ بی‌ارجاع می‌تواند وسطِ کار جمع شود. همان ارجاع جلوی
+    انباشتِ تسک روی رفرشِ پیاپیِ صفحه را هم می‌گیرد.
+    """
+    task = app.get(_POT_TASK)
+    if task is not None and not task.done():
+        return
+    app[_POT_TASK] = asyncio.create_task(_pot_refresh(app))
+
+
+async def _pot_health(app: web.Application) -> bool | str | None:
+    """`None` = پیکربندی‌نشده · `POT_UNKNOWN` = هنوز نسنجیده · بولین = نتیجه."""
+    if not settings.pot_provider_url:
+        return None
+    try:
+        r: aioredis.Redis = app["redis"]
+        fresh = await r.get(_POT_FRESH)
+        last = await r.get(_POT_LAST)
+    except Exception:  # noqa: BLE001
+        return POT_UNKNOWN
+    if not fresh:
+        _schedule_pot_refresh(app)
+    return POT_UNKNOWN if last is None else last == "1"
+
+
 async def _health(app: web.Application) -> dict:
     r: aioredis.Redis = app["redis"]
     h: dict = {}
@@ -1240,15 +1318,7 @@ async def _health(app: web.Application) -> dict:
         h["disk_pct"] = round((du.total - du.free) / du.total * 100)
     except Exception:  # noqa: BLE001
         h["disk_total"] = 0
-    h["pot"] = None
-    if settings.pot_provider_url:
-        h["pot"] = False
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:
-                async with s.get(settings.pot_provider_url + "/ping") as resp:
-                    h["pot"] = resp.status == 200  # 404/403 = خطا، نه «آنلاین»
-        except Exception:  # noqa: BLE001
-            h["pot"] = False
+    h["pot"] = await _pot_health(app)
     # نسخهٔ موتورها که هر ورکرِ دانلود سرِ استارت گزارش کرده. اولین سؤال وقتی یک
     # پلتفرم «پاسخِ نامعتبر» می‌دهد: موتور عقب افتاده یا سشن مرده؟
     h["engines"] = []
@@ -2672,6 +2742,11 @@ async def _on_startup(app: web.Application) -> None:
 
 
 async def _on_cleanup(app: web.Application) -> None:
+    # تازه‌سازیِ pot در پس‌زمینه می‌دود؛ اگر لغو نشود از خودِ اپ عمر بیشتری
+    # می‌کند — همان انضباطی که keepaliveِ `dl_active` لازم دارد.
+    task = app.get(_POT_TASK)
+    if task is not None and not task.done():
+        task.cancel()
     try:
         await app["redis"].aclose()
     except Exception:  # noqa: BLE001
