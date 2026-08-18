@@ -379,3 +379,59 @@ def test_only_delete_account_open_codes_the_delete_sequence():
     assert not offenders, (
         "این‌ها باید `cookies.delete_account()` را صدا بزنند، نه دنبالهٔ حذف را "
         "دستی بنویسند:\n  " + "\n  ".join(offenders))
+
+
+# ── بنرِ نتیجهٔ پنل: یک پیاده‌سازی، نه چند کپیِ دست‌نویس ───────────
+#: نشانه‌های «این ریدایرکت دارد نتیجهٔ یک ذخیره را حمل می‌کند».
+_RESULT_MARKERS = ("ok=", "err=", "saved=")
+
+
+def _httpfound_arg_source(node: ast.Call, src: str) -> str:
+    """متنِ سورسِ آرگومانِ اولِ یک `HTTPFound(...)` — هر شکلی که نوشته شده باشد.
+
+    عمداً روی **سورس** کار می‌کند نه روی نوعِ گره: الحاقِ رشته‌ای، f-string و
+    ثابتِ ساده سه شکلِ متفاوتِ AST‌اند ولی یک اشتباهِ واحد، و فردا شکلِ چهارمی
+    نوشته می‌شود. `get_source_segment` هر سه (و چهارمی) را یکسان می‌بیند.
+    """
+    if not node.args:
+        return ""
+    return ast.get_source_segment(src, node.args[0]) or ""
+
+
+def test_the_panel_has_one_result_redirect():
+    """هیچ هندلری `ok=`/`err=` را دستی نسازد — همه از `_result()` رد شوند.
+
+    این گارد از ممیزیِ B-1 درآمد: `texts_save` مسیرِ خطا داشت و `buttons_save`
+    نداشت، پس یک ذخیرهٔ ردشده بنرِ **سبز** می‌داد. ناسازگاری بینِ دو صفحه بود،
+    نه محدودیتِ طراحی — و دقیقاً همان شکلی که §۷ برای `remove_cookie_file` ثبت
+    کرده: قاعده‌ای که در چند نقطه دست‌نویس شود واگرا می‌شود و هیچ نقطه‌ای
+    دیگری را خبر نمی‌کند.
+
+    **بدونِ فهرستِ استثنا** — به‌همین دلیل هر محلِ فراخوانی در همان کامیت
+    تبدیل شد. فهرستِ استثنا خودش همان `_KNOWN_UNREACHABLE`ی است که پوسید.
+    """
+    path = ROOT / "app" / "admin_web.py"
+    src = path.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    # بدنهٔ خودِ `_result` تنها جایی است که اجازه دارد؛ گره‌هایش را کنار بگذار.
+    allowed: set[int] = set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef) and fn.name == "_result":
+            allowed = {id(n) for n in ast.walk(fn)}
+    assert allowed, "تابعِ `_result` پیدا نشد — گارد بی‌هدف شده، نه اینکه پاس شده."
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or id(node) in allowed:
+            continue
+        f = node.func
+        name = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else ""
+        if name != "HTTPFound":
+            continue
+        arg = _httpfound_arg_source(node, src)
+        hits = [m for m in _RESULT_MARKERS if m in arg]
+        if hits:
+            offenders.append(f"admin_web.py:{node.lineno} → {arg}  ({'، '.join(hits)})")
+    assert not offenders, (
+        "این ریدایرکت‌ها باید از `_result(...)` رد شوند تا مسیرِ خطا یک‌جا بماند:\n  "
+        + "\n  ".join(offenders))

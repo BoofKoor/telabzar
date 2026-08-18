@@ -91,6 +91,9 @@ _HYG = "tests/test_repo_hygiene.py"
 _PAL = "tests/test_panel_path_is_alive.py"
 _CHR = "tests/panel/test_security_characterization.py"
 _SEC = "tests/panel/test_security_headers.py"
+_SVF = "tests/panel/test_save_failures.py"
+_SBD = "tests/test_settings_bounds.py"
+_UPD = "tests/test_upload_direction.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -1020,6 +1023,135 @@ CASES: list[dict] = [
      "new": '        nid = secrets.token_urlsafe(9)[:12]  # noqa',
      "target": _CHR,
      "expect": None},
+
+    # ── خوشهٔ شکستِ خاموش (B-1/B-3/B-4/B-5) ──
+    # گاردِ واگرایی: یک محلِ فراخوانی دوباره دستی نوشته شود.
+    {"name": "panel: a result redirect goes back to being hand-written",
+     "path": "app/admin_web.py",
+     "old": 'raise _result("/cookies", ok="del")',
+     "new": 'raise web.HTTPFound("/cookies?ok=del")',
+     "target": _HYG,
+     "expect": "test_the_panel_has_one_result_redirect"},
+
+    # B-1: متنِ ردشده دوباره به «حذفِ override» ترجمه شود (شکلِ پیش از رفع).
+    {"name": "buttons: a rejected label goes back to resetting the override",
+     "path": "app/admin_web.py",
+     "old": '            errors.append(f"«{default}»: {err}")',
+     "new": '            texts.append((key, None))',
+     "target": _SVF,
+     "expect": "test_a_rejected_label_does_not_delete_the_healthy_one"},
+
+    # B-1: خطا جمع شود ولی نادیده گرفته شود — ادعای گزارش‌دادن و اتمیک‌بودن را
+    # جدا از ادعای حذف می‌سنجد (این یکی overrideِ سالم را پاک **نمی‌کند**).
+    {"name": "buttons: the collected errors stop being reported",
+     "path": "app/admin_web.py",
+     "old": "    if errors:\n        # هیچ نوشتنی انجام نشده",
+     "new": "    if False:  # noqa\n        # هیچ نوشتنی انجام نشده",
+     "target": _SVF,
+     "expect": "test_a_rejected_label_is_reported_not_celebrated"},
+
+    # B-4: کفِ عددی برداشته شود.
+    {"name": "settings: the numeric floor stops being enforced",
+     "path": "app/settings_store.py",
+     "old": "        if n < lo:",
+     "new": "        if False:  # noqa",
+     "target": _SBD,
+     "expect": "test_a_negative_number_is_refused[max_file_mb]"},
+
+    # B-4: سقف برداشته شود.
+    {"name": "settings: the numeric ceiling stops being enforced",
+     "path": "app/settings_store.py",
+     "old": "        if hi is not None and n > hi:",
+     "new": "        if False:  # noqa",
+     "target": _SBD,
+     "expect": "test_a_percent_over_a_hundred_is_refused[safety_threshold]"},
+
+    # B-4: سقفِ حجم از سقفِ واقعیِ Bot API جدا شود — عدد باید به مستندش گره
+    # بخورد، وگرنه یک ثابتِ دستیِ دیگر است که می‌پوسد.
+    {"name": "settings: the upload ceiling drifts from the documented one",
+     "path": "app/settings_store.py",
+     "old": "_UPLOAD_CEILING_MB = 2000",
+     "new": "_UPLOAD_CEILING_MB = 20000",
+     "target": _SBD,
+     "expect": "test_the_upload_ceiling_matches_what_the_docs_state"},
+
+    # سقفِ آپلود دوباره روی یک کلیدِ سمتِ **دریافت** گذاشته شود — همان اشتباهی
+    # که نسخهٔ اولِ این کار کرد و شاهدِ تولید (۴۴ ردیفِ بالای ۲۰۰۰ مگ) ردش کرد.
+    {"name": "settings: the receive-side key gets an upload ceiling again",
+     "path": "app/settings_store.py",
+     "old": '    "dl_max_size_mb": (0, _UPLOAD_CEILING_MB),',
+     "new": ('    "max_file_mb": (0, _UPLOAD_CEILING_MB),\n'
+             '    "dl_max_size_mb": (0, _UPLOAD_CEILING_MB),'),
+     "target": _SBD,
+     "expect": "test_a_receive_side_limit_has_no_telegram_ceiling"},
+
+    # سند دوباره یک عدد را برای هر دو جهت بفروشد. پین‌کردنِ **عدد** به‌تنهایی
+    # این را نمی‌گیرد — به همین دلیل تست جهت را هم می‌سنجد.
+    {"name": "docs: the two directions collapse back into one number",
+     "path": "docs/telegram-api.md",
+     "old": "| **Download** (Telegram DC → our server) | **no size limit** |",
+     "new": "| Download (Telegram DC to our server) | up to 2000 MB |",
+     "target": _SBD,
+     "expect": "test_the_upload_ceiling_matches_what_the_docs_state"},
+
+    # مکانیزمِ تفکیک: اگر کارتِ فایلِ دریافتی هم بایت آپلود کند، کلِ استدلالِ
+    # «سمتِ دریافت سقف ندارد» می‌ریزد.
+    {"name": "cards: a received file starts uploading its bytes too",
+     "path": "app/cards.py",
+     "old": '    return FSInputFile(path, filename=file.name or "file") if path else file.file_id',
+     "new": '    return FSInputFile(path or "/dev/null", filename=file.name or "file")',
+     "target": _UPD,
+     "expect": "test_a_path_uploads_bytes_and_a_file_id_does_not"},
+
+    # B-3: پنل دیگر اعتبارسنجی را صدا نزند — ادعای «وصل است» جدا از ادعای
+    # «تابع درست است».
+    {"name": "settings: the panel stops calling the validator",
+     "path": "app/admin_web.py",
+     "old": "            err = settings_store.validate_value(k, val)",
+     "new": "            err = None",
+     "target": _SVF,
+     "expect": "test_an_invalid_setting_is_refused_not_swallowed[max_file_mb=-1-negative]"},
+
+    # B-3/B-4: مسیرِ تلگرام دوباره از قاعدهٔ مشترک جدا شود.
+    {"name": "settings: the telegram path stops sharing the rule",
+     "path": "app/routers/admin.py",
+     "old": '    return escape(settings_store.validate_value(key, value) or "") or None',
+     "new": "    return None",
+     "target": _SBD,
+     "expect": "test_the_telegram_path_refuses_what_the_panel_refuses[negative]"},
+
+    # **کنترلِ معکوس:** مرتب‌سازیِ حلقهٔ `/save` جزئیاتِ بی‌ربط است؛ اگر چیزی
+    # بیندازد یعنی تستی به ترتیبِ پیمایش چسبیده، نه به رفتار.
+    {"name": "settings: iterate the form in set order (must break nothing)",
+     "path": "app/admin_web.py",
+     "old": "    for k in sorted(rendered):",
+     "new": "    for k in rendered:",
+     "target": _SVF,
+     "expect": None},
+
+    # B-5: پنل دوباره نامِ فرم را نخواند (شکلِ پیش از رفع).
+    {"name": "nodes: the panel stops reading the name field",
+     "path": "app/admin_web.py",
+     "old": '    name = (form.get("name") or "").strip()[:node_mod.NAME_MAX]',
+     "new": '    name = ""',
+     "target": _SVF,
+     "expect": "test_the_node_name_the_admin_typed_is_the_one_that_sticks"},
+
+    # B-5: نام حمل شود ولی نودِ خودگزارش دوباره برنده شود.
+    {"name": "nodes: the node's own hostname wins again",
+     "path": "app/admin_web.py",
+     "old": '    chosen = (payload.get("name") or "").strip() or name',
+     "new": "    chosen = name",
+     "target": _SVF,
+     "expect": "test_the_node_name_the_admin_typed_is_the_one_that_sticks"},
+
+    # B-5: نقشِ نامعتبر دوباره بی‌صدا برگردد.
+    {"name": "nodes: an invalid role goes back to a silent redirect",
+     "path": "app/admin_web.py",
+     "old": 'raise _result("/nodes", err="نقشِ نامعتبر.")',
+     "new": 'raise web.HTTPFound("/nodes")',
+     "target": _SVF,
+     "expect": "test_an_invalid_role_says_so"},
 ]
 
 
