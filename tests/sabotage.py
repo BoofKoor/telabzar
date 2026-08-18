@@ -94,6 +94,8 @@ _SEC = "tests/panel/test_security_headers.py"
 _SVF = "tests/panel/test_save_failures.py"
 _SBD = "tests/test_settings_bounds.py"
 _UPD = "tests/test_upload_direction.py"
+_UPC = "tests/test_upload_ceiling.py"
+_SBH = "tests/test_sabotage_helper.py"
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -1070,8 +1072,8 @@ CASES: list[dict] = [
     # بخورد، وگرنه یک ثابتِ دستیِ دیگر است که می‌پوسد.
     {"name": "settings: the upload ceiling drifts from the documented one",
      "path": "app/settings_store.py",
-     "old": "_UPLOAD_CEILING_MB = 2000",
-     "new": "_UPLOAD_CEILING_MB = 20000",
+     "old": "UPLOAD_CEILING_MB = 2000",
+     "new": "UPLOAD_CEILING_MB = 20000",
      "target": _SBD,
      "expect": "test_the_upload_ceiling_matches_what_the_docs_state"},
 
@@ -1079,9 +1081,9 @@ CASES: list[dict] = [
     # که نسخهٔ اولِ این کار کرد و شاهدِ تولید (۴۴ ردیفِ بالای ۲۰۰۰ مگ) ردش کرد.
     {"name": "settings: the receive-side key gets an upload ceiling again",
      "path": "app/settings_store.py",
-     "old": '    "dl_max_size_mb": (0, _UPLOAD_CEILING_MB),',
-     "new": ('    "max_file_mb": (0, _UPLOAD_CEILING_MB),\n'
-             '    "dl_max_size_mb": (0, _UPLOAD_CEILING_MB),'),
+     "old": '    "dl_max_size_mb": (0, UPLOAD_CEILING_MB),',
+     "new": ('    "max_file_mb": (0, UPLOAD_CEILING_MB),\n'
+             '    "dl_max_size_mb": (0, UPLOAD_CEILING_MB),'),
      "target": _SBD,
      "expect": "test_a_receive_side_limit_has_no_telegram_ceiling"},
 
@@ -1129,6 +1131,141 @@ CASES: list[dict] = [
      "target": _SVF,
      "expect": None},
 
+    # ── پرتگاهِ آپلود: خروجیِ بالای سقف، پیش از آپلود ──────────────
+    # گیت اصلاً اجرا نشود — پرتگاه دقیقاً همان‌طور که بود برمی‌گردد.
+    {"name": "upload-cliff: the ceiling gate stops running",
+     "path": "app/tasks.py",
+     "old": "            oversize_mb = _too_big_to_send(_outgoing_paths(res))",
+     "new": "            oversize_mb = None",
+     "target": _UPC,
+     "expect": "test_an_oversized_output_is_refused_before_any_upload[path]"},
+
+    # شکلِ `spawn` از گیت بیفتد. تنها شاخه‌ای که ردیفِ `File` را **پیش از**
+    # آپلود commit می‌کند، پس افتادنش هم آپلود را برمی‌گرداند هم ردیفِ یتیم را.
+    {"name": "upload-cliff: the spawn shape drops out of the gate",
+     "path": "app/tasks.py",
+     "old": '    if res.get("spawn"):\n        out.append(res["spawn"]["path"])',
+     "new": '    if False:\n        out.append(res["spawn"]["path"])',
+     "target": _UPC,
+     "expect": "test_an_oversized_output_is_refused_before_any_upload[spawn]"},
+
+    # شکلِ `files` از گیت بیفتد. امروز عملاً غیرقابلِ‌رسیدن است
+    # (`max_extract_mb=500`)، و **دقیقاً به همین دلیل** مستعدترین شکل برای
+    # پوسیدنِ بی‌صداست — یعنی کیسی که بیش از همه لازم است ثبت شود.
+    {"name": "upload-cliff: the files shape drops out of the gate",
+     "path": "app/tasks.py",
+     "old": '    out.extend(res.get("files") or [])',
+     "new": "    out.extend([])",
+     "target": _UPC,
+     "expect": "test_an_oversized_output_is_refused_before_any_upload[files]"},
+
+    # مقایسه روی مگابایتِ گردشده به‌جای بایت — فایلِ ۲۰۰۰٫۴ مگی «۲۰۰۰» خوانده
+    # می‌شود و از گیت رد می‌شود.
+    {"name": "upload-cliff: the ceiling is compared in rounded megabytes",
+     "path": "app/tasks.py",
+     "old": "        if size > limit:",
+     "new": "        if round(size / 1024 / 1024) > settings_store.UPLOAD_CEILING_MB:",
+     "target": _UPC,
+     "expect": "test_the_ceiling_is_compared_in_bytes_not_rounded_megabytes"},
+
+    # جمع‌زدن به‌جای سنجشِ هر آیتم. شاخهٔ `files` هر فایل را جدا می‌فرستد، پس
+    # جمع، ده فایلِ ۳۰۰ مگی را به‌غلط رد می‌کند.
+    {"name": "upload-cliff: the items are summed instead of measured apart",
+     "path": "app/tasks.py",
+     "old": "        size = os.path.getsize(p)",
+     "new": "        size = sum(os.path.getsize(q) for q in paths if q and os.path.exists(q))",
+     "target": _UPC,
+     "expect": "test_every_item_is_measured_on_its_own_not_summed"},
+
+    # پیامِ عمومی به‌جای پیامِ اختصاصی — همان «پردازش ناموفق» که کاربر را
+    # نگرانِ ازدست‌رفتنِ فایل می‌کند.
+    {"name": "upload-cliff: the user gets the generic failure note again",
+     "path": "app/tasks.py",
+     "old": '                                    note=t(lang, "op_too_large", mb=oversize_mb, cap=cap),',
+     "new": '                                    note=t(lang, "failed"),',
+     "target": _UPC,
+     "expect": "test_the_user_is_told_the_size_the_cap_and_that_the_file_is_safe"},
+
+    # جزءِ سومِ پیام برداشته شود. دو عددِ اول بمانند و فقط اطمینان‌دادن برود —
+    # اگر این نیفتد یعنی تست فقط اعداد را می‌سنجد و مهم‌ترین جزء پین نشده.
+    {"name": "upload-cliff: the message stops saying the original is safe",
+     "path": "app/locales/fa.py",
+     "old": '        "✅ فایلِ اصلی دست‌نخورده است، همینی که روی این کارت می‌بینی. اول "',
+     "new": '        "✅ اول "',
+     "target": _UPC,
+     "expect": "test_the_user_is_told_the_size_the_cap_and_that_the_file_is_safe"},
+
+    # `job.error` دوباره حجم را حمل کند — هر ردِ حجمی یک کلیدِ یکتا در آمار.
+    {"name": "upload-cliff: the job error carries the varying size again",
+     "path": "app/tasks.py",
+     "old": '                job.error = f"output exceeds the {cap}MB upload limit"',
+     "new": '                job.error = f"output {oversize_mb}MB exceeds the {cap}MB upload limit"',
+     "target": _UPC,
+     "expect": "test_the_job_error_is_stable_so_the_panel_can_group_it"},
+
+    # شکلِ پنجم به `_do_op` اضافه شود بی‌آنکه کسی به گیت خبر بدهد.
+    {"name": "upload-cliff: a fifth result shape appears unnoticed",
+     "path": "app/tasks.py",
+     "old": '        return {"note_only": True, "label": t(lang, "cl_scan_clean")}',
+     "new": '        return {"note_only": True, "label": t(lang, "cl_scan_clean"), "attachment": None}',
+     "target": _UPC,
+     "expect": "test_no_new_result_shape_slips_past_the_ceiling_gate"},
+
+    # **کنترلِ معکوس:** ترتیبِ خواندنِ شکل‌ها در `_outgoing_paths` جزئیاتِ
+    # بی‌ربط است — `_too_big_to_send` «آیا چیزی از سقف رد می‌کند» را می‌پرسد،
+    # نه «کدام‌یک اول». اگر این چیزی بیندازد یعنی تستی به ترتیب چسبیده.
+    {"name": "upload-cliff: read the shapes in another order (must break nothing)",
+     "path": "app/tasks.py",
+     "old": '    out.extend(res.get("files") or [])\n    return out',
+     "new": '    out.extend(res.get("files") or [])\n    out.reverse()\n    return out',
+     "target": _UPC,
+     "expect": None},
+
+    # ── خودِ دفترچه: «اجرا نشد» نباید «نگرفت» خوانده شود ───────────
+    # این را همین کار پیدا کرد: موردِ پنلی از venvی بدونِ jinja2 صفر خطِ
+    # `FAILED` و ۳۱ خطِ `ERROR` داد و «نگرفت» گزارش شد — یعنی ابزارِ سنجش
+    # یک نتیجهٔ درست را غلط خواند، همان ردهٔ §۷.
+    # الگو عمداً **دو خطی** است: تک‌خطی‌اش دو بار در همین فایل پیدا می‌شود —
+    # یک‌بار در `_run_case` و یک‌بار داخلِ همین ورودیِ رجیستری. گاردِ `count`
+    # گرفتش، که خودش نمونهٔ زندهٔ همان چیزی است که برایش ساخته شده.
+    {"name": "notebook: a target that cannot run is read as 'not caught' again",
+     "path": "tests/sabotage.py",
+     "old": '    errored = [ln for ln in summary if ln.startswith("ERROR")]\n    if errored:',
+     "new": "    errored = []\n    if errored:",
+     "target": _SBH,
+     "expect": "test_a_target_that_cannot_even_run_is_not_reported_as_not_caught"},
+
+    # و نیمهٔ دومش: کنترلِ معکوسی که روی هدفِ خالی سبز می‌شد.
+    {"name": "notebook: an empty run passes as a clean reverse control again",
+     "path": "tests/sabotage.py",
+     "old": ('    if any(ln.startswith("no tests ran") for ln in lines):\n'
+             '        return False, "هیچ تستی'),
+     "new": '    if False:\n        return False, "هیچ تستی',
+     "target": _SBH,
+     "expect": "test_an_empty_run_is_not_reported_as_a_clean_reverse_control"},
+
+    # و نیمهٔ سوم، که خودِ همین اجرا پیدایش کرد: تطبیقِ زیررشته‌ای به‌جای
+    # ابتدای خط، یک اجرای سالم را «هدف خالی بود» می‌خواند — چون تستی که این
+    # عبارت را ورودی می‌دهد، آن را در تریس‌بک چاپ می‌کند.
+    {"name": "notebook: the empty-run check goes back to substring matching",
+     "path": "tests/sabotage.py",
+     "old": '    if any(ln.startswith("no tests ran") for ln in lines):\n        return False, "هیچ تستی',
+     "new": '    if "no tests ran" in r.stdout:\n        return False, "هیچ تستی',
+     "target": _SBH,
+     "expect": "test_the_empty_run_check_does_not_fire_on_test_content"},
+
+    # و نیمهٔ چهارم، که اجرای کاملِ دفترچه پیدایش کرد: خواندنِ کلِ stdout
+    # به‌جای بخشِ خلاصه. لاگِ خودِ تست هم می‌تواند با `ERROR` شروع شود، پس سه
+    # اجرای **سالم** «هدف اجرا نشد» خوانده شدند.
+    {"name": "notebook: the summary section stops bounding the scan",
+     "path": "tests/sabotage.py",
+     "old": ('    head = next((i for i, ln in enumerate(lines) if "short test summary info" in ln), None)\n'
+             "    summary = lines[head + 1:] if head is not None else []"),
+     "new": ('    head = next((i for i, ln in enumerate(lines) if "short test summary info" in ln), None)\n'
+             "    summary = lines"),
+     "target": _SBH,
+     "expect": "test_a_log_line_starting_with_error_is_not_a_collection_error"},
+
     # B-5: پنل دوباره نامِ فرم را نخواند (شکلِ پیش از رفع).
     {"name": "nodes: the panel stops reading the name field",
      "path": "app/admin_web.py",
@@ -1163,8 +1300,39 @@ def _run_case(case: dict) -> tuple[bool, str]:
         r = subprocess.run([sys.executable, "-m", "pytest", case["target"], "-q",
                             "--no-header", "-p", "no:cacheprovider"],
                            capture_output=True, text=True)
+    lines = r.stdout.splitlines()
+    # فقط **بخشِ خلاصهٔ خودِ pytest** خوانده می‌شود، نه هر جای stdout. این قید
+    # با اجرا آمد نه با احتیاط: خطِ لاگِ یک تست هم می‌تواند با `ERROR` شروع شود
+    # (`ERROR    telabzar.dl:tasks_download.py:201 cookieless attempt on …`)،
+    # پس تطبیقِ ابتدای خط سه اجرای کاملاً **سالم** را «هدف اجرا نشد» خواند.
+    # قاعدهٔ عام: هارنسی که خروجیِ یک رانرِ دیگر را طبقه‌بندی می‌کند باید به
+    # **گرامرِ خلاصهٔ همان رانر** گره بخورد، نه به متنی که می‌تواند از payload
+    # آمده باشد. خلاصه با `short test summary info` شروع می‌شود و اگر اصلاً
+    # چاپ نشده باشد یعنی نه شکستی بوده نه خطایی.
+    head = next((i for i, ln in enumerate(lines) if "short test summary info" in ln), None)
+    summary = lines[head + 1:] if head is not None else []
+
+    # **اجرا نشدن با نگرفتن یکی نیست، و از بیرون یکی به‌نظر می‌رسند.** فقط
+    # خطوطِ `FAILED` خوانده می‌شدند، پس هدفی که سرِ collect می‌ترکید (وابستگیِ
+    # غایب — مثلاً موردی که به `tests/panel/` اشاره می‌کند و از venvی بدونِ
+    # jinja2/cryptography اجرا شود) صفر `FAILED` می‌داد و «نگرفت» گزارش
+    # می‌شد. یعنی دقیقاً همان برداشتی که §۷ می‌گوید باعث می‌شود کسی یک تستِ
+    # سالم را ضعیف بخواند و پاکش کند. حالا این حالت **سومی** است، نه «نگرفت».
+    errored = [ln for ln in summary if ln.startswith("ERROR")]
+    if errored:
+        return False, (
+            f"هدف اجرا نشد: {len(errored)} خطای collect. نتیجه **بی‌اعتبار** است، "
+            f"نه «نگرفت». اولی: {errored[0][:120]}\n"
+            f"      (موردهای `tests/panel/` را با venvی اجرا کن که "
+            f"requirements-admin.txt هم نصب دارد.)")
+    # همین‌طور «هیچ تستی اجرا نشد»: نسخهٔ اولش زیررشته‌ای بود و با متنِ خودِ
+    # تست‌ها برخورد می‌کرد — تستی که این عبارت را **ورودی** می‌دهد، در
+    # تریس‌بکِ pytest چاپش می‌کند. خطِ خلاصهٔ واقعی همیشه ابتدای خط است.
+    if any(ln.startswith("no tests ran") for ln in lines):
+        return False, "هیچ تستی اجرا نشد — هدف یا الگو عوض شده؛ نتیجه بی‌اعتبار است."
+
     failed = {ln.split("::")[-1].split(" ")[0]
-              for ln in r.stdout.splitlines() if ln.startswith("FAILED")}
+              for ln in summary if ln.startswith("FAILED")}
     want = case["expect"]
     if want is None:
         return (not failed), f"expected no failure, got {sorted(failed) or 'none'}"

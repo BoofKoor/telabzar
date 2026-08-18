@@ -35,7 +35,7 @@ _UPLOAD_SIDE = ["dl_max_size_mb", "dl_direct_max_mb", "vjoin_max_mb",
 def test_a_size_over_the_upload_ceiling_is_refused(key):
     """سقف از سقفِ **آپلودِ** Bot API می‌آید، نه از سلیقه."""
     assert ss.validate_value(key, "2001") is not None
-    assert ss.validate_value(key, str(ss._UPLOAD_CEILING_MB)) is None   # کنترلِ مرز
+    assert ss.validate_value(key, str(ss.UPLOAD_CEILING_MB)) is None   # کنترلِ مرز
 
 
 def test_a_receive_side_limit_has_no_telegram_ceiling():
@@ -55,7 +55,7 @@ def test_a_receive_side_limit_has_no_telegram_ceiling():
 def test_the_upload_ceiling_matches_what_the_docs_state():
     """کران باید به همان عددی گره بخورد که `docs/telegram-api.md` اعلام می‌کند.
 
-    بدونِ این، `_UPLOAD_CEILING_MB` یک ثابتِ دستی است که از مستندش جدا می‌افتد —
+    بدونِ این، `UPLOAD_CEILING_MB` یک ثابتِ دستی است که از مستندش جدا می‌افتد —
     همان پوسیدگی‌ای که §۷ برای `_KNOWN_UNREACHABLE` ثبت کرده.
 
     **و پین‌کردنِ عدد به‌تنهایی کافی نیست.** نسخهٔ اولِ همین تست فقط دنبالِ
@@ -67,8 +67,8 @@ def test_the_upload_ceiling_matches_what_the_docs_state():
     import pathlib
     doc = (pathlib.Path(__file__).resolve().parent.parent
            / "docs" / "telegram-api.md").read_text(encoding="utf-8")
-    assert f"{ss._UPLOAD_CEILING_MB} MB" in doc, (
-        f"سقفِ {ss._UPLOAD_CEILING_MB} در docs/telegram-api.md پیدا نشد")
+    assert f"{ss.UPLOAD_CEILING_MB} MB" in doc, (
+        f"سقفِ {ss.UPLOAD_CEILING_MB} در docs/telegram-api.md پیدا نشد")
     low = doc.lower()
     assert "no size limit" in low, "سند باید بگوید دانلود سقفِ حجم ندارد"
     assert "**download**" in low and "**upload**" in low, (

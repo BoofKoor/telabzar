@@ -31,8 +31,11 @@ _METHOD_MODEL = {
     "send_photo": methods.SendPhoto,
     "send_document": methods.SendDocument,
     "send_video": methods.SendVideo,
+    "send_audio": methods.SendAudio,
+    "send_animation": methods.SendAnimation,
     "edit_message_text": methods.EditMessageText,
     "edit_message_caption": methods.EditMessageCaption,
+    "edit_message_media": methods.EditMessageMedia,
     "delete_message": methods.DeleteMessage,
     "answer_callback_query": methods.AnswerCallbackQuery,
 }
@@ -81,3 +84,25 @@ class ValidatingBot:
 
     async def delete_message(self, *a, **kw):
         return self._on("delete_message", bind_like_aiogram("delete_message", a, kw))
+
+    # ── متدهایی که می‌توانند بایت حمل کنند ────────────────────────
+    # تریپ‌وایرِ «هیچ آپلودی انجام نشد» فقط وقتی معنا دارد که خودِ فراخوانی هم
+    # مثلِ تولید اعتبارسنجی شود؛ وگرنه یک فراخوانیِ بدشکل این‌جا بی‌صدا ثبت
+    # می‌شود و همان درسِ `edit_message_text` دوباره تکرار.
+    async def send_document(self, *a, **kw):
+        return self._on("send_document", bind_like_aiogram("send_document", a, kw))
+
+    async def send_photo(self, *a, **kw):
+        return self._on("send_photo", bind_like_aiogram("send_photo", a, kw))
+
+    async def send_video(self, *a, **kw):
+        return self._on("send_video", bind_like_aiogram("send_video", a, kw))
+
+    async def send_audio(self, *a, **kw):
+        return self._on("send_audio", bind_like_aiogram("send_audio", a, kw))
+
+    async def send_animation(self, *a, **kw):
+        return self._on("send_animation", bind_like_aiogram("send_animation", a, kw))
+
+    async def edit_message_media(self, *a, **kw):
+        return self._on("edit_message_media", bind_like_aiogram("edit_message_media", a, kw))

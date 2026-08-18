@@ -85,6 +85,51 @@ def _fail_note(lang: str, exc: Exception) -> str:
     return note
 
 
+#: کلیدهای نتیجهٔ `_do_op` که بایتِ تازه‌ای به تلگرام می‌فرستند. هر کلیدِ دیگری
+#: (`editor`, `message`, `note_only`) فقط متن است و آپلودی ندارد.
+_BYTE_KEYS = ("path", "spawn", "send_media", "files")
+
+
+def _outgoing_paths(res: dict[str, Any]) -> list[str]:
+    """مسیرهایی که این نتیجه قرار است به‌عنوان **بایت** بفرستد.
+
+    تنها جایی که «کدام شکلِ خروجی آپلود می‌شود» نوشته شده. شکلِ تازه‌ای که به
+    `_do_op` اضافه شود و این‌جا خوانده نشود، از گیتِ حجم رد می‌شود — برای همین
+    مجموعهٔ شکل‌ها با یک تستِ کشف‌محور پین شده (`tests/test_upload_ceiling.py`)
+    و افزودنِ شکلِ پنجم آن تست را قرمز می‌کند.
+    """
+    out: list[str] = []
+    if res.get("path"):
+        out.append(res["path"])
+    if res.get("spawn"):
+        out.append(res["spawn"]["path"])
+    if res.get("send_media"):
+        out.append(res["send_media"]["path"])
+    out.extend(res.get("files") or [])
+    return out
+
+
+def _too_big_to_send(paths: list[str]) -> int | None:
+    """حجمِ اولین خروجی‌ای که از سقفِ آپلود رد می‌کند (مگابایت)، وگرنه `None`.
+
+    سقف **سیاست نیست، حدِ پلتفرم است** — سرورِ محلیِ Bot API دانلود را بی‌سقف
+    می‌کند ولی آپلود را تا `UPLOAD_CEILING_MB` (`docs/telegram-api.md`). پس نه
+    کلیدِ تنظیمات دارد و نه ادمین می‌تواند خاموشش کند؛ خاموش‌کردنش صرفاً یعنی
+    برگشتن به شکستِ بعد از کار.
+    مقایسه روی **بایت** است و گرد کردن فقط برای نمایش، وگرنه فایلِ دقیقاً روی
+    مرز به گردکردن باج می‌دهد. هر آیتم جدا سنجیده می‌شود نه مجموع، چون شاخهٔ
+    `files` هر فایل را با یک `send_document`ِ مستقل می‌فرستد.
+    """
+    limit = settings_store.UPLOAD_CEILING_MB * 1024 * 1024
+    for p in paths:
+        if not p or not os.path.exists(p):
+            continue
+        size = os.path.getsize(p)
+        if size > limit:
+            return round(size / 1024 / 1024)
+    return None
+
+
 async def _refresh_media_meta(file: File, path: str) -> None:
     """ابعاد/مدتِ رکوردِ File را از **خروجیِ تازه** بازخوانی کن.
 
@@ -596,7 +641,40 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             job.error = str(exc)[:500]
             await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
         else:
-            if res.get("spawn") is not None:
+            # ── پرتگاهِ آپلود ────────────────────────────────────────────
+            # دریافت سقف ندارد (سرورِ محلیِ Bot API) ولی آپلود دارد، پس عملیاتی
+            # که خروجیِ تازه می‌سازد می‌تواند کارش را **تمام کند** و بعد سرِ
+            # ارسال بشکند: کاربر منتظر مانده، CPU و دیسک خرج شده، و چیزی که
+            # می‌گیرد یک خطای خامِ انگلیسی است.
+            #
+            # گیت عمداً **یکی** است و پیش از کلِ زنجیرهٔ تحویل می‌نشیند، نه چهار
+            # چکِ پراکنده در چهار شاخه. سه چیز را رایگان می‌دهد که نسخهٔ پراکنده
+            # نمی‌داد: پیش از دست‌خوردنِ فیلدهای `file` اجرا می‌شود (پس rollback
+            # لازم ندارد)، پیش از `session.add(newf)`ِ شاخهٔ spawn (پس ردیفِ
+            # یتیمِ `files` با `file_id=""` ساخته نمی‌شود)، و یک نقطهٔ واحد برای
+            # گارد.
+            #
+            # چرا بعد از تولید و نه پیش از آن: رابطهٔ ورودی→خروجی به op بستگی
+            # دارد. `compress` کوچک می‌کند، `convert` می‌تواند **بزرگ** کند،
+            # `rename` عیناً همان حجم را می‌دهد. تنها عددِ قطعی روی دیسک است.
+            oversize_mb = _too_big_to_send(_outgoing_paths(res))
+            if oversize_mb is not None:
+                cap = settings_store.UPLOAD_CEILING_MB
+                log.warning("job %s output %sMB exceeds the %sMB upload ceiling",
+                            job_id, oversize_mb, cap)
+                job.status = "failed"
+                # عمداً **بدونِ** حجمِ خروجی: صفحهٔ آمار خطاها را با متنِ دقیقشان
+                # گروه می‌کند (`admin_web`, حلقهٔ `err_rows`)، پس عددِ متغیر یعنی
+                # هر ردِ حجمی یک کلیدِ یکتا با شمارِ ۱ — و این کلاس هرگز در
+                # «پرتکرارترین خطاها» بالا نمی‌آید. عدد آن‌جایی می‌ماند که به
+                # آن نیاز است: پیامِ کاربر و خطِ لاگ (که job_id هم دارد).
+                job.error = f"output exceeds the {cap}MB upload limit"
+                # `file` دست‌نخورده است (هیچ فیلدی هنوز عوض نشده) و changelog هم
+                # چیزی ادعا نمی‌کند — کارت همان فایلِ اصلی را نگه می‌دارد.
+                await set_card_note(bot, chat_id, card_mid, file, lang,
+                                    note=t(lang, "op_too_large", mb=oversize_mb, cap=cap),
+                                    keyboard=True)
+            elif res.get("spawn") is not None:
                 # عملیاتی که یک فایلِ جدید می‌زاید (استخراجِ صدا) → کارتِ مستقلِ جدید
                 sp = res["spawn"]
                 p = sp["path"]

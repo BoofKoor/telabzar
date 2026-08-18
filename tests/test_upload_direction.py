@@ -125,7 +125,7 @@ def test_the_receive_side_key_is_only_read_where_it_gates_an_op():
 ])
 def test_every_upload_capped_key_is_read_where_bytes_are_produced(key, where):
     assert where in _reader_files(key), f"{key} دیگر در {where} خوانده نمی‌شود"
-    assert key in ss.BOUNDS and ss.BOUNDS[key][1] == ss._UPLOAD_CEILING_MB
+    assert key in ss.BOUNDS and ss.BOUNDS[key][1] == ss.UPLOAD_CEILING_MB
 
 
 def test_the_download_engines_deliver_by_uploading_a_path():

@@ -141,7 +141,13 @@ _RENAMED: dict[str, str] = {
 #: شاهدِ تولید که این را قطعی کرد: جدولِ `files` چهل‌وچهار ردیفِ بالای ۲۰۰۰
 #: مگابایت دارد و بزرگ‌ترین ۳۹۱۲ مگابایت است — مسیری که یک سقفِ ۲۰۰۰ روی
 #: `max_file_mb` می‌بست، امروز کار می‌کند.
-_UPLOAD_CEILING_MB = 2000
+#:
+#: **نامش عمداً عمومی است.** دو مصرف‌کننده دارد و هر دو همین یک عدد را می‌خواهند:
+#: `BOUNDS` (سقفِ چیزی که ادمین اجازه دارد تنظیم کند) و `tasks._too_big_to_send`
+#: (سقفِ فیزیکیِ خروجیِ یک عملیات، پیش از آپلود). زیرخط یعنی «مالِ من»، و نفرِ
+#: بعد به‌جای رسیدن به این نام عددِ ۲۰۰۰ را در ماژولِ خودش می‌نویسد — همان دو
+#: کپیِ دست‌نویسی که §۷ بارها ثبت کرده واگرا می‌شوند.
+UPLOAD_CEILING_MB = 2000
 
 #: کرانِ مقادیرِ عددی: کلید → (کف, سقف)؛ `None` یعنی بی‌کران در آن جهت.
 #:
@@ -170,13 +176,13 @@ BOUNDS: dict[str, tuple[int, int | None]] = {
     #                           فایلی کار می‌کند که از قبل کارت شده.
     #   compress_tiny_target_mb `tasks.py` → `P.compress_video_tiny(target_mb=)`
     #                           — هدفِ حجمِ **خروجی**.
-    "dl_max_size_mb": (0, _UPLOAD_CEILING_MB),
-    "dl_direct_max_mb": (0, _UPLOAD_CEILING_MB),
-    "compress_tiny_target_mb": (0, _UPLOAD_CEILING_MB),
+    "dl_max_size_mb": (0, UPLOAD_CEILING_MB),
+    "dl_direct_max_mb": (0, UPLOAD_CEILING_MB),
+    "compress_tiny_target_mb": (0, UPLOAD_CEILING_MB),
     # مجموعِ حجمِ **ورودی‌های** چسباندن (`ops.py:_vjoin_cap_mb` → مقایسه با
     # `sum(m["size"])`). خروجیِ concat تقریباً همان مجموع است و آپلود می‌شود،
     # پس سقف درست‌جهت است — ولی یک **پروکسی** است نه اندازه‌گیریِ خروجی.
-    "vjoin_max_mb": (0, _UPLOAD_CEILING_MB),
+    "vjoin_max_mb": (0, UPLOAD_CEILING_MB),
     # ── `max_file_mb` عمداً سقف ندارد ──
     # تنها خواننده‌اش `ops.py:_max_mb()` است و تنها مصرفش `_too_large()`، یعنی
     # «آیا روی این فایلِ **از قبل دریافت‌شده** عملیات اجرا شود؟». نه intake چیزی
