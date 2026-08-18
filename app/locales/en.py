@@ -37,6 +37,14 @@ MESSAGES: dict[str, str] = {
     "processing": "Processing… ⚙️",
     "done": "✓ Done — need another action?",
     "failed": "❌ Processing failed. Please try again.",
+    # Three parts, and the third matters most: someone who waited a quarter of
+    # an hour and got an error assumes their file is gone.
+    "op_too_large": (
+        "⚠️ The job finished, but the result came out at {mb}MB — over "
+        "Telegram's {cap}MB send limit, so I couldn't deliver it.\n\n"
+        "✅ Your original file is untouched; it's the one on this card. Shrink "
+        "it first (compress it, or trim a shorter section), then run this again."
+    ),
     "ask_new_name": "Send the new file name ✍️",
     "choose_format": "Choose the target format:",
     "too_large": "This file exceeds the limit ({mb}MB).",
