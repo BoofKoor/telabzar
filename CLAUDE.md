@@ -293,6 +293,30 @@ and once in the `CASES` literal a few hundred lines below. `count=1` caught it i
 the same self-reference that once made an AST guard match its own docstring. The fix is a
 **two-line** pattern: the registry's copy stores `\n` as an escape, so only the real source carries
 an actual newline and the anchor becomes unique.
+
+**Every guard that scans text will eventually scan its own explanation of itself — three instances
+now, in three different languages, and the general rule is worth more than any of them.** A guard
+reads a file looking for evidence; prose *about* that evidence lives in the same file; so unless the
+guard strips the commentary first, the guard's own documentation becomes the thing it counts.
+Measured instances: `test_the_7z_gate_is_not_dead_weight` was a regex and matched the `@needs_7z`
+written inside its **own docstring**, so removing the real decorator still passed; the same shape
+recurred on a second AST guard; and on 2026-08-18 the panel's CSS-class guard read `.err` out of the
+**Persian comment** written directly above the `.err` rule, because CSS comments ship inside
+`<style>` and the checker was scanning raw stylesheet text. Note the third one is *not* a Python
+problem — which is precisely why "use AST instead of regex" is the wrong lesson to draw. The right
+one is about the input: **whatever language a guard scans, its input must be stripped of that
+language's "text about code" — docstrings and comments for Python, `/* … */` for CSS, `{# … #}` for
+Jinja, `<!-- … -->` for HTML — before a single pattern is applied.** AST parsing happens to satisfy
+this for Python by accident (it hands you a tree, not the source text), which is why the first two
+fixes looked like they were about parsers.
+The failure mode is what makes this expensive rather than merely untidy: a self-matching guard is
+**silently permanent-green**, and its sabotage reports "not caught" — indistinguishable from a weak
+assertion, which is exactly the reading that gets a good guard deleted. So the negative control must
+test the self-reference directly, not the feature: feed the checker a payload whose only mention of
+the forbidden thing is inside a comment, and assert it is still reported missing
+(`test_a_class_named_only_inside_a_css_comment_does_not_count`). A control that merely proves "the
+checker can fail" does not cover this — the checker *can* fail; it just cannot fail on the one input
+that its own source guarantees exists.
 **A killed notebook run leaves the source patched, and every later measurement is then taken on a
 corrupted tree.** §7 already says not to read `git status` *while* the notebook runs; this is the
 harder version and it was learned by doing it. The first full replay of 2026-08-18 was started
