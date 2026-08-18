@@ -99,6 +99,19 @@ _SBD = "tests/test_settings_bounds.py"
 _UPD = "tests/test_upload_direction.py"
 _UPC = "tests/test_upload_ceiling.py"
 _SBH = "tests/test_sabotage_helper.py"
+_PCC = "tests/panel/test_panel_css_classes.py"
+_CSB = "tests/panel/test_cookie_status_badges.py"
+_SKC = "tests/panel/test_settings_key_coverage.py"
+_SCL = "tests/panel/test_scope_labels.py"
+
+# «گروهِ خودکار را بردار» — یک خرابکاری با **سه** ادعای متفاوت، پس یک‌بار
+# تعریف می‌شود. دو تا باید بیفتند و یکی عمداً **نباید**، که کلِ نکته است:
+# شش ردیفِ دست‌نویس پوشش را نگه می‌دارند، ولی دوام از این گروه می‌آید.
+_AUTO_GROUP_PATCH = {
+    "path": "app/admin_web.py",
+    "old": "    return [*GROUPS, (_AUTO_GROUP, leftover)] if leftover else list(GROUPS)",
+    "new": "    return list(GROUPS)",
+}
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
 # ادعای مستقل، پس به‌جای سه‌بار نوشتنِ همین رشته‌ها یک‌بار تعریف می‌شود —
@@ -1505,6 +1518,151 @@ CASES: list[dict] = [
      "new": "    pass",
      "target": _LRL,
      "expect": "test_the_clock_fixture_really_drives_redis_expiry"},
+
+    # ── باگ ۱: بجِ بی‌رنگ در /cookies ──────────────────────────────────────
+    # همان خرابکاری، دو هدف: یکی ادعای مشخصِ محصولی («بجِ باطل رنگ دارد») و
+    # یکی گاردِ کشف‌محور. هر دو لازم‌اند — گارد کلاسِ مردهٔ **بعدی** را می‌گیرد
+    # ولی نمی‌گوید قاعده‌اش واقعاً رنگ می‌دهد یا فقط `display:inline` است.
+    {"name": "cookies: the danger badge has no rule again (product claim)",
+     "path": "app/admin_web.py",
+     "old": ".err{background:#fef2f2;color:#b91c1c}",
+     "new": ".ignored-by-nobody{color:red}",
+     "target": _CSB,
+     "expect": "test_the_invalid_badge_is_actually_painted"},
+
+    {"name": "cookies: the danger badge has no rule again (discovery guard)",
+     "path": "app/admin_web.py",
+     "old": ".err{background:#fef2f2;color:#b91c1c}",
+     "new": ".ignored-by-nobody{color:red}",
+     "target": _PCC,
+     "expect": "test_every_class_a_page_renders_has_a_rule[/cookies]"},
+
+    # گاردِ خودش یک‌بار کور بود و «نگرفت» گزارش داد در حالی که خرابکاری کاملاً
+    # اعمال شده بود: کامنتِ CSS داخلِ `<style>` ارسال می‌شود و چک، نامِ کلاسی
+    # را که فقط در **نثرِ** کامنت آمده «تعریف‌شده» می‌خواند. ردهٔ سومِ §۶ —
+    # ابزارِ سنجش نتیجهٔ درست را غلط می‌خواند. این مورد رفعِ همان را قفل می‌کند.
+    {"name": "cookies: the class checker counts CSS comments as rules again",
+     "path": _PCC,
+     "old": '    return _CSS_COMMENT.sub(" ", "\\n".join(_STYLE_BLOCK.findall(html)))',
+     "new": '    return "\\n".join(_STYLE_BLOCK.findall(html))',
+     "target": _PCC,
+     "expect": "test_a_class_named_only_inside_a_css_comment_does_not_count"},
+
+    {"name": "cookies: a disabled account goes back to the undefined `mute`",
+     "path": "app/admin_web.py",
+     "old": "ck_pool.COOLDOWN: \"warn\", ck_pool.DISABLED: \"dim\",",
+     "new": "ck_pool.COOLDOWN: \"warn\", ck_pool.DISABLED: \"mute\",",
+     "target": _CSB,
+     "expect": "test_a_deliberately_disabled_account_is_grey"},
+
+    # «حالتِ ناشناخته بی‌صدا شبیهِ حالتِ عادی دیده می‌شود» — یکی‌کردنِ پیش‌فرض
+    # با `dim` کلاسِ تعریف‌شده‌ای می‌دهد (پس گاردِ کشف‌محور ساکت می‌ماند) و
+    # فقط این تست تفاوتِ معنا را می‌گیرد.
+    {"name": "cookies: an unknown status is painted like a deliberate one",
+     "path": "app/admin_web.py",
+     "old": '_BADGE_UNKNOWN = "unk"',
+     "new": '_BADGE_UNKNOWN = "dim"',
+     "target": _CSB,
+     "expect": "test_an_unknown_status_does_not_look_like_a_deliberate_one"},
+
+    {"name": "cookies: the unproven dot loses its rule",
+     "path": "app/admin_web.py",
+     "old": ".s-unproven{background:#f59e0b}",
+     "new": ".s-unproven-typo{background:#f59e0b}",
+     "target": _CSB,
+     "expect": "test_the_unproven_status_dot_is_visible"},
+
+    # ── باگ ۲: کلیدهای غایبِ صفحهٔ تنظیمات ─────────────────────────────────
+    # سه مورد با **یک** خرابکاری. دو تای اول باید بیفتند و سومی عمداً نه:
+    # با برداشتنِ گروهِ خودکار، شش ردیفِ دست‌نویس هنوز پوشش را کامل نگه
+    # می‌دارند، پس «هر کلید ورودی دارد» سبز می‌ماند — و دقیقاً همین نشان
+    # می‌دهد که دوام از آن گروه می‌آید نه از فهرست.
+    {**_AUTO_GROUP_PATCH,
+     "name": "settings: a brand-new runtime key has nowhere to be rendered",
+     "target": _SKC,
+     "expect": "test_a_brand_new_runtime_key_shows_up_without_touching_the_panel"},
+
+    {**_AUTO_GROUP_PATCH,
+     "name": "settings: the auto row stops nagging for a label",
+     "target": _SKC,
+     "expect": "test_the_auto_row_says_it_needs_a_label"},
+
+    {**_AUTO_GROUP_PATCH,
+     "name": "settings: … and today's coverage is unaffected (reverse control)",
+     "target": _SKC + "::test_every_runtime_key_has_an_input_on_the_settings_page",
+     "expect": None},
+
+    # صفحه از `_setting_groups()` رندر می‌شود ولی `save()` از `GROUPS`ِ خام —
+    # ردیفِ خودکار دیده می‌شود و مقدارش بی‌صدا دور ریخته می‌شود، یعنی همان
+    # «بنرِ سبز روی کاری که انجام نشد».
+    {"name": "settings: save() reads a different list than the page rendered",
+     "path": "app/admin_web.py",
+     "old": "    rendered = {key for _title, fields in _setting_groups() "
+            "for key, _l, _h in fields}",
+     "new": "    rendered = {key for _title, fields in GROUPS for key, _l, _h in fields}",
+     "target": _SKC,
+     "expect": "test_a_value_typed_into_an_auto_rendered_row_actually_saves"},
+
+    # برداشتنِ یکی از شش ردیفِ دست‌نویس: گروهِ خودکار جذبش می‌کند، پس پوشش
+    # نمی‌شکند — ولی کنترلِ «امروز همه برچسب دارند» می‌افتد. اثباتِ اینکه آن
+    # کنترل زنده است و ردیف‌های دستی واقعاً کار می‌کنند.
+    {"name": "settings: proxy_url loses its hand-written row",
+     "path": "app/admin_web.py",
+     "old": '        ("proxy_url", "خروجیِ شبکه (PROXY_URL)",',
+     "new": '        ("dl_direct_enabled", "تکراری — جای proxy_url",',
+     "target": _SKC,
+     "expect": "test_the_auto_group_is_absent_when_every_key_has_a_label"},
+
+    # ── باگ ۳: برچسبِ دامنه ────────────────────────────────────────────────
+    {"name": "stats: the ops KPI goes back to the unqualified label",
+     "path": "app/admin_web.py",
+     "old": "  <div class=b><em>عملیات روی فایل</em><strong>{{s.ops}}</strong>",
+     "new": "  <div class=b><em>عملیات</em><strong>{{s.ops}}</strong>",
+     "target": _SCL,
+     "expect": "test_the_operations_kpi_states_its_scope"},
+
+    {"name": "stats: the jobs-backed cards lose their tag",
+     "path": "app/admin_web.py",
+     "old": "<h3>⚙️ پرکاربردترین عملیات <span class=tag>بدونِ دانلود</span></h3>",
+     "new": "<h3>⚙️ پرکاربردترین عملیات</h3>",
+     "target": _SCL,
+     "expect": "test_the_jobs_backed_cards_are_tagged"},
+
+    {"name": "stats: the explainer block disappears",
+     "path": "app/admin_web.py",
+     "old": "<b>دانلودها در این عددها نیستند</b>",
+     "new": "<b>و بس</b>",
+     "target": _SCL,
+     "expect": "test_the_stats_page_says_which_numbers_exclude_downloads"},
+
+    # کنترلِ معکوس: تستِ برچسب نباید «رشته هرجای صفحه باشد» را بسنجد. اگر یک
+    # کارتِ files-محور — که دانلودها را **دارد** — همان برچسب را بگیرد، باید
+    # بیفتد؛ وگرنه «همه‌جا برچسب بزن» هم سبز می‌شد.
+    {"name": "stats: a files-backed card is wrongly tagged ops-only",
+     "path": "app/admin_web.py",
+     "old": "<h3>📥 پلتفرمِ دانلود <span class=tag>از این پس ثبت می‌شود</span></h3>",
+     "new": "<h3>📥 پلتفرمِ دانلود <span class=tag>بدونِ دانلود</span></h3>",
+     "target": _SCL,
+     "expect": "test_the_file_side_cards_are_not_tagged_as_ops_only"},
+
+    {"name": "health: the download-rate card drops its timezone",
+     "path": "app/admin_web.py",
+     "old": "<span class=tag>امروز (UTC)</span>",
+     "new": "<span class=tag>امروز</span>",
+     "target": _SCL,
+     "expect": "test_the_download_rate_card_names_its_timezone"},
+
+    # کنترلِ معکوس برای همان برچسب: برچسب فقط وقتی ارزش دارد که راست بگوید.
+    # اگر پنجرهٔ کارت جابه‌جا شود، «امروز (UTC)» خودش یک ادعای نادرستِ تازه
+    # می‌شود — و تنها چیزی که این را می‌گیرد تستی است که کلیدِ **دیروز** را
+    # می‌کارد و انتظار دارد کارت تکان نخورد.
+    {"name": "health: the download-rate window quietly shifts off today",
+     "path": "app/admin_web.py",
+     "old": '    day = datetime.now(timezone.utc).strftime("%Y%m%d")\n    hosts = []',
+     "new": '    day = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y%m%d")'
+            '\n    hosts = []',
+     "target": _SCL,
+     "expect": "test_the_download_rate_card_really_reads_one_utc_day"},
 ]
 
 

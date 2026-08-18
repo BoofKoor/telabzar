@@ -94,6 +94,9 @@ GROUPS = [
         ("dl_direct_proxy", "فایلِ مستقیم از پروکسی برود",
          "روشن = مثلِ بقیهٔ موتورها از PROXY_URL می‌رود. خاموش یعنی از IPِ خودِ سرور — "
          "برای نگرانیِ حجمِ دادهٔ سیم‌کارت، «حداکثر حجمِ فایلِ مستقیم» اهرمِ دقیق‌تری است."),
+        ("proxy_url", "خروجیِ شبکه (PROXY_URL)",
+         "خالی = مستقیم از IPِ سرور · مثل socks5h://host:1080 — همان چیزی که ردیفِ بالا "
+         "به آن ارجاع می‌دهد"),
         ("dl_max_cookie_tries", "حداکثر اکانتِ امتحان‌شده در هر دانلود",
          "۰ = تا آخرِ استخر"),
         ("dl_exit_cooldown_min", "کنارگذاشتنِ خروجیِ خراب (دقیقه)",
@@ -101,6 +104,12 @@ GROUPS = [
         ("dl_max_size_mb", "حداکثر حجمِ دانلود (MB)", ""),
         ("dl_concurrency", "دانلودِ هم‌زمان (کل)", ""),
         ("dl_daily_count", "سقفِ روزانهٔ دانلود", "هر کاربر · ۰ = نامحدود"),
+        ("dl_daily_mb", "سقفِ روزانهٔ حجمِ دانلود (MB)", "هر کاربر · ۰ = نامحدود"),
+        ("dl_max_duration_min", "حداکثر مدتِ رسانه (دقیقه)", "۰ = بی‌سقف"),
+        ("dl_cooldown_sec", "فاصلهٔ دو دانلودِ یک کاربر (ثانیه)", "۰ = بدونِ فاصله"),
+        ("dl_op_daily_min", "سقفِ روزانهٔ پردازشِ رسانهٔ دانلودی (دقیقه)",
+         "فقط عملیاتِ گران روی فایلِ دانلودی · ۰ = نامحدود"),
+        ("dl_min_free_gb", "کفِ فضای آزادِ دیسک (GB)", "زیرِ این حد دانلود رد می‌شود · ۰ = بی‌قید"),
     ]),
     ("🎧 اسپاتیفای و اپل موزیک", [
         ("spotify_enabled", "اسپاتیفای فعال", "بدونِ credential هم کار می‌کند"),
@@ -159,6 +168,37 @@ GROUPS = [
         ("stream_base", "پایهٔ لینک (نودِ استریم)", "خالی = دامنهٔ مستر · مثل https://cdn.example.com"),
     ]),
 ]
+
+#: عنوانِ گروهی که کلیدهای **برچسب‌نخوردهٔ** `RUNTIME_KEYS` در آن می‌افتند.
+_AUTO_GROUP = "🧷 بدونِ دسته"
+#: توضیحِ ردیفِ خودکار. عمداً در **UI** می‌نشیند نه در CI: گروهِ خودکار وظیفه‌اش
+#: این است که کلید هرگز نامرئی نشود، ولی اگر بی‌صدا جذبش کند هیچ‌کس برچسبِ
+#: درست نمی‌نویسد. این متن خودش نق می‌زند.
+_AUTO_HINT = "هنوز برچسبِ فارسی ندارد — در GROUPS دسته‌بندی‌اش کن"
+
+
+def _setting_groups() -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """گروه‌های فرمِ تنظیمات = `GROUPS` + هرچه در `RUNTIME_KEYS` جا مانده.
+
+    **چرا خودکار، و چرا این تنها راهِ دوام است.** `GROUPS` فهرستِ دستی است و
+    تنها گاردش (`tests/test_settings_rename.py:153`) فقط جهتِ
+    «ردیفِ پنل باید کلیدِ واقعی باشد» را می‌سنجد. جهتِ دیگر — «کلیدِ واقعی باید
+    ردیف داشته باشد» — هرگز نوشته نشد، و نتیجه‌اش شش کلیدِ زنده بود که از هیچ
+    صفحه‌ای دیده نمی‌شدند: `proxy_url`, `dl_max_duration_min`, `dl_daily_mb`,
+    `dl_cooldown_sec`, `dl_op_daily_min`, `dl_min_free_gb`. هر شش‌تا از
+    `settings_store` خوانده می‌شوند (یعنی بدونِ ری‌استارت اثر دارند) و از
+    `/admin`ِ تلگرام هم قابلِ تنظیم بودند — فقط پنل نمی‌دیدشان. ردیفِ دستی برای
+    آن شش‌تا اضافه شد، ولی خودِ **الگو** رفع نمی‌شود مگر با یک مسیرِ خودکار.
+
+    **هم `settings_page` و هم `save()` باید از این‌جا بخوانند.** `save()` مجموعهٔ
+    `rendered` را می‌سازد تا کلیدهای خارج از فرم را ریست نکند؛ اگر آن یکی از
+    `GROUPS`ِ خام بخواند و صفحه از این‌جا، ردیفِ خودکار رندر می‌شود و **بی‌صدا
+    ذخیره نمی‌شود** — همان «بنرِ سبز روی کاری که انجام نشد» که کلِ خوشهٔ B را
+    ساخت.
+    """
+    placed = {key for _title, rows in GROUPS for key, _l, _h in rows}
+    leftover = [(k, k, _AUTO_HINT) for k in RUNTIME_KEYS if k not in placed]
+    return [*GROUPS, (_AUTO_GROUP, leftover)] if leftover else list(GROUPS)
 
 # کلیدهایی که مقدارشان فهرست/متنِ چندخطی است — ورودیِ ۱۶۰ پیکسلی برایشان
 # بی‌فایده است، پس textarea می‌گیرند.
@@ -295,6 +335,18 @@ a{text-decoration:none;color:inherit}
 .svc{display:flex;align-items:center;gap:10px;padding:9px 0;font-size:13.5px}.svc:not(:last-child){border-bottom:1px dashed #eef2f7}
 .badge{margin-inline-start:auto;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:8px}
 .ok{background:#ecfdf5;color:#047857}.warn{background:#fffbeb;color:#b45309}.dim{background:#f1f5f9;color:#64748b}
+/* `.err` = ردهٔ «خطر» که تا امروز در این نوار وجود نداشت، پس هر بجی که با آن
+   رندر می‌شد — یعنی «باطل» و «چک‌پوینت»، دقیقاً دو حالتی که دخالتِ انسان
+   می‌خواهند — بی‌رنگ درمی‌آمد. `.err` در `_LOGIN` هست ولی آن یک **بلوکِ** خطای
+   صفحهٔ ورود است (padding/margin دارد) و اصلاً روی `/cookies` بار نمی‌شود.
+   این نسخه عمداً فقط رنگ می‌دهد، هم‌شکلِ سه‌تای بالا، وگرنه بج padding و
+   حاشیهٔ بلوکِ لاگین را ارث می‌برد. روی `/login` ترتیب `{{css}}` **اول** است،
+   پس نسخهٔ آن‌جا همچنان برنده می‌ماند و صفحهٔ ورود تغییر نمی‌کند.
+   `.unk` رنگِ چهارم است نه تکرارِ `.dim`: «ادمین عمداً غیرفعالش کرد» و
+   «وضعیتی که نمی‌شناسیم» نباید یک شکل دیده شوند — حالتِ ناشناخته‌ای که شبیهِ
+   حالتِ عادی رندر شود همان شکستِ بی‌صداست. بنفش عمداً بیرونِ خانوادهٔ
+   سبز/زرد/قرمز/خاکستری است تا «خارج از مقیاس» خوانده شود. */
+.err{background:#fef2f2;color:#b91c1c}.unk{background:#f5f3ff;color:#6d28d9;box-shadow:inset 0 0 0 1px #ddd6fe}
 .meter{height:9px;border-radius:999px;background:#e2e8f0;overflow:hidden}.meter i{display:block;height:100%;border-radius:999px}
 .stat{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:13px}.stat b{width:82px;color:#475569}.stat .meter{flex:1}.stat .num{color:#94a3b8;font-size:11.5px;min-width:60px;text-align:left}
 .mini{display:flex;gap:10px;padding:6px 18px 14px}.kpi{flex:1;background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
@@ -401,7 +453,13 @@ _HEALTH_CARDS = """
   </div>
   {% if health.disk_total %}<div class=stat><b>دیسکِ ‎/work</b><div class=meter><i style="width:{{health.disk_pct}}%;background:{{'#dc2626' if health.disk_pct>85 else '#14b8a6'}}"></i></div><span class=num>{{health.disk_used}}/{{health.disk_total}}G</span></div>{% endif %}
 </div></div>
-<div class=card><h3>📈 نرخِ موفقیتِ دانلود <span class=tag>امروز</span></h3><div class=rows>
+{# پنجره **ثابت و یک‌روزه** است: `_health` کلیدِ `dlstat:{p}:ok:{روزِ جاریِ UTC}` را
+   می‌خواند، در حالی که `_metric` با TTLِ **دو روز** می‌نویسد. پس این کارت با یک
+   `KEYS dlstat:*`ِ دستی مستقیماً قابلِ مقایسه نیست و همین یک بار اپراتور را
+   گمراه کرد («۳۳٪ · ۱ از ۳» این‌جا در برابرِ ۱۱ و ۷ در Redis — دو پنجرهٔ
+   متفاوت، نه دو منبعِ متفاوت). و «امروز» برای کاربرِ ایرانی هم بس نیست: روزِ
+   UTC با روزِ تهران یکی نیست و ساعت‌های اولِ شب از قبل فردای UTCاند. #}
+<div class=card><h3>📈 نرخِ موفقیتِ دانلود <span class=tag>امروز (UTC)</span></h3><div class=rows>
   {% if health.hosts %}{% for h in health.hosts %}
     <div class=stat><b>{{ pfa.get(h.name, h.name) }}</b><div class=meter><i style="width:{{h.rate}}%;background:{{'#16a34a' if h.rate>=70 else '#d97706'}}"></i></div><span class=num>{{h.rate}}% · {{h.ok}}/{{h.ok+h.fail}}</span></div>
   {% endfor %}{% else %}<div class=empty>هنوز دانلودی امروز ثبت نشده.</div>{% endif %}
@@ -459,9 +517,16 @@ _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}
 .ck-go{display:flex;gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap}
 .ck-row{display:flex;align-items:center;gap:11px;padding:11px 0;border-top:1px solid var(--line);flex-wrap:wrap}
 .ck-row:first-child{border-top:0}
-.sdot{width:9px;height:9px;border-radius:50%;flex:none}
+/* رنگِ پایهٔ `.sdot` بنفشِ همان `.unk` است، پس وضعیتی که `.s-*` ندارد نقطهٔ
+   **بنفش** می‌گیرد نه نقطهٔ نامرئی — و با بجِ بنفشش هم‌خوان می‌شود. هر وضعیتِ
+   شناخته‌شده یک خط پایین‌تر بازنویسی‌اش می‌کند. */
+.sdot{width:9px;height:9px;border-radius:50%;flex:none;background:#a855f7}
 .s-healthy{background:#16a34a}.s-suspect{background:#d97706}.s-invalid{background:#dc2626}
 .s-cooldown{background:#0ea5e9}.s-disabled{background:#cbd5e1}.s-frozen{background:#b91c1c}
+/* `unproven` («آخرین تلاش ناموفق») از روزِ اول در این ردیف جا افتاده بود، پس
+   نقطه‌اش شفاف رندر می‌شد در حالی که بجش زرد بود. کهربایی، ولی یک پله روشن‌تر
+   از `suspect` تا دو حالتِ متفاوت دو نقطهٔ متفاوت بمانند. */
+.s-unproven{background:#f59e0b}
 .ck-name{font-size:13.5px;font-weight:700;min-width:96px}
 .ck-meta{color:#94a3b8;font-size:12px;min-width:170px}
 .ck-acts{display:flex;gap:6px;flex-wrap:wrap;margin-inline-start:auto}
@@ -733,23 +798,39 @@ _STATS = """{% extends 'base' %}{% block title %}آمار{% endblock %}{% block 
   <div class=b><em>فایل</em><strong>{{s.files}}</strong>
     <span>{{s.dl_files}} از لینک</span></div>
   <div class=b><em>حجمِ پردازش‌شده</em><strong><bdi>{{s.storage_h}}</bdi></strong></div>
-  <div class=b><em>عملیات</em><strong>{{s.ops}}</strong>
+  {# برچسبِ «روی فایل» بخشِ رفع است نه آرایش: این عدد از جدولِ `jobs` می‌آید و
+     `Job()` فقط در `routers/ops.py` ساخته می‌شود، پس **هیچ دانلودی** در آن
+     نیست. بدونِ برچسب، «عملیات ۵» درست کنارِ «فایل ۱۵ · ۱۰ از لینک» می‌نشیند
+     و کارت دروغ می‌گوید. #}
+  <div class=b><em>عملیات روی فایل</em><strong>{{s.ops}}</strong>
     {% if s.success_rate is not none %}<span>{{s.success_rate}}٪ موفق</span>{% endif %}</div>
-  <div class=b><em>میانگینِ زمانِ پردازش</em><strong><bdi>{{s.avg_op_h}}</bdi></strong>
+  <div class=b><em>میانگینِ زمانِ عملیات روی فایل</em><strong><bdi>{{s.avg_op_h}}</bdi></strong>
     {% if s.queued %}<span style=color:#d97706>{{s.queued}} در صف</span>{% endif %}</div>
   <div class=b><em>مدتِ کلِ رسانه</em><strong><bdi>{{s.media_h}}</bdi></strong></div>
   <div class=b><em>تحویلِ آنی از کش</em><strong>{{s.cache_hits}}</strong>
     <span><bdi>{{s.cache_saved_h}}</bdi> صرفه‌جویی</span></div>
 </div>
 
+{# یک‌بار، صریح، به‌جای شش تکرار روی شش کارت. مرزِ واقعی «منبعِ داده» است نه
+   «موضوع»: هرچه از `files` می‌آید دانلودها را دارد و هرچه از `jobs` می‌آید
+   ندارد، چون مسیرِ دانلود اصلاً ردیفِ `Job` نمی‌سازد (`tasks_download.py:7`:
+   «جابِ دانلود، رکوردِ File/Job از پیش ندارد»). #}
+<div class="card"><div class=hint style="border-bottom:0">
+  📌 <b>«عملیات» یعنی کاری که روی یک فایلِ موجود اجرا شده</b> (فشرده‌سازی،
+  تبدیل، برش، …) — <b>دانلودها در این عددها نیستند</b>، چون مسیرِ دانلود ردیفِ
+  <span class=mono>Job</span> نمی‌سازد. برای دانلودها «فایل · از لینک»،
+  «پلتفرمِ دانلود» و «منبعِ فایل» را در همین صفحه ببین، و نرخِ موفقیت/شکستشان را
+  در صفحهٔ <a href="/health">سلامت</a>.
+</div></div>
+
 <div class=card>
   <h3>📈 روند <span class=tag>{{s.series_days}} روزِ اخیر · اوجِ روزانه {{s.ts_max}}</span></h3>
-  <div class=lg><span><i style=background:var(--teal2)></i>فایل</span>
-    <span><i style=background:var(--green)></i>عملیات</span>
+  <div class=lg><span><i style=background:var(--teal2)></i>فایل (شاملِ دانلود)</span>
+    <span><i style=background:var(--green)></i>عملیات روی فایل</span>
     <span><i style=background:var(--amber)></i>کاربرِ جدید</span></div>
   <div class=ts>
     {% for d in s.ts %}
-    <div class=c title="{{d.day}} — فایل {{d.f}} · عملیات {{d.o}} · کاربر {{d.u}}">
+    <div class=c title="{{d.day}} — فایل {{d.f}} · عملیات روی فایل {{d.o}} · کاربر {{d.u}}">
       {% if d.u %}<i class=u style="height:{{d.u_h}}px"></i>{% endif %}
       {% if d.o %}<i class=o style="height:{{d.o_h}}px"></i>{% endif %}
       {% if d.f %}<i class=f style="height:{{d.f_h}}px"></i>{% endif %}
@@ -801,13 +882,14 @@ _STATS = """{% extends 'base' %}{% block title %}آمار{% endblock %}{% block 
 </div>
 
 <div class=col>
-  <div class=card><h3>⚙️ پرکاربردترین عملیات</h3><div class=rows>
+  <div class=card><h3>⚙️ پرکاربردترین عملیات <span class=tag>بدونِ دانلود</span></h3><div class=rows>
     {% if s.by_op %}{% for r in s.by_op %}
     <div class=sv><b>{{r.k}}</b><div class=meter><i style="width:{{r.pct}}%;background:var(--green)"></i></div><span class=n>{{r.n}}</span></div>
     {% endfor %}{% else %}<div class=empty>عملیاتی اجرا نشده.</div>{% endif %}
   </div></div>
 
-  <div class=card><h3>⏱ کارایی هر عملیات <span class=tag>موفقیت · میانگین · p95</span></h3>
+  <div class=card><h3>⏱ کارایی هر عملیات
+    <span class=tag>موفقیت · میانگین · p95</span> <span class=tag>بدونِ دانلود</span></h3>
     {% if s.op_perf %}
     <div class=tbl-wrap><table class=tbl>
       <thead><tr><th>عملیات</th><th>تعداد</th><th>موفق</th><th>میانگین</th><th>p95</th></tr></thead><tbody>
@@ -820,7 +902,9 @@ _STATS = """{% extends 'base' %}{% block title %}آمار{% endblock %}{% block 
     {% else %}<div class=empty>هنوز عملیاتِ تمام‌شده‌ای نیست.</div>{% endif %}
   </div>
 
-  <div class=card><h3>⚠️ پرتکرارترین خطاها</h3><div class=pad>
+  {# `Job.error` — پس شکستِ **دانلود** هرگز این‌جا نمی‌آید. شکستِ دانلود فقط در
+     `dlstat:<platform>:fail` (صفحهٔ سلامت، پنجرهٔ یک‌روزه) دیده می‌شود. #}
+  <div class=card><h3>⚠️ پرتکرارترین خطاها <span class=tag>فقط عملیات روی فایل</span></h3><div class=pad>
     {% if s.errors %}{% for e in s.errors %}
     <div class=errline><span class=chip>{{e.n}}</span><code>{{e.msg}}</code></div>
     {% endfor %}{% else %}<div class=empty>خطایی ثبت نشده. 🎉</div>{% endif %}
@@ -1978,7 +2062,7 @@ async def dashboard(request: web.Request) -> web.Response:
         raise web.HTTPFound("/login")
     health = await _health(request.app)
     return _render("settings", admin_id=_session_admin(request), active="settings",
-                   pill_ok=health["all_ok"], groups=GROUPS, meta=RUNTIME_KEYS,
+                   pill_ok=health["all_ok"], groups=_setting_groups(), meta=RUNTIME_KEYS,
                    enums=ENUM_VALUES, labels=ENUM_LABELS, longtext=LONGTEXT_KEYS,
                    v=await _effective(),
                    health=health, saved=request.query.get("ok") == "1",
@@ -2483,8 +2567,22 @@ _STATUS_FA = {ck_pool.HEALTHY: "سالم", ck_pool.SUSPECT: "مشکوک", ck_poo
               ck_pool.FROZEN: "چک‌پوینت — نیازِ انسان",
               ck_pool.UNPROVEN: "آخرین تلاش ناموفق"}
 _STATUS_BADGE = {ck_pool.HEALTHY: "ok", ck_pool.SUSPECT: "warn", ck_pool.INVALID: "err",
-                 ck_pool.COOLDOWN: "warn", ck_pool.DISABLED: "mute",
+                 ck_pool.COOLDOWN: "warn", ck_pool.DISABLED: "dim",
                  ck_pool.FROZEN: "err", ck_pool.UNPROVEN: "warn"}
+#: کلاسِ وضعیتِ **ناشناخته**. عمداً `dim` نیست: `dim` معنیِ تثبیت‌شده‌ای دارد
+#: («ادمین خودش غیرفعالش کرد») و یکی‌کردنشان یعنی وضعیتی که نمی‌شناسیم دقیقاً
+#: شبیهِ یک تصمیمِ عمدی دیده شود.
+_BADGE_UNKNOWN = "unk"
+
+
+def _badge_of(status: str) -> str:
+    """کلاسِ بجِ یک وضعیتِ اکانت — **تنها** جایی که پیش‌فرض تعریف می‌شود.
+
+    پیش از این `_STATUS_BADGE.get(..., "mute")` در **دو** محلِ فراخوانی نوشته
+    شده بود، و `mute` هیچ‌جا در CSS تعریف نشده بود — یعنی همان الگوی «قاعده در
+    N نقطه دست‌نویس شده» که §۷ بارها ثبت کرده، این‌بار با هر دو کپی خراب.
+    """
+    return _STATUS_BADGE.get(status, _BADGE_UNKNOWN)
 
 
 def _ago_fa(ts: int) -> str:
@@ -2516,7 +2614,7 @@ async def cookies_page(request: web.Request) -> web.Response:
     by_platform: dict[str, list[dict]] = {}
     for a in accounts:
         item = {**a, "status_fa": _STATUS_FA.get(a["status"], a["status"]),
-                "badge": _STATUS_BADGE.get(a["status"], "mute"),
+                "badge": _badge_of(a["status"]),
                 "last_ok_fa": _ago_fa(a.get("last_ok") or 0),
                 "added_fa": _ago_fa(a.get("added") or 0),
                 "used": await ck_pool.usage(redis, a["name"]),
@@ -2543,7 +2641,7 @@ async def cookies_page(request: web.Request) -> web.Response:
                                       if i["status"] in ck_pool.USABLE)})
     # صفِ رسیدگی: فریزشده (چک‌پوینت/۲FA) یا باطل — با تلاشِ خودکار درست نمی‌شوند
     attention = [{**a, "status_fa": _STATUS_FA.get(a["status"], a["status"]),
-                  "badge": _STATUS_BADGE.get(a["status"], "mute")}
+                  "badge": _badge_of(a["status"])}
                  for a in accounts if a["status"] in (ck_pool.FROZEN, ck_pool.INVALID)]
     msg = {"up": "اکانت اضافه شد.", "del": "اکانت حذف شد.", "rep": "کوکی جایگزین شد.",
            "cd": "وضعیتِ اکانت به‌روزرسانی شد.",
@@ -2756,7 +2854,10 @@ async def save(request: web.Request) -> web.Response:
     form = await request.post()
     store = settings_store.get_store()
     # فقط کلیدهایی که در فرم رندر شده‌اند (بقیه از /admin مدیریت می‌شوند و نباید ریست شوند)
-    rendered = {key for _title, fields in GROUPS for key, _l, _h in fields}
+    # **همان منبعی که صفحه از آن رندر شد** — نه `GROUPS`ِ خام. وگرنه ردیفِ
+    # خودکار روی صفحه دیده می‌شود و این‌جا در `rendered` نیست، یعنی مقدارِ
+    # تایپ‌شده بی‌صدا دور ریخته می‌شود و بنرِ سبز می‌آید.
+    rendered = {key for _title, fields in _setting_groups() for key, _l, _h in fields}
     # **اول همه را بسنج، بعد بنویس** — مثلِ `/buttons`. پیش از این، هر مقدارِ
     # نامعتبر با یک `continue` بی‌صدا دور ریخته می‌شد و صفحه بی‌قیدوشرط بنرِ
     # سبز می‌داد: ادمین «۱٬۰۰۰» می‌نوشت، «ذخیره شد» می‌دید، و مقدارِ قبلی

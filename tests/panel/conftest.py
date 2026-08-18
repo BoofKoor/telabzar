@@ -48,11 +48,15 @@ ADMIN_ID = 111
 class Panel:
     """چیزی که یک تستِ پنل لازم دارد، در یک جا."""
 
-    def __init__(self, client, redis, admin_web, admin_id: int) -> None:
+    def __init__(self, client, redis, admin_web, admin_id: int, maker=None) -> None:
         self.client = client
         self.redis = redis
         self.aw = admin_web
         self.admin_id = admin_id
+        #: sessionmakerِ همان SQLiteی که پنل به آن وصل شده — تا تستی که لازم
+        #: دارد صفحه‌ای را با **داده** رندر کند بتواند ردیف بکارد. بدونِ این،
+        #: هر ادعا دربارهٔ رندر روی صفحهٔ خالی گرفته می‌شود و توخالی است.
+        self.maker = maker
 
     @property
     def cookies(self) -> dict[str, str]:
@@ -188,7 +192,85 @@ async def panel(tmp_path, monkeypatch):
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
-        yield Panel(client, redis, admin_web, ADMIN_ID)
+        yield Panel(client, redis, admin_web, ADMIN_ID, maker)
     finally:
         await client.close()
         await engine.dispose()
+
+
+#: هر هفت وضعیتی که `cookies.status_of` می‌تواند برگرداند — یعنی هر هفت شاخهٔ
+#: رندرِ بج و نقطه. وضعیتِ **ناشناخته** این‌جا کاشتنی نیست (وضعیت از روی متا
+#: محاسبه می‌شود، نه از نامِ فایل)، پس تستِ خودش `status_of` را وصله می‌زند.
+_SEED_STATUSES = ("healthy", "suspect", "invalid", "cooldown", "disabled",
+                  "frozen", "unproven")
+
+
+@pytest.fixture
+async def seeded(panel, tmp_path):
+    """پنل، ولی با داده در **هر شاخهٔ** رندر.
+
+    گاردِ کلاسِ CSS و برچسب‌های دامنه هر دو ادعایی دربارهٔ HTMLِ **رندرشده**
+    دارند، و صفحهٔ خالی هیچ‌کدام را نمی‌سنجد: `/cookies`ِ بی‌اکانت هیچ بجی
+    ندارد، `/stats`ِ بی‌جاب هیچ کارتِ کاراییی ندارد. پس این fixture عمداً
+    پرمایه است — یک ردیف برای هر شاخه‌ای که تست‌ها به آن تکیه می‌کنند.
+    """
+    import time as _t
+    from datetime import datetime, timedelta, timezone
+
+    from app import cookies as ck
+    from app.models import File, Job, Node, User
+
+    now = datetime.now(timezone.utc)
+    ts = int(_t.time())
+    async with panel.maker() as s:
+        blocked = User(tg_user_id=901, lang="fa", role="user", is_blocked=True)
+        plain = User(tg_user_id=902, lang="en", role="user")
+        s.add_all([blocked, plain])
+        await s.flush()
+        # فایل‌های «از لینک»: platform ست شده، و عمداً **هیچ ردیفِ Job**ی
+        # ندارند — همان چیزی که کارت‌های jobs-محور نمی‌بینند.
+        for i in range(4):
+            s.add(File(owner_id=blocked.id, ref=f"dl{i}", file_unique_id=f"uq{i}",
+                       file_id=f"fid{i}", name=f"clip{i}.mp4", kind="video",
+                       size=10 ** 7, width=1920, height=1080, duration=61,
+                       source="dl", platform="soundcloud", created_at=now))
+        up = File(owner_id=blocked.id, ref="up0", file_unique_id="uqu", file_id="fidu",
+                  name="track.mp3", kind="audio", size=10 ** 6, source="up", created_at=now)
+        s.add(up)
+        await s.flush()
+        s.add(Job(file_id=up.id, op="compress", status="done", created_at=now,
+                  finished_at=now + timedelta(seconds=3)))
+        s.add(Job(file_id=up.id, op="convert", status="failed", error="ffmpeg exploded",
+                  created_at=now, finished_at=now + timedelta(seconds=1)))
+        s.add(Job(file_id=up.id, op="trim", status="queued", created_at=now))
+        s.add(Node(id="n1", name="edge", role="download",
+                   wg_ip="10.51.0.2", wg_pubkey="pubkey="))
+        await s.commit()
+
+    cdir = tmp_path / "cookies"
+    for status in _SEED_STATUSES:
+        fname = f"cookies_{status}.txt"
+        (cdir / fname).write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+        meta = {"platform": "instagram", "label": status, "added": ts - 86400 * 30,
+                "last_ok": ts - 90, "fail_streak": 0, "disabled": False,
+                "frozen": False, "last_error": "", "last_error_at": 0}
+        if status == "invalid":
+            meta["fail_streak"] = 99
+        elif status == "suspect":
+            meta["fail_streak"] = 1
+        elif status == "frozen":
+            meta["frozen"] = True
+        elif status == "disabled":
+            meta["disabled"] = True
+        elif status == "unproven":
+            meta["last_error"], meta["last_error_at"] = "redirect to login page", ts - 10
+        await ck.set_meta(panel.redis, fname, meta)
+        if status == "cooldown":
+            await panel.redis.set(f"ckcd:{fname}", "1", ex=600)
+
+    day = datetime.now(timezone.utc).strftime("%Y%m%d")
+    await panel.redis.set(f"dlstat:soundcloud:ok:{day}", 1)
+    await panel.redis.set(f"dlstat:soundcloud:fail:{day}", 2)
+    await panel.redis.set("dlver:master",
+                          '{"who":"master","gallery-dl":"1.29","yt-dlp":"2026.07.04"}')
+    return panel
