@@ -17,7 +17,7 @@ from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import cookies as ck_pool
-from .. import dl_cache, nodes, safety, settings_store
+from .. import dl_cache, nodes, probe_stats, safety, settings_store
 from ..callbacks import Dl
 from ..config import settings
 from ..downloader import (
@@ -258,6 +258,11 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
                      arq_pool: ArqRedis, user: User | None, session: AsyncSession) -> None:
     ref, sel = callback_data.ref, callback_data.sel
     if sel == "cancel":
+        # cancelِ **منوی کیفیت** و cancelِ **یک دانلودِ در حالِ اجرا** از روی
+        # callback تفکیک‌پذیر نیستند (هر دو `Dl(sel="cancel")`؛ تولیدکننده‌ها
+        # `download_menu_kb` و `download_cancel_kb`). نشانگرِ منو تفکیکشان
+        # می‌کند: فازِ fetch نشانگری ندارد، پس ساکت رد می‌شود.
+        await probe_stats.note_cancel(arq_pool, ref)
         try:
             await arq_pool.set(f"cancel:dl:{ref}", "1", ex=1200)
         except Exception:  # noqa: BLE001
@@ -269,6 +274,13 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
                 pass
         await cq.answer(t(lang, "cancelling"))
         return
+
+    # `Dl`ِ غیرِcancel فقط از `download_menu_kb` می‌آید و آن هم فقط از شاخهٔ
+    # probe — پس این نقطه بی‌ابهام یعنی «کاربر روی منو کیفیت انتخاب کرد».
+    # عمداً **قبل از** خواندنِ `dlctx`: منقضی‌شدن، سقفِ روزانه و اصابتِ کش هر سه
+    # مسیرهایی‌اند که در آن‌ها کاربر دکمه را زده، و شمردنِ دیرتر همان‌ها را به
+    # «رهاشده» نشت می‌دهد.
+    await probe_stats.note_pick(arq_pool, ref)
 
     raw = None
     try:

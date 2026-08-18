@@ -103,6 +103,7 @@ _PCC = "tests/panel/test_panel_css_classes.py"
 _CSB = "tests/panel/test_cookie_status_badges.py"
 _SKC = "tests/panel/test_settings_key_coverage.py"
 _SCL = "tests/panel/test_scope_labels.py"
+_PST = "tests/test_probe_stats.py"
 
 # «گروهِ خودکار را بردار» — یک خرابکاری با **سه** ادعای متفاوت، پس یک‌بار
 # تعریف می‌شود. دو تا باید بیفتند و یکی عمداً **نباید**، که کلِ نکته است:
@@ -1663,6 +1664,108 @@ CASES: list[dict] = [
             '\n    hosts = []',
      "target": _SCL,
      "expect": "test_the_download_rate_card_really_reads_one_utc_day"},
+
+    # ── شمارندهٔ فازِ probe ────────────────────────────────────────
+    # ادعای مرکزی: probeِ موفق تا امروز هیچ ردی نمی‌گذاشت.
+    {"name": "probe-stats: a successful probe goes uncounted again",
+     "path": "app/tasks_download.py",
+     "old": "                await PS.mark_menu(redis, ref)\n                return",
+     "new": "                return",
+     "target": _PST,
+     "expect": "test_a_probe_that_shows_a_menu_is_counted"},
+
+    # کنترلِ **اصلی**: probeِ موفقِ بی‌منو نباید در مخرجِ نرخِ رهاشدن بیفتد.
+    # اگر `blocked` به `menu` تبدیل شود، هر لینکِ سنی «رهاشده» شمرده می‌شود.
+    {"name": "probe-stats: an age-blocked probe is filed as a menu",
+     "path": "app/tasks_download.py",
+     "old": "                await PS.note(redis, PS.BLOCKED)\n"
+            "                await _nsfw_stop(",
+     "new": "                await PS.mark_menu(redis, ref)\n"
+            "                await _nsfw_stop(",
+     "target": _PST,
+     "expect": "test_an_age_blocked_probe_is_not_counted_as_a_menu"},
+
+    {"name": "probe-stats: a too-long probe is filed as a menu",
+     "path": "app/tasks_download.py",
+     "old": "            await PS.note(redis, PS.BLOCKED)      # همان: موفق ولی بی‌منو",
+     "new": "            await PS.mark_menu(redis, ref)",
+     "target": _PST,
+     "expect": "test_a_too_long_probe_is_not_counted_as_a_menu"},
+
+    # واحدِ مصرفِ منبع «تلاش» است نه «جاب» — بیرون‌بردنِ شمارنده از حلقه
+    # دقیقاً همان تفکیکی را می‌کشد که سطلِ `attempt` برایش هست.
+    {"name": "probe-stats: attempts are counted per job, not per cookie burned",
+     "path": "app/tasks_download.py",
+     "old": "            await PS.note(redis, PS.ATTEMPT)\n            try:",
+     "new": "            try:",
+     "target": _PST,
+     "expect": "test_a_failed_probe_counts_one_attempt_per_cookie_it_burned"},
+
+    # بدونِ dedupe، یک منو می‌تواند چند pick بدهد و تفاضل منفی می‌شود.
+    {"name": "probe-stats: the pick is not deduped against the menu marker",
+     "path": "app/probe_stats.py",
+     "old": "    await note(redis, PICK if await _claim(redis, ref) else REPICK)",
+     "new": "    await note(redis, PICK)",
+     "target": _PST,
+     "expect": "test_a_pick_is_counted_once_and_the_second_is_a_repick"},
+
+    # ابهامِ cancel: هر دو تولیدکننده همان `Dl(sel="cancel")` را می‌سازند، پس
+    # تنها چیزی که لغوِ یک دانلودِ در حالِ اجرا را کنار می‌گذارد نشانگر است.
+    {"name": "probe-stats: every cancel is counted, even a running download's",
+     "path": "app/probe_stats.py",
+     "old": "    if await _claim(redis, ref):\n        await note(redis, MENU_CANCEL)",
+     "new": "    await _claim(redis, ref)\n    await note(redis, MENU_CANCEL)",
+     "target": _PST,
+     "expect": "test_a_cancel_of_a_running_download_is_not_counted"},
+
+    # جای شمارنده در `on_dl_pick` باربر است: پایین‌تر از گاردِ `dlctx`، مسیرِ
+    # منقضی/سقف/کش به «رهاشده» نشت می‌کند.
+    {"name": "probe-stats: the pick is counted only after the dlctx guard",
+     "path": "app/routers/download.py",
+     "old": "    await probe_stats.note_pick(arq_pool, ref)\n\n    raw = None",
+     "new": "    raw = None",
+     "target": _PST,
+     "expect": "test_a_pick_is_counted_even_when_the_menu_context_expired"},
+
+    # تلهٔ شمارندهٔ جاودانِ §۷ — `INCR` بدونِ `EXPIRE`.
+    {"name": "probe-stats: the buckets lose their TTL and live forever",
+     "path": "app/probe_stats.py",
+     "old": "        if n == 1:\n            await redis.expire(k, TTL)",
+     "new": "        if False:\n            await redis.expire(k, TTL)",
+     "target": _PST,
+     "expect": "test_the_buckets_carry_the_same_two_day_ttl_as_dlstat"},
+
+    # پرچمِ `sent`: بدونش شاخهٔ عکسیِ موفق به مسیرِ متنی هم می‌افتد و منو دوبار
+    # می‌رود — همان چیزی که شمارنده را از داخلِ `try` بیرون برد.
+    {"name": "probe-stats: the photo menu falls through to the text menu",
+     "path": "app/tasks_download.py",
+     "old": "            if sent:",
+     "new": "            if False:",
+     "target": _PST,
+     "expect": "test_a_photo_menu_does_not_also_send_the_text_menu"},
+
+    # کنترلِ تریپ‌وایرِ «فقط اندازه‌گیری»: اگر کسی بعداً یکی از چهار هزینهٔ
+    # ثبت‌شدهٔ فازِ probe را بی‌صدا ببندد، باید قرمز شود نه اینکه سوارِ یک
+    # PRِ اندازه‌گیری برود.
+    {"name": "probe-stats: someone quietly starts charging the hourly bucket",
+     "path": "app/tasks_download.py",
+     "old": "                info = await D.probe(url, await _opts(redis, platform, workdir, cpath))\n"
+            "                await ck.mark_ok(redis, cname)",
+     "new": "                info = await D.probe(url, await _opts(redis, platform, workdir, cpath))\n"
+            "                await ck.note_spend(redis, cname)\n"
+            "                await ck.mark_ok(redis, cname)",
+     "target": _PST,
+     "expect": "test_the_probe_phase_still_costs_exactly_what_it_did"},
+
+    # کنترلِ معکوس: برداشتنِ شمارندهٔ `menu` نباید ادعاهای سمتِ **روتر** را
+    # بیندازد — آن‌ها نشانگر را خودشان می‌کارند. اگر بیفتند یعنی تست‌های pick
+    # در واقع دارند مسیرِ ورکر را می‌سنجند، نه چیزی که ادعا می‌کنند.
+    {"name": "probe-stats: menu counter removed (reverse control for the pick tests)",
+     "path": "app/tasks_download.py",
+     "old": "                await PS.mark_menu(redis, ref)\n                return",
+     "new": "                return",
+     "target": f"{_PST}::test_a_pick_is_counted_once_and_the_second_is_a_repick",
+     "expect": None},
 ]
 
 
