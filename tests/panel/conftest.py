@@ -31,6 +31,8 @@ SQLite عمداً **فایل‌محور** روی `tmp_path` است، نه `:memo
 """
 from __future__ import annotations
 
+import time as _real_time
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -75,6 +77,49 @@ class Panel:
             hashlib.sha256(f"telabzar-admin:{secret}".encode()).digest())
         payload = json.dumps({"id": self.admin_id, "t": int(time.time())}).encode()
         return {self.aw._COOKIE: Fernet(key).encrypt(payload).decode()}
+
+
+class Clock:
+    """ساعتِ کنترل‌پذیرِ fakeredis — یک پروکسیِ ماژولِ `time`.
+
+    §۶ می‌گوید با fakeredis «شمارشِ فرمان معتبر است، زمان‌بندی نه»، و برای یک
+    سقفِ نرخ این قید مستقیماً به کار می‌خورد: کلِ ادعا «چند تا در چند ثانیه» است،
+    پس تستی که ساعت را مدل نکند یا باید `sleep` بزند (کُند و متزلزل) یا باید
+    پنجره را با پاک‌کردنِ دستیِ کلید **تقلید** کند (یعنی همان چیزی را که می‌سنجد
+    جعل کند).
+
+    این‌جا هیچ‌کدام: `fakeredis._basefakesocket.time` عوض می‌شود، پس ریاضیِ
+    انقضای **خودِ fakeredis** (`db.time = time.time()` و بعد
+    `key.expireat - db.time`) روی ساعتِ ما می‌دود. TTL و انقضا واقعاً اجرا
+    می‌شوند، فقط زمان را ما جلو می‌بریم. `test_the_clock_fixture_really_drives_
+    redis_expiry` کنترلِ منفیِ همین است: بدونِ کارکردنِ این، هر ادعای پنجره‌ای
+    بی‌معناست.
+
+    فقط `time()` را می‌گیرد؛ بقیهٔ صفت‌ها (`sleep`, `monotonic`, …) به ماژولِ
+    واقعی می‌روند، چون fakeredis برای فرمان‌های بلاک‌شونده از آن‌ها استفاده می‌کند.
+    """
+
+    def __init__(self, start: float = 1_700_000_000.0) -> None:
+        self.now = start
+
+    def time(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def __getattr__(self, name):
+        return getattr(_real_time, name)
+
+
+@pytest.fixture
+def clock(monkeypatch) -> Clock:
+    """ساعتِ fakeredis را در دستِ تست می‌گذارد."""
+    from fakeredis import _basefakesocket as bfs
+
+    c = Clock()
+    monkeypatch.setattr(bfs, "time", c)
+    return c
 
 
 @pytest.fixture

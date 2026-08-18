@@ -43,6 +43,11 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS ix_jobs_created_at ON jobs (created_at)",
     "CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs (status)",
     "CREATE INDEX IF NOT EXISTS ix_users_created_at ON users (created_at)",
+    # صفحهٔ کاربران با `last_seen DESC` مرتب می‌شود و ایندکسی نداشت، پس هر بار
+    # کلِ جدول مرتب می‌شد. اندازه‌گیری‌شده روی Postgres 16 با ۲۰۰هزار ردیف:
+    # `Sort` → `Index Scan Backward`، و خودِ کوئریِ صفحه از ۳۷ به ۰٫۴۵ میلی‌ثانیه.
+    # ساختش روی جدولِ امروزیِ تولید (۱۶۶۸ ردیف) **۲٫۳ تا ۳٫۴ میلی‌ثانیه** است.
+    "CREATE INDEX IF NOT EXISTS ix_users_last_seen ON users (last_seen)",
 ]
 
 

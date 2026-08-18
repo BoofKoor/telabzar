@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import glob
 import hashlib
@@ -388,6 +389,7 @@ _HEALTH_CARDS = """
   <div class=svc>⚡ Redis <span class="badge {{'ok' if health.redis else 'warn'}}">{{'آنلاین' if health.redis else 'خطا'}}</span></div>
   <div class=svc>🔑 pot-provider (یوتیوب)
     {% if health.pot is none %}<span class="badge dim">پیکربندی‌نشده</span>
+    {% elif health.pot == "?" %}<span class="badge dim">در حالِ بررسی…</span>
     {% else %}<span class="badge {{'ok' if health.pot else 'warn'}}">{{'آنلاین' if health.pot else 'خطا'}}</span>{% endif %}</div>
 </div></div>
 <div class=card><h3>📦 صف و دیسک</h3><div class=rows>
@@ -1202,6 +1204,82 @@ async def _pill_ok(app: web.Application) -> bool:
         return False
 
 
+# ── سلامتِ pot-provider: هرگز روی مسیرِ درخواست ───────────────────────────
+# این چک تنها فراخوانیِ **شبکهٔ بیرونیِ** پنل است، و درجا داخلِ `_health` زده
+# می‌شد — یعنی داشبورد منتظرِ یک سرویسِ خارجی می‌ماند. اندازه‌گیری‌شده روی سورسِ
+# پیش از این تغییر، با سوکتی که accept می‌کند و هرگز جواب نمی‌دهد:
+#
+#   `/` (داشبورد) → ۳۱۵۱ ms   ·   `/health` → ۳۰۲۳ ms   ·   بدونِ pot → ۲۱ ms
+#
+# «گیرکرده» بدترین حالت است نه نادرترین: سرویسِ مرده اتصال را rejectمی‌کند و
+# سریع برمی‌گردد، ولی کانتینری که زنده است و پاسخ نمی‌دهد دقیقاً همان تایم‌اوتِ
+# ۳ ثانیه را خرج می‌کند — و صفحهٔ اولِ پنل جایی نیست که منتظرِ آن بمانیم.
+#
+# **کوتاه‌کردنِ تایم‌اوت رفع نیست، فقط عدد را کم می‌کند.** پس نتیجه کش می‌شود و
+# تازه‌سازی به **پس‌زمینه** می‌رود: مسیرِ درخواست همیشه صفر بایتِ شبکه دارد.
+#
+# دو کلید، نه یکی، و تفکیکشان باربر است: `fresh` (با TTL) می‌گوید «تازه
+# سنجیده‌ایم» و `last` (بی‌انقضا) آخرین نتیجهٔ **شناخته‌شده** را نگه می‌دارد. با
+# یک کلیدِ TTLدار، هر بار که کش می‌پرید صفحه «نامعلوم» می‌شد؛ با این دو، صفحه
+# آخرین چیزی را که می‌دانیم نشان می‌دهد و هم‌زمان در پس‌زمینه تازه می‌شود.
+_POT_FRESH_TTL = 30
+_POT_LAST = "potping:last"
+_POT_FRESH = "potping:fresh"
+_POT_TASK = "pot_refresh_task"
+#: «تنظیم شده ولی هنوز نسنجیده‌ایم» — با `None` («پیکربندی‌نشده») یکی نیست، و
+#: یکی‌کردنشان یعنی پنل در پنجرهٔ کوتاهِ پس از ری‌استارت **دروغِ** «پیکربندی‌نشده»
+#: می‌گوید دربارهٔ سرویسی که پیکربندی شده است.
+POT_UNKNOWN = "?"
+
+
+async def _pot_probe(url: str) -> bool:
+    """همان GETِ قبلی، با همان تایم‌اوت — فقط دیگر روی مسیرِ درخواست نیست."""
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:
+            async with s.get(url + "/ping") as resp:
+                return resp.status == 200  # 404/403 = خطا، نه «آنلاین»
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _pot_refresh(app: web.Application) -> None:
+    ok = await _pot_probe(settings.pot_provider_url)
+    try:
+        r: aioredis.Redis = app["redis"]
+        await r.set(_POT_LAST, "1" if ok else "0")
+        await r.set(_POT_FRESH, "1", ex=_POT_FRESH_TTL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _schedule_pot_refresh(app: web.Application) -> None:
+    """یک تازه‌سازیِ پس‌زمینه، و نه بیشتر.
+
+    ارجاعِ تسک روی `app` نگه داشته می‌شود نه رها: asyncio فقط ارجاعِ ضعیف نگه
+    می‌دارد و یک تسکِ بی‌ارجاع می‌تواند وسطِ کار جمع شود. همان ارجاع جلوی
+    انباشتِ تسک روی رفرشِ پیاپیِ صفحه را هم می‌گیرد.
+    """
+    task = app.get(_POT_TASK)
+    if task is not None and not task.done():
+        return
+    app[_POT_TASK] = asyncio.create_task(_pot_refresh(app))
+
+
+async def _pot_health(app: web.Application) -> bool | str | None:
+    """`None` = پیکربندی‌نشده · `POT_UNKNOWN` = هنوز نسنجیده · بولین = نتیجه."""
+    if not settings.pot_provider_url:
+        return None
+    try:
+        r: aioredis.Redis = app["redis"]
+        fresh = await r.get(_POT_FRESH)
+        last = await r.get(_POT_LAST)
+    except Exception:  # noqa: BLE001
+        return POT_UNKNOWN
+    if not fresh:
+        _schedule_pot_refresh(app)
+    return POT_UNKNOWN if last is None else last == "1"
+
+
 async def _health(app: web.Application) -> dict:
     r: aioredis.Redis = app["redis"]
     h: dict = {}
@@ -1240,15 +1318,7 @@ async def _health(app: web.Application) -> dict:
         h["disk_pct"] = round((du.total - du.free) / du.total * 100)
     except Exception:  # noqa: BLE001
         h["disk_total"] = 0
-    h["pot"] = None
-    if settings.pot_provider_url:
-        h["pot"] = False
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:
-                async with s.get(settings.pot_provider_url + "/ping") as resp:
-                    h["pot"] = resp.status == 200  # 404/403 = خطا، نه «آنلاین»
-        except Exception:  # noqa: BLE001
-            h["pot"] = False
+    h["pot"] = await _pot_health(app)
     # نسخهٔ موتورها که هر ورکرِ دانلود سرِ استارت گزارش کرده. اولین سؤال وقتی یک
     # پلتفرم «پاسخِ نامعتبر» می‌دهد: موتور عقب افتاده یا سشن مرده؟
     h["engines"] = []
@@ -1584,6 +1654,66 @@ async def _stats_cached(app, rng: str) -> dict:
     return s
 
 
+# ── کشِ صفحهٔ کاربران ─────────────────────────────────────────────────────
+# هم‌شکلِ `_stats_cached`، و به همان دلیل: صفحه‌ای که ادمین پشتِ‌هم رفرش می‌کند
+# نباید هر بار جدول را بپیماید. ولی **آنچه گران است سورت نیست، شمارش است** —
+# اندازه‌گیری‌شده روی Postgres 16 با ۲۰۰هزار ردیف، پس از افزودنِ ایندکس:
+#
+#   count(*) → ۱۲٫۵ ms · count(*) بلاک‌شده‌ها → ۱۲٫۷ ms
+#   کوئریِ خودِ صفحه → ۰٫۴۵ ms · شمارشِ فایل‌ها → ۰٫۴۱ ms
+#
+# یعنی دو `count(*)` حدودِ ۹۶٪ کارِ صفحه‌اند و ایندکس کاری با آن‌ها ندارد؛ این
+# کش دقیقاً همان‌هاست که برمی‌دارد. روی جدولِ **امروزِ** تولید (۱۶۶۸ ردیف) کلِ
+# صفحه ~۲٫۷ ms است، پس این بیمه برای رشد است نه رفعِ یک دردِ فعلی — و همین‌جا
+# نوشته می‌شود تا نفرِ بعد فکر نکند عددی را که ندیده بهبود داده‌ایم.
+_USERS_TTL = 30
+_USERS_VER = "userscache:ver"
+
+
+async def _users_cache_ver(redis) -> str:
+    """شمارندهٔ نسخه — همان الگوی `txtver` که `textstore` از قبل دارد.
+
+    باطل‌کردن با **نسخه** انجام می‌شود نه با پیمایش و حذفِ کلیدها: `users_block`
+    فقط یک `INCR` می‌زند و همهٔ صفحه‌های کش‌شده در همان لحظه یتیم می‌شوند، بدونِ
+    اینکه لازم باشد بدانیم کدام صفحه/جست‌وجو کش شده. کلیدهای کهنه خودشان با TTL
+    می‌روند.
+
+    این باطل‌سازی **شرطِ درستی است نه بهینه‌سازی**: بدونِ آن، ادمین «بلاک» را
+    می‌زند، به `/users` برمی‌گردد و همان کاربر را هنوز آزاد می‌بیند — یعنی صفحه
+    دربارهٔ کاری که همین الان انجام شد دروغ می‌گوید.
+    """
+    try:
+        return str(await redis.get(_USERS_VER) or "0")
+    except Exception:  # noqa: BLE001
+        return "0"
+
+
+async def _users_cache_bust(redis) -> None:
+    try:
+        await redis.incr(_USERS_VER)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _users_cached(app, page: int, q: str) -> dict:
+    redis = app.get("redis")
+    if redis is None:
+        return await _users_list(page, q)
+    key = f"userscache:{await _users_cache_ver(redis)}:{page}:{q}"
+    try:
+        raw = await redis.get(key)
+        if raw:
+            return json.loads(raw)
+    except Exception:  # noqa: BLE001
+        pass
+    data = await _users_list(page, q)
+    try:
+        await redis.set(key, json.dumps(data, default=str), ex=_USERS_TTL)
+    except Exception:  # noqa: BLE001
+        pass
+    return data
+
+
 async def _users_list(page: int, q: str) -> dict:
     per = 40
     q = (q or "").strip()
@@ -1657,6 +1787,106 @@ async def login(request: web.Request) -> web.Response:
     return _login_page()
 
 
+# ── محدودیتِ نرخِ مسیرِ لاگین ──────────────────────────────────────────────
+# پورتِ پنل از اینترنت رسیدنی است، پس این تنها چیزی است که بینِ یک مهاجم و یک
+# کدِ ۶رقمی می‌ایستد. **وضعِ پیش از این تغییر با اجرا سنجیده شد، نه با خواندن**
+# (هارنسِ `tests/panel/`، ساعتِ fakeredis مدل‌شده) — و برخلافِ فرضِ اولیه
+# محدودیت **وجود داشت**:
+#
+#   `panelreq:<id>` → ۵ درخواستِ کد در ۶۰۰ ثانیه   (TTL سنجیده‌شده: ۶۰۰)
+#   `paneltry:<id>` → ۶ حدس در ۳۰۰ ثانیه            (TTL سنجیده‌شده: ۳۰۰)
+#
+# ولی `auth_request` شمارندهٔ حدس را **پاک می‌کرد**، پس بودجهٔ واقعی ضرب می‌شد:
+# **۳۰ حدس در هر پنجرهٔ ۶۰۰ ثانیه** (اندازه‌گیری‌شده، نه محاسبه‌شده)، و پس از
+# گذشتِ پنجره از نو. یعنی در برابرِ فضای ۱۰^۶: ~۴٫۳e-3 در روز، یعنی احتمالِ
+# تجمعیِ ~۷۹٪ در یک سالِ حملهٔ پیوسته. «بی‌نهایت» نبود، ولی برای اندپوینتی که
+# برای همیشه باز است هم کافی نبود.
+#
+# **سه نقصِ مشخص که همان اندازه‌گیری داد:**
+#   ۱. `auth_verify` شناسه را با `admin_id_set` **نمی‌سنجید** (برخلافِ
+#      `auth_request`) — ۲۰۰ شناسهٔ دلخواه از یک IP، ۲۰۰ کلیدِ `paneltry:` ساخت
+#      و هیچ‌کدام رد نشد. یعنی ساختِ کلیدِ بی‌کران از یک اندپوینتِ عمومی.
+#   ۲. هیچ سقفی روی **مبدأ** نبود؛ هر دو شمارنده روی هویتِ **قربانی** بودند.
+#   ۳. مقایسهٔ کد `!=` بود، نه زمان‌ثابت.
+#
+# **شکلِ رفع، و چرا این شکل:** بودجهٔ حدس به **خودِ کد** بسته شد نه به اندپوینت —
+# با تمام‌شدنش کد کشته می‌شود و کاربر یک کدِ تازه می‌گیرد، به‌جای اینکه مسیرِ
+# verify برای ۳۰۰ ثانیه بسته شود. این تفاوت باربر است: تنها به این دلیل می‌شود
+# سقفِ حدس را ۶ → ۳ آورد **بدونِ** ساختنِ یک اهرمِ قفل‌کردنِ ادمینِ واقعی. (فرمِ
+# بدیهی‌تر — «حذفِ ریست» — دقیقاً همان اهرم را می‌ساخت: مهاجم با ۶ حدس در هر
+# ۳۰۰ ثانیه ورودِ ادمین را برای همیشه می‌بست.)
+#
+# **عددها:**
+#   • `_CODE_TRIES = 3` — یک انسان که کدِ ۶رقمی را از DMِ تلگرام رونویسی می‌کند
+#     به ۱ نیاز دارد؛ ۳ یک تایپ و یک کدِ کهنه را هم پوشش می‌دهد. ۶ → ۳ نرخِ
+#     brute-force را نصف می‌کند و طبقِ بالا هزینهٔ در‌دسترس‌بودن ندارد.
+#   • `_RL_REQ_PER_ADMIN = 5` — **عمداً دست‌نخورده.** این تنها اهرمی است که یک
+#     مهاجم علیهِ ادمینِ واقعی دارد (بودجه را بسوزان → ادمین کد نمی‌گیرد)، پس
+#     پایین‌آوردنش حاشیهٔ brute-force را با یک قفلِ ارزان‌ترِ ادمین عوض می‌کند.
+#     آن معامله تصمیمِ طراحیِ احراز هویت است نه تنظیمِ نرخ؛ همان‌جا ماند که بود.
+#   • `_RL_REQ_PER_IP = 10` — **دلخواه در حدِ یک مرتبهٔ بزرگی**، و صریح می‌گویم
+#     دلخواه است. تنها قیدِ واقعی‌اش این است که باید **بالاتر از** سقفِ per-admin
+#     باشد، وگرنه دو ادمینِ پشتِ یک NAT پیش از تمام‌شدنِ بودجهٔ خودشان به سقفِ IP
+#     می‌خورند. ۱۰ = دو برابرِ ۵.
+#   • `_RL_VERIFY_PER_IP` — **مشتق است نه دلخواه**: بیشترین حدسی که یک IP
+#     می‌تواند زیرِ بودجهٔ درخواستِ خودش **مشروع** تولید کند، یعنی ۱۰×۳.
+#
+# **صادقانه: سقفِ per-IP نرخِ مهاجمِ تک‌هدف/تک‌مبدأ را کم نمی‌کند** — آن‌جا سقفِ
+# per-admin زودتر می‌بندد. چیزی که می‌خرد این است که رفعِ بالا بلاکِ اندپوینت را
+# برداشت، پس بدونِ آن حجمِ خامِ verify از یک مبدأ **بی‌کران** می‌شد؛ و برخلافِ
+# سقفِ per-admin، بلاک‌شدنِ IPِ مهاجم قفلِ ادمین نیست.
+#
+# **بودجهٔ نهایی: ۵ کد × ۳ حدس = ۱۵ حدس در ۶۰۰ ثانیه** (از ۳۰). و اهرمِ واقعی
+# برای بهترکردنِ این افق **طولِ کد** است نه این شمارنده‌ها: همین ۱۵ در برابرِ
+# ۱۰^۸ به ~۰٫۵٪ در سال می‌رسد. ثبت شد، ساخته نشد — چون UXِ ورود را عوض می‌کند
+# و تصمیمِ اپراتور است.
+_RL_WINDOW = 600
+_RL_REQ_PER_ADMIN = 5
+_RL_REQ_PER_IP = 10
+_CODE_TTL = 300
+_CODE_TRIES = 3
+_RL_VERIFY_PER_IP = _RL_REQ_PER_IP * _CODE_TRIES
+
+#: بلندترین شناسهٔ تلگرامی که می‌پذیریم. `str.isdigit()` طولی را رد نمی‌کند و
+#: `int()` در پایتون ۳٫۱۱+ روی رشتهٔ بالای ۴۳۰۰ رقم **`ValueError` می‌دهد**
+#: (اجراشده) — یعنی یک فرمِ بزرگ، ۵۰۰ می‌گرفت نه «نامعتبر».
+_ADMIN_ID_MAXLEN = 20
+
+
+def _client_ip(request: web.Request) -> str:
+    """آدرسِ همتای سوکت — عمداً `X-Forwarded-For` خوانده **نمی‌شود**.
+
+    XFF را خودِ کلاینت ست می‌کند، پس اعتماد به آن سقفِ per-IP را برای همان
+    استقراری که باید محافظتش کند (پنلِ مستقیماً روی اینترنت، همان چیزی که
+    `install.sh` با TLSِ خودش می‌سازد) به یک no-op تبدیل می‌کند: مهاجم به‌ازای
+    هر درخواست یک مقدارِ تازه می‌گذارد.
+
+    بهایش صریح است: پشتِ یک پروکسیِ معکوس همهٔ کلاینت‌ها یک سطل می‌شوند. به
+    همین دلیل عددهای per-IP **بالاتر از** عددهای per-admin چیده شده‌اند، پس یک
+    ادمینِ عادی هیچ‌وقت اول به این سقف نمی‌خورد.
+    """
+    return request.remote or "?"
+
+
+async def _rate_limit(r: aioredis.Redis, key: str, limit: int, window: int) -> bool:
+    """یک پنجرهٔ ثابتِ شمارنده‌ای. `True` یعنی این درخواست مجاز است.
+
+    یک پیاده‌سازی برای هر سه سطل — پیش از این همان قاعده **دو بار دستی** نوشته
+    شده بود، همان شکلی که §۷ برای `remove_cookie_file` ثبت کرده.
+
+    `expire` وقتی TTL گم باشد هم دوباره زده می‌شود، نه فقط روی `n == 1`.
+    `INCR` و `EXPIRE` دو فرمانِ جدا هستند؛ اگر پروسه بینشان بمیرد کلید **بدونِ
+    انقضا** می‌ماند و شمارنده تا ابد بالا می‌رود — یعنی قفلِ دائمیِ ورود که خودش
+    ترمیم نمی‌شود و فقط با پاک‌کردنِ دستیِ کلید باز می‌شود (همان شکستی که §۷ برای
+    `dl:active` ثبت کرده). با این فرم، درخواستِ بعدی ترمیمش می‌کند و هزینه‌اش
+    همان دو فرمان می‌ماند.
+    """
+    n = await r.incr(key)
+    if n == 1 or await r.ttl(key) < 0:
+        await r.expire(key, window)
+    return n <= limit
+
+
 async def _send_code(chat_id: int, code: str) -> bool:
     url = f"{settings.local_api_base.rstrip('/')}/bot{settings.bot_token}/sendMessage"
     text = (f"🔐 کدِ ورود به پنلِ تل‌ابزار:\n\n<code>{code}</code>\n\n"
@@ -1669,20 +1899,28 @@ async def _send_code(chat_id: int, code: str) -> bool:
         return False
 
 
+def _is_admin_id(admin_id: str) -> bool:
+    """شناسهٔ فرم یک ادمینِ ثبت‌شده است؟ (طول‌دار، وگرنه `int()` می‌ترکد)"""
+    return (admin_id.isdigit() and len(admin_id) <= _ADMIN_ID_MAXLEN
+            and int(admin_id) in settings.admin_id_set)
+
+
 async def auth_request(request: web.Request) -> web.Response:
+    r: aioredis.Redis = request.app["redis"]
+    # سقفِ IP **پیش از** اعتبارسنجیِ شناسه، وگرنه کوبیدن با شناسهٔ نامعتبر رایگان است.
+    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}",
+                             _RL_REQ_PER_IP, _RL_WINDOW):
+        return _login_page(error="درخواستِ زیاد از این آدرس؛ چند دقیقه بعد امتحان کن.")
     form = await request.post()
     admin_id = (form.get("admin_id") or "").strip()
-    if not admin_id.isdigit() or int(admin_id) not in settings.admin_id_set:
+    if not _is_admin_id(admin_id):
         return _login_page(error="شناسهٔ ادمین نامعتبر است.")
-    r: aioredis.Redis = request.app["redis"]
-    rk = f"panelreq:{admin_id}"
-    n = await r.incr(rk)
-    if n == 1:
-        await r.expire(rk, 600)
-    if n > 5:
+    if not await _rate_limit(r, f"panelreq:{admin_id}", _RL_REQ_PER_ADMIN, _RL_WINDOW):
         return _login_page(error="درخواستِ زیاد؛ چند دقیقه بعد امتحان کن.")
     code = f"{secrets.randbelow(1000000):06d}"
-    await r.set(f"panelcode:{admin_id}", code, ex=300)
+    await r.set(f"panelcode:{admin_id}", code, ex=_CODE_TTL)
+    # کدِ تازه بودجهٔ حدسِ تازه می‌آورد. این «ریست» حالا بی‌خطر است، چون بودجه
+    # دیگر اندپوینت را نمی‌بندد — به کدی بسته است که همین الان عوض شد.
     await r.delete(f"paneltry:{admin_id}")
     if not await _send_code(int(admin_id), code):
         return _login_page(error="نتوانستم کد را بفرستم؛ مطمئن شو ربات را /start کرده‌ای.")
@@ -1690,22 +1928,35 @@ async def auth_request(request: web.Request) -> web.Response:
 
 
 async def auth_verify(request: web.Request) -> web.Response:
+    r: aioredis.Redis = request.app["redis"]
+    if not await _rate_limit(r, f"panelip:ver:{_client_ip(request)}",
+                             _RL_VERIFY_PER_IP, _RL_WINDOW):
+        return _login_page(error="تلاشِ زیاد از این آدرس؛ چند دقیقه بعد امتحان کن.")
     form = await request.post()
     admin_id = (form.get("admin_id") or "").strip()
     code = (form.get("code") or "").strip()
-    if not admin_id.isdigit():
+    # همان گاردی که `auth_request` دارد. بدونش، هر شناسهٔ عددیِ دلخواه یک کلیدِ
+    # `paneltry:` می‌ساخت — اندازه‌گیری‌شده: ۲۰۰ شناسه از یک IP، ۲۰۰ کلید.
+    if not _is_admin_id(admin_id):
         return _login_page(error="نامعتبر.")
-    r: aioredis.Redis = request.app["redis"]
     tk = f"paneltry:{admin_id}"
     tries = await r.incr(tk)
-    if tries == 1:
-        await r.expire(tk, 300)
-    if tries > 6:
-        return _login_page(error="تلاشِ زیاد؛ از نو کد بگیر.")
+    if tries == 1 or await r.ttl(tk) < 0:
+        await r.expire(tk, _CODE_TTL)
     real = await r.get(f"panelcode:{admin_id}")
-    if not real or code != real:
+    # روی **بایت** مقایسه می‌شود، نه رشته: `secrets.compare_digest` روی strِ
+    # غیرASCII `TypeError` می‌دهد (اجراشده) و `'۱۲۳۴۵۶'.isdigit()` صادق است، پس
+    # فرمِ رشته‌ای یک کدِ با رقمِ فارسی را به ۵۰۰ تبدیل می‌کرد نه به «کد نادرست».
+    ok = bool(real) and secrets.compare_digest(code.encode(), real.encode())
+    if not ok:
+        if tries >= _CODE_TRIES:
+            # **کد** را می‌کشیم، نه اندپوینت را: کاربر یک کدِ تازه می‌گیرد و
+            # بلافاصله ادامه می‌دهد، در حالی که مهاجم برای حدسِ بیشتر باید از
+            # سقفِ درخواستِ کد رد شود.
+            await r.delete(f"panelcode:{admin_id}", tk)
+            return _login_page(error="کد سوخت؛ از نو کد بگیر.")
         return _login_page(step=2, admin_id=admin_id, sent=True, error="کد نادرست است.")
-    await r.delete(f"panelcode:{admin_id}")
+    await r.delete(f"panelcode:{admin_id}", tk)
     resp = web.HTTPFound("/")
     # secure را از اسکیمِ واقعی بگیر: روی HTTPِ ساده (بدونِ TLS/پروکسی) کوکیِ Secure
     # توسطِ مرورگر دور انداخته می‌شود → لوپِ بی‌پایانِ بازگشت به /login. پشتِ Cloudflare/
@@ -1753,7 +2004,7 @@ async def users_page(request: web.Request) -> web.Response:
         page = max(0, int(request.query.get("page", "0")))
     except ValueError:
         page = 0
-    data = await _users_list(page, request.query.get("q", ""))
+    data = await _users_cached(request.app, page, request.query.get("q", ""))
     done = {"block": "کاربر بلاک شد.", "unblock": "بلاکِ کاربر برداشته شد."}.get(
         request.query.get("done", ""), "")
     return _render("users", admin_id=_session_admin(request), active="users",
@@ -1776,6 +2027,9 @@ async def users_block(request: web.Request) -> web.Response:
                 u.is_blocked = (action == "block")
                 await db.commit()
                 outcome = action
+                # پیش از ریدایرکت، وگرنه صفحهٔ بعدی نمای کهنه را نشان می‌دهد و
+                # ادمین فکر می‌کند بلاک نگرفت.
+                await _users_cache_bust(request.app.get("redis"))
     # بازسازیِ URL از فیلدهای امن (نه ret کاربر → بدونِ open-redirect)
     params = []
     if page.isdigit() and int(page):
@@ -2551,6 +2805,11 @@ async def _on_startup(app: web.Application) -> None:
 
 
 async def _on_cleanup(app: web.Application) -> None:
+    # تازه‌سازیِ pot در پس‌زمینه می‌دود؛ اگر لغو نشود از خودِ اپ عمر بیشتری
+    # می‌کند — همان انضباطی که keepaliveِ `dl_active` لازم دارد.
+    task = app.get(_POT_TASK)
+    if task is not None and not task.done():
+        task.cancel()
     try:
         await app["redis"].aclose()
     except Exception:  # noqa: BLE001

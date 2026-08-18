@@ -92,6 +92,9 @@ _PAL = "tests/test_panel_path_is_alive.py"
 _CHR = "tests/panel/test_security_characterization.py"
 _SEC = "tests/panel/test_security_headers.py"
 _SVF = "tests/panel/test_save_failures.py"
+_LRL = "tests/panel/test_login_rate_limit.py"
+_POT = "tests/panel/test_pot_health.py"
+_USR = "tests/panel/test_users_page.py"
 _SBD = "tests/test_settings_bounds.py"
 _UPD = "tests/test_upload_direction.py"
 _UPC = "tests/test_upload_ceiling.py"
@@ -1289,6 +1292,219 @@ CASES: list[dict] = [
      "new": 'raise web.HTTPFound("/nodes")',
      "target": _SVF,
      "expect": "test_an_invalid_role_says_so"},
+
+    # ── محدودیتِ نرخِ مسیرِ لاگین ──────────────────────────────────────────
+    # ⚠️ این موارد `tests/panel/` را هدف می‌گیرند، پس به `requirements-admin.txt`
+    # نیاز دارند؛ بدونِ آن، هدف اصلاً اجرا نمی‌شود (که دفترچه آن را به‌عنوان
+    # حالتِ سومِ «اجرا نشد» گزارش می‌کند، نه «نگرفت»).
+    #
+    # یکی به‌ازای هر لایه، چون سه دفاعِ مستقل روی یک مسیرند و یک سابوتاژِ
+    # تک‌لایه‌ای در حضورِ لایهٔ دیگر «نگرفت» گزارش می‌شود (§۶).
+    # الگو **دو خطی** است چون بلوکِ کامنتِ بالای همین ثابت هم `_CODE_TRIES = 3`
+    # را نقل می‌کند — همان خودارجاعی که یک‌بار یک گاردِ ASTی داکس‌استرینگِ خودش
+    # را گرفت. اولین اجرای دفترچه با «الگو ۲ بار پیدا شد» گرفتش.
+    {"name": "login: the per-code guess budget goes back to six",
+     "path": "app/admin_web.py",
+     "old": "_CODE_TTL = 300\n_CODE_TRIES = 3",
+     "new": "_CODE_TTL = 300\n_CODE_TRIES = 6",
+     "target": _LRL,
+     "expect": "test_the_guess_budget_per_issued_code_is_three"},
+
+    # لایهٔ ریست، تنها جایی که خودش به‌تنهایی تصمیم می‌گیرد (مصرفِ ناقص).
+    {"name": "login: a fresh code inherits the half-spent guess counter",
+     "path": "app/admin_web.py",
+     "old": '    await r.delete(f"paneltry:{admin_id}")',
+     "new": "    pass",
+     "target": _LRL,
+     "expect": "test_a_fresh_code_starts_with_a_full_guess_budget"},
+
+    # کنترلِ معکوسِ همان: برداشتنِ **یک** لایه ادعای انتها‌به‌انتها را نمی‌اندازد،
+    # چون پاک‌شدنِ کد هم همان کلید را می‌برد. اولین اجرای دفترچه همین را نشان داد.
+    {"name": "login: dropping only the reset must NOT fail the end-to-end claim",
+     "path": "app/admin_web.py",
+     "old": '    await r.delete(f"paneltry:{admin_id}")',
+     "new": "    pass",
+     "target": _LRL + "::test_exhausting_the_guesses_leaves_a_fresh_code_working",
+     "expect": None},
+
+    # ── C-4: ایندکسِ `last_seen` و کشِ صفحهٔ کاربران ───────────────────────
+    {"name": "users: the last_seen index goes away",
+     "path": "app/db.py",
+     "old": '    "CREATE INDEX IF NOT EXISTS ix_users_last_seen ON users (last_seen)",\n',
+     "new": "",
+     "target": _USR,
+     "expect": "test_the_index_matches_the_column_the_page_orders_by"},
+
+    {"name": "users: the page queries the database on every load again",
+     "path": "app/admin_web.py",
+     "old": '    data = await _users_cached(request.app, page, request.query.get("q", ""))',
+     "new": '    data = await _users_list(page, request.query.get("q", ""))',
+     "target": _USR,
+     "expect": "test_a_repeat_load_does_not_hit_the_database"},
+
+    # باطل‌سازی برداشته شود: کش صفحه را از «کند» به **غلط** می‌برد.
+    {"name": "users: blocking no longer busts the cache",
+     "path": "app/admin_web.py",
+     "old": '                await _users_cache_bust(request.app.get("redis"))',
+     "new": "                pass",
+     "target": _USR,
+     "expect": "test_blocking_a_user_shows_up_immediately"},
+
+    {"name": "users: the cache key drops the version counter",
+     "path": "app/admin_web.py",
+     "old": '    key = f"userscache:{await _users_cache_ver(redis)}:{page}:{q}"',
+     "new": '    key = f"userscache:{page}:{q}"',
+     "target": _USR,
+     "expect": "test_unblocking_is_visible_immediately_too"},
+
+    {"name": "users: every page and query share one cache key",
+     "path": "app/admin_web.py",
+     "old": '    key = f"userscache:{await _users_cache_ver(redis)}:{page}:{q}"',
+     "new": '    key = f"userscache:{await _users_cache_ver(redis)}"',
+     "target": _USR,
+     "expect": "test_different_pages_and_queries_are_cached_separately"},
+
+    {"name": "users: the cached page never expires",
+     "path": "app/admin_web.py",
+     "old": "        await redis.set(key, json.dumps(data, default=str), ex=_USERS_TTL)",
+     "new": "        await redis.set(key, json.dumps(data, default=str))",
+     "target": _USR,
+     "expect": "test_the_cache_expires_on_the_modelled_clock"},
+
+    # ── C-3: سلامتِ pot-provider نباید صفحه را نگه دارد ────────────────────
+    # ⚠️ این موارد هم `tests/panel/` را هدف می‌گیرند (به `requirements-admin.txt`
+    # نیاز دارند).
+    #
+    # برگرداندنِ پروبِ درجا — شکلِ دقیقِ پیش از رفع. تنها ادعایی که با سوکتِ
+    # **واقعی** و ساعتِ واقعی سنجیده می‌شود، پس تنها ادعایی هم هست که این
+    # سابوتاژ می‌تواند بیندازد.
+    {"name": "pot: the health check blocks the page again",
+     "path": "app/admin_web.py",
+     "old": '    h["pot"] = await _pot_health(app)',
+     "new": ('    h["pot"] = None\n'
+             "    if settings.pot_provider_url:\n"
+             '        h["pot"] = False\n'
+             "        try:\n"
+             "            async with aiohttp.ClientSession("
+             "timeout=aiohttp.ClientTimeout(total=3)) as s:\n"
+             '                async with s.get(settings.pot_provider_url + "/ping") as resp:\n'
+             '                    h["pot"] = resp.status == 200\n'
+             "        except Exception:  # noqa: BLE001\n"
+             '            h["pot"] = False'),
+     "target": _POT,
+     "expect": "test_a_really_hung_provider_does_not_slow_the_dashboard"},
+
+    {"name": "pot: a fresh cache no longer skips the probe",
+     "path": "app/admin_web.py",
+     "old": "    if not fresh:\n        _schedule_pot_refresh(app)",
+     "new": "    _schedule_pot_refresh(app)",
+     "target": _POT,
+     "expect": "test_a_fresh_cached_result_makes_no_probe_at_all"},
+
+    # دو کلید به یکی تا شود: آن‌وقت کهنه‌شدنِ کش مقدارِ شناخته‌شده را هم می‌برد.
+    {"name": "pot: the last-known value expires with the freshness key",
+     "path": "app/admin_web.py",
+     "old": '        await r.set(_POT_LAST, "1" if ok else "0")',
+     "new": '        await r.set(_POT_LAST, "1" if ok else "0", ex=_POT_FRESH_TTL)',
+     "target": _POT,
+     "expect": "test_the_last_known_value_outlives_the_freshness_window"},
+
+    {"name": "pot: background refreshes pile up on every page load",
+     "path": "app/admin_web.py",
+     "old": "    task = app.get(_POT_TASK)\n    if task is not None and not task.done():\n        return",
+     "new": "    pass",
+     "target": _POT,
+     "expect": "test_only_one_background_refresh_runs_at_a_time"},
+
+    # «نسنجیده» دوباره با «پیکربندی‌نشده» یکی شود — یعنی پنل دربارهٔ سرویسی که
+    # پیکربندی **شده** دروغ بگوید.
+    {"name": "pot: an unprobed provider is reported as unconfigured again",
+     "path": "app/admin_web.py",
+     "old": "    return POT_UNKNOWN if last is None else last == \"1\"",
+     "new": "    return None if last is None else last == \"1\"",
+     "target": _POT,
+     "expect": "test_a_configured_but_unprobed_provider_is_not_called_unconfigured"},
+
+    {"name": "pot: cleanup stops cancelling the background refresh",
+     "path": "app/admin_web.py",
+     "old": "    task = app.get(_POT_TASK)\n    if task is not None and not task.done():\n        task.cancel()",
+     "new": "    pass",
+     "target": _POT,
+     "expect": "test_the_cleanup_hook_cancels_a_running_refresh"},
+
+    # ⚠️ **موردِ «هر دو لایه با هم» این‌جا ثبت نشد، و دلیلش محدودیتِ ابزار است.**
+    # هر مورد یک وصلهٔ **پیوسته** می‌خورد (`_run_case` یک `sabotage()` می‌سازد)، و
+    # دو موردِ دولایهٔ موجود (castbox و ig) هر دو یک بلوکِ پیوسته را بازنویسی
+    # می‌کنند. این‌جا دو لایه در **دو تابعِ متفاوت** نشسته‌اند
+    # (`auth_request` و `auth_verify`)، پس با این ابزار یک‌جا برداشته نمی‌شوند.
+    # نتیجه: ادعای انتها‌به‌انتها (`test_exhausting_…`) کنترل است نه ادعای
+    # سابوتاژشده — همان‌طور که داکس‌استرینگش می‌گوید. پشتیبانی از وصلهٔ چندنقطه‌ای
+    # کارِ خودش را می‌خواهد (به‌علاوهٔ یک سلف‌تست در `test_sabotage_helper`) و
+    # عمداً سوارِ این تغییر نشد.
+
+    {"name": "login: verify stops checking the id against admin_id_set",
+     "path": "app/admin_web.py",
+     "old": '    if not _is_admin_id(admin_id):\n        return _login_page(error="نامعتبر.")',
+     "new": '    if not admin_id.isdigit():\n        return _login_page(error="نامعتبر.")',
+     "target": _LRL,
+     "expect": "test_verify_rejects_an_id_that_is_not_an_admin"},
+
+    {"name": "login: the per-IP ceiling on verify disappears",
+     "path": "app/admin_web.py",
+     "old": ('    if not await _rate_limit(r, f"panelip:ver:{_client_ip(request)}",\n'
+             "                             _RL_VERIFY_PER_IP, _RL_WINDOW):"),
+     "new": "    if False:",
+     "target": _LRL,
+     "expect": "test_the_per_ip_verify_ceiling_fires"},
+
+    # کنترلِ معکوس: همان سابوتاژ روی سقفِ **درخواست** نباید ادعای verify را
+    # بیندازد — اثباتِ اینکه آن تست دربارهٔ لایهٔ خودش حرف می‌زند، نه همسایه‌اش.
+    {"name": "login: the per-IP ceiling on the code request disappears",
+     "path": "app/admin_web.py",
+     "old": ('    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}",\n'
+             "                             _RL_REQ_PER_IP, _RL_WINDOW):"),
+     "new": "    if False:",
+     "target": _LRL,
+     "expect": "test_the_per_ip_request_ceiling_fires"},
+    {"name": "login: dropping the request ceiling must NOT fail the verify claim",
+     "path": "app/admin_web.py",
+     "old": ('    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}",\n'
+             "                             _RL_REQ_PER_IP, _RL_WINDOW):"),
+     "new": "    if False:",
+     "target": _LRL + "::test_the_per_ip_verify_ceiling_fires",
+     "expect": None},
+
+    {"name": "login: the limiter stops repairing a counter that lost its TTL",
+     "path": "app/admin_web.py",
+     "old": "    if n == 1 or await r.ttl(key) < 0:",
+     "new": "    if n == 1:",
+     "target": _LRL,
+     "expect": "test_the_limiter_repairs_a_counter_that_lost_its_ttl"},
+
+    # مقایسه روی رشته به‌جای بایت: `compare_digest` روی strِ غیرASCII
+    # `TypeError` می‌دهد، پس کدِ با رقمِ فارسی ۵۰۰ می‌شود نه «کد نادرست».
+    {"name": "login: the code comparison goes back to comparing str",
+     "path": "app/admin_web.py",
+     "old": "    ok = bool(real) and secrets.compare_digest(code.encode(), real.encode())",
+     "new": "    ok = bool(real) and secrets.compare_digest(code, real)",
+     "target": _LRL,
+     "expect": "test_a_persian_digit_code_is_wrong_not_a_crash"},
+
+    {"name": "login: the admin-id length guard disappears",
+     "path": "app/admin_web.py",
+     "old": "    return (admin_id.isdigit() and len(admin_id) <= _ADMIN_ID_MAXLEN\n",
+     "new": "    return (admin_id.isdigit()\n",
+     "target": _LRL,
+     "expect": "test_an_over_long_admin_id_is_rejected_not_a_crash"},
+
+    # کنترلِ منفیِ هارنس: اگر ساعتِ fakeredis وصل نباشد، هر ادعای پنجره‌ای به
+    # دلیلِ غلط سبز می‌ماند. این تست همان را می‌گیرد.
+    {"name": "login: the modelled clock stops driving fakeredis expiry",
+     "path": "tests/panel/conftest.py",
+     "old": "    monkeypatch.setattr(bfs, \"time\", c)",
+     "new": "    pass",
+     "target": _LRL,
+     "expect": "test_the_clock_fixture_really_drives_redis_expiry"},
 ]
 
 
