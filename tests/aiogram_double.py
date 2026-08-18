@@ -40,6 +40,9 @@ _METHOD_MODEL = {
     "answer_callback_query": methods.AnswerCallbackQuery,
 }
 
+# نگاشتِ معکوس، برای مسیرِ `bot(method)` که aiogram خودش شیءِ متد را می‌سازد.
+_MODEL_NAME = {v: k for k, v in _METHOD_MODEL.items()}
+
 
 def bind_like_aiogram(name: str, args: tuple, kwargs: dict) -> dict[str, Any]:
     """آرگومان‌ها را مثلِ خودِ aiogram bind و اعتبارسنجی می‌کند؛ payload را می‌دهد.
@@ -106,3 +109,22 @@ class ValidatingBot:
 
     async def edit_message_media(self, *a, **kw):
         return self._on("edit_message_media", bind_like_aiogram("edit_message_media", a, kw))
+
+    # ── مسیرِ دومِ aiogram: متدهای «چسبیده به شیء» ────────────────────
+    # `cq.answer()` و `msg.edit_text()` مستقیم روی بات صدا زده نمی‌شوند؛ aiogram
+    # خودش شیءِ متد را می‌سازد و بعد `bot(method)` می‌زند (`TelegramMethod.
+    # __await__`). بدونِ `__call__`، هر تستی که هندلرِ **واقعی** را با یک
+    # `CallbackQuery`/`Message`ِ واقعی براند روی `TypeError: not callable`
+    # می‌افتد — و راهِ فرارش (داکلی که خودش `answer` را اعلام کند) دقیقاً همان
+    # چیزی است که این ماژول برای بستنش ساخته شد.
+    #
+    # این مسیر از `bind_like_aiogram` **قوی‌تر** است، نه ضعیف‌تر: مدل را خودِ
+    # aiogram ساخته و اعتبارسنجی کرده، پس آنچه ثبت می‌شود عیناً همان چیزی است
+    # که روی سیم می‌رفت.
+    async def __call__(self, method, request_timeout=None):  # noqa: ARG002
+        name = _MODEL_NAME.get(type(method))
+        if name is None:
+            raise AssertionError(
+                f"aiogram_double: مدلِ {type(method).__name__} را به _METHOD_MODEL اضافه کن")
+        payload = {k: v for k, v in method.model_dump(exclude_none=True).items()}
+        return self._on(name, payload)

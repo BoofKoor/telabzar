@@ -33,6 +33,7 @@ from . import dl_active
 from . import dl_cache
 from . import downloader as D
 from . import instagram_anon as IGA
+from . import probe_stats as PS
 from . import processing as P
 from . import safety
 from . import settings_store
@@ -823,6 +824,10 @@ async def run_download(ctx: dict, payload: dict) -> None:
         while True:
             cname, cpath = await _next_cookie(redis, platform, workdir, tried)
             attempts += 1
+            # واحدِ مصرفِ منبع **تلاش** است نه جاب: `_next_cookie` همین حالا
+            # `ck.pick` + `note_use` زده، پس روی سطلِ پر هر تلاش یک اکانت خرج
+            # کرده — و این حلقه تا `dl_max_cookie_tries` بار تکرار می‌شود.
+            await PS.note(redis, PS.ATTEMPT)
             try:
                 info = await D.probe(url, await _opts(redis, platform, workdir, cpath))
                 await ck.mark_ok(redis, cname)
@@ -864,6 +869,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
         if info is None:
             shutil.rmtree(workdir, ignore_errors=True)  # کوکیِ materialize‌شدهٔ نود
             await _metric(redis, platform, ok=False)
+            await PS.note(redis, PS.FAIL)
             await ck.note_exit(redis, settings.node_id, platform, ok=False)
             if D.is_youtube_botcheck(msg, platform):
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
@@ -878,11 +884,16 @@ async def run_download(ctx: dict, payload: dict) -> None:
         if pol.enabled:
             why = safety.check_meta(info)
             if why:
+                # `blocked`، نه `menu`: probe موفق بوده ولی منویی ساخته نمی‌شود،
+                # پس این جاب هرگز pick‌شدنی نیست و ریختنش در مخرجِ نرخِ رهاشدن
+                # آن عدد را با هر لینکِ سنی باد می‌کند.
+                await PS.note(redis, PS.BLOCKED)
                 await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
                                  payload.get("tg_user_id") or 0, why, url)
                 return
         cap_min = await settings_store.get_int("dl_max_duration_min", settings.dl_max_duration_min)
         if cap_min > 0 and (info.get("duration") or 0) > cap_min * 60:
+            await PS.note(redis, PS.BLOCKED)      # همان: موفق ولی بی‌منو
             await _edit(bot, chat_id, status_mid, t(lang, "dl_too_long", min=cap_min))
             return
         opts = info.get("options") or []
@@ -898,16 +909,27 @@ async def run_download(ctx: dict, payload: dict) -> None:
         # منو را روی عکسِ تامبنیل بفرست تا هنگامِ انتخاب، همان پیام درجا به ویدیو
         # تبدیل شود (editMessageMedia فقط روی پیامِ رسانه‌ای کار می‌کند، نه متن).
         if thumb_url:
+            # پرچمِ `sent` برای این است که شمارنده **بیرونِ** این `try` بماند:
+            # داخلش، هر استثنایی از خودِ شمارنده به شاخهٔ منوی متنی می‌افتاد و
+            # منو دوبار می‌رفت. `mark_menu` امروز استثنا نمی‌دهد، ولی درستیِ
+            # مسیرِ تحویل نباید به آن خاصیت گره بخورد.
+            sent = False
             try:
                 await bot.send_photo(chat_id, thumb_url, caption=caption, reply_markup=kb)
+                sent = True
                 try:
                     await bot.delete_message(chat_id, status_mid)
                 except Exception:  # noqa: BLE001
                     pass
-                return
             except Exception:  # noqa: BLE001
                 pass  # تامبنیل نشد → منوی متنی
+            if sent:
+                await PS.mark_menu(redis, ref)
+                return
         await _edit(bot, chat_id, status_mid, caption, kb=kb)
+        # هشدارِ دقت: `_edit` استثنا را می‌بلعد، پس این شاخه ممکن است «منو» بشمارد
+        # در حالی که کاربر چیزی ندیده — `menu` و در نتیجه «رهاشده» را بالا می‌برد.
+        await PS.mark_menu(redis, ref)
         return
 
     # ── فازِ fetch: دانلود + spawn ──
