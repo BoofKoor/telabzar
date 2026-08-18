@@ -92,6 +92,7 @@ _PAL = "tests/test_panel_path_is_alive.py"
 _CHR = "tests/panel/test_security_characterization.py"
 _SEC = "tests/panel/test_security_headers.py"
 _SVF = "tests/panel/test_save_failures.py"
+_LRL = "tests/panel/test_login_rate_limit.py"
 _SBD = "tests/test_settings_bounds.py"
 _UPD = "tests/test_upload_direction.py"
 _UPC = "tests/test_upload_ceiling.py"
@@ -1289,6 +1290,114 @@ CASES: list[dict] = [
      "new": 'raise web.HTTPFound("/nodes")',
      "target": _SVF,
      "expect": "test_an_invalid_role_says_so"},
+
+    # ── محدودیتِ نرخِ مسیرِ لاگین ──────────────────────────────────────────
+    # ⚠️ این موارد `tests/panel/` را هدف می‌گیرند، پس به `requirements-admin.txt`
+    # نیاز دارند؛ بدونِ آن، هدف اصلاً اجرا نمی‌شود (که دفترچه آن را به‌عنوان
+    # حالتِ سومِ «اجرا نشد» گزارش می‌کند، نه «نگرفت»).
+    #
+    # یکی به‌ازای هر لایه، چون سه دفاعِ مستقل روی یک مسیرند و یک سابوتاژِ
+    # تک‌لایه‌ای در حضورِ لایهٔ دیگر «نگرفت» گزارش می‌شود (§۶).
+    # الگو **دو خطی** است چون بلوکِ کامنتِ بالای همین ثابت هم `_CODE_TRIES = 3`
+    # را نقل می‌کند — همان خودارجاعی که یک‌بار یک گاردِ ASTی داکس‌استرینگِ خودش
+    # را گرفت. اولین اجرای دفترچه با «الگو ۲ بار پیدا شد» گرفتش.
+    {"name": "login: the per-code guess budget goes back to six",
+     "path": "app/admin_web.py",
+     "old": "_CODE_TTL = 300\n_CODE_TRIES = 3",
+     "new": "_CODE_TTL = 300\n_CODE_TRIES = 6",
+     "target": _LRL,
+     "expect": "test_the_guess_budget_per_issued_code_is_three"},
+
+    # لایهٔ ریست، تنها جایی که خودش به‌تنهایی تصمیم می‌گیرد (مصرفِ ناقص).
+    {"name": "login: a fresh code inherits the half-spent guess counter",
+     "path": "app/admin_web.py",
+     "old": '    await r.delete(f"paneltry:{admin_id}")',
+     "new": "    pass",
+     "target": _LRL,
+     "expect": "test_a_fresh_code_starts_with_a_full_guess_budget"},
+
+    # کنترلِ معکوسِ همان: برداشتنِ **یک** لایه ادعای انتها‌به‌انتها را نمی‌اندازد،
+    # چون پاک‌شدنِ کد هم همان کلید را می‌برد. اولین اجرای دفترچه همین را نشان داد.
+    {"name": "login: dropping only the reset must NOT fail the end-to-end claim",
+     "path": "app/admin_web.py",
+     "old": '    await r.delete(f"paneltry:{admin_id}")',
+     "new": "    pass",
+     "target": _LRL + "::test_exhausting_the_guesses_leaves_a_fresh_code_working",
+     "expect": None},
+
+    # ⚠️ **موردِ «هر دو لایه با هم» این‌جا ثبت نشد، و دلیلش محدودیتِ ابزار است.**
+    # هر مورد یک وصلهٔ **پیوسته** می‌خورد (`_run_case` یک `sabotage()` می‌سازد)، و
+    # دو موردِ دولایهٔ موجود (castbox و ig) هر دو یک بلوکِ پیوسته را بازنویسی
+    # می‌کنند. این‌جا دو لایه در **دو تابعِ متفاوت** نشسته‌اند
+    # (`auth_request` و `auth_verify`)، پس با این ابزار یک‌جا برداشته نمی‌شوند.
+    # نتیجه: ادعای انتها‌به‌انتها (`test_exhausting_…`) کنترل است نه ادعای
+    # سابوتاژشده — همان‌طور که داکس‌استرینگش می‌گوید. پشتیبانی از وصلهٔ چندنقطه‌ای
+    # کارِ خودش را می‌خواهد (به‌علاوهٔ یک سلف‌تست در `test_sabotage_helper`) و
+    # عمداً سوارِ این تغییر نشد.
+
+    {"name": "login: verify stops checking the id against admin_id_set",
+     "path": "app/admin_web.py",
+     "old": '    if not _is_admin_id(admin_id):\n        return _login_page(error="نامعتبر.")',
+     "new": '    if not admin_id.isdigit():\n        return _login_page(error="نامعتبر.")',
+     "target": _LRL,
+     "expect": "test_verify_rejects_an_id_that_is_not_an_admin"},
+
+    {"name": "login: the per-IP ceiling on verify disappears",
+     "path": "app/admin_web.py",
+     "old": ('    if not await _rate_limit(r, f"panelip:ver:{_client_ip(request)}",\n'
+             "                             _RL_VERIFY_PER_IP, _RL_WINDOW):"),
+     "new": "    if False:",
+     "target": _LRL,
+     "expect": "test_the_per_ip_verify_ceiling_fires"},
+
+    # کنترلِ معکوس: همان سابوتاژ روی سقفِ **درخواست** نباید ادعای verify را
+    # بیندازد — اثباتِ اینکه آن تست دربارهٔ لایهٔ خودش حرف می‌زند، نه همسایه‌اش.
+    {"name": "login: the per-IP ceiling on the code request disappears",
+     "path": "app/admin_web.py",
+     "old": ('    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}",\n'
+             "                             _RL_REQ_PER_IP, _RL_WINDOW):"),
+     "new": "    if False:",
+     "target": _LRL,
+     "expect": "test_the_per_ip_request_ceiling_fires"},
+    {"name": "login: dropping the request ceiling must NOT fail the verify claim",
+     "path": "app/admin_web.py",
+     "old": ('    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}",\n'
+             "                             _RL_REQ_PER_IP, _RL_WINDOW):"),
+     "new": "    if False:",
+     "target": _LRL + "::test_the_per_ip_verify_ceiling_fires",
+     "expect": None},
+
+    {"name": "login: the limiter stops repairing a counter that lost its TTL",
+     "path": "app/admin_web.py",
+     "old": "    if n == 1 or await r.ttl(key) < 0:",
+     "new": "    if n == 1:",
+     "target": _LRL,
+     "expect": "test_the_limiter_repairs_a_counter_that_lost_its_ttl"},
+
+    # مقایسه روی رشته به‌جای بایت: `compare_digest` روی strِ غیرASCII
+    # `TypeError` می‌دهد، پس کدِ با رقمِ فارسی ۵۰۰ می‌شود نه «کد نادرست».
+    {"name": "login: the code comparison goes back to comparing str",
+     "path": "app/admin_web.py",
+     "old": "    ok = bool(real) and secrets.compare_digest(code.encode(), real.encode())",
+     "new": "    ok = bool(real) and secrets.compare_digest(code, real)",
+     "target": _LRL,
+     "expect": "test_a_persian_digit_code_is_wrong_not_a_crash"},
+
+    {"name": "login: the admin-id length guard disappears",
+     "path": "app/admin_web.py",
+     "old": "    return (admin_id.isdigit() and len(admin_id) <= _ADMIN_ID_MAXLEN\n",
+     "new": "    return (admin_id.isdigit()\n",
+     "target": _LRL,
+     "expect": "test_an_over_long_admin_id_is_rejected_not_a_crash"},
+
+    # کنترلِ منفیِ هارنس: اگر ساعتِ fakeredis وصل نباشد، هر ادعای پنجره‌ای به
+    # دلیلِ غلط سبز می‌ماند. این تست همان را می‌گیرد.
+    {"name": "login: the modelled clock stops driving fakeredis expiry",
+     "path": "tests/panel/conftest.py",
+     "old": "    monkeypatch.setattr(bfs, \"time\", c)",
+     "new": "    pass",
+     "target": _LRL,
+     "expect": "test_the_clock_fixture_really_drives_redis_expiry"},
 ]
 
 

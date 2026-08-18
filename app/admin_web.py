@@ -1657,6 +1657,106 @@ async def login(request: web.Request) -> web.Response:
     return _login_page()
 
 
+# ── محدودیتِ نرخِ مسیرِ لاگین ──────────────────────────────────────────────
+# پورتِ پنل از اینترنت رسیدنی است، پس این تنها چیزی است که بینِ یک مهاجم و یک
+# کدِ ۶رقمی می‌ایستد. **وضعِ پیش از این تغییر با اجرا سنجیده شد، نه با خواندن**
+# (هارنسِ `tests/panel/`، ساعتِ fakeredis مدل‌شده) — و برخلافِ فرضِ اولیه
+# محدودیت **وجود داشت**:
+#
+#   `panelreq:<id>` → ۵ درخواستِ کد در ۶۰۰ ثانیه   (TTL سنجیده‌شده: ۶۰۰)
+#   `paneltry:<id>` → ۶ حدس در ۳۰۰ ثانیه            (TTL سنجیده‌شده: ۳۰۰)
+#
+# ولی `auth_request` شمارندهٔ حدس را **پاک می‌کرد**، پس بودجهٔ واقعی ضرب می‌شد:
+# **۳۰ حدس در هر پنجرهٔ ۶۰۰ ثانیه** (اندازه‌گیری‌شده، نه محاسبه‌شده)، و پس از
+# گذشتِ پنجره از نو. یعنی در برابرِ فضای ۱۰^۶: ~۴٫۳e-3 در روز، یعنی احتمالِ
+# تجمعیِ ~۷۹٪ در یک سالِ حملهٔ پیوسته. «بی‌نهایت» نبود، ولی برای اندپوینتی که
+# برای همیشه باز است هم کافی نبود.
+#
+# **سه نقصِ مشخص که همان اندازه‌گیری داد:**
+#   ۱. `auth_verify` شناسه را با `admin_id_set` **نمی‌سنجید** (برخلافِ
+#      `auth_request`) — ۲۰۰ شناسهٔ دلخواه از یک IP، ۲۰۰ کلیدِ `paneltry:` ساخت
+#      و هیچ‌کدام رد نشد. یعنی ساختِ کلیدِ بی‌کران از یک اندپوینتِ عمومی.
+#   ۲. هیچ سقفی روی **مبدأ** نبود؛ هر دو شمارنده روی هویتِ **قربانی** بودند.
+#   ۳. مقایسهٔ کد `!=` بود، نه زمان‌ثابت.
+#
+# **شکلِ رفع، و چرا این شکل:** بودجهٔ حدس به **خودِ کد** بسته شد نه به اندپوینت —
+# با تمام‌شدنش کد کشته می‌شود و کاربر یک کدِ تازه می‌گیرد، به‌جای اینکه مسیرِ
+# verify برای ۳۰۰ ثانیه بسته شود. این تفاوت باربر است: تنها به این دلیل می‌شود
+# سقفِ حدس را ۶ → ۳ آورد **بدونِ** ساختنِ یک اهرمِ قفل‌کردنِ ادمینِ واقعی. (فرمِ
+# بدیهی‌تر — «حذفِ ریست» — دقیقاً همان اهرم را می‌ساخت: مهاجم با ۶ حدس در هر
+# ۳۰۰ ثانیه ورودِ ادمین را برای همیشه می‌بست.)
+#
+# **عددها:**
+#   • `_CODE_TRIES = 3` — یک انسان که کدِ ۶رقمی را از DMِ تلگرام رونویسی می‌کند
+#     به ۱ نیاز دارد؛ ۳ یک تایپ و یک کدِ کهنه را هم پوشش می‌دهد. ۶ → ۳ نرخِ
+#     brute-force را نصف می‌کند و طبقِ بالا هزینهٔ در‌دسترس‌بودن ندارد.
+#   • `_RL_REQ_PER_ADMIN = 5` — **عمداً دست‌نخورده.** این تنها اهرمی است که یک
+#     مهاجم علیهِ ادمینِ واقعی دارد (بودجه را بسوزان → ادمین کد نمی‌گیرد)، پس
+#     پایین‌آوردنش حاشیهٔ brute-force را با یک قفلِ ارزان‌ترِ ادمین عوض می‌کند.
+#     آن معامله تصمیمِ طراحیِ احراز هویت است نه تنظیمِ نرخ؛ همان‌جا ماند که بود.
+#   • `_RL_REQ_PER_IP = 10` — **دلخواه در حدِ یک مرتبهٔ بزرگی**، و صریح می‌گویم
+#     دلخواه است. تنها قیدِ واقعی‌اش این است که باید **بالاتر از** سقفِ per-admin
+#     باشد، وگرنه دو ادمینِ پشتِ یک NAT پیش از تمام‌شدنِ بودجهٔ خودشان به سقفِ IP
+#     می‌خورند. ۱۰ = دو برابرِ ۵.
+#   • `_RL_VERIFY_PER_IP` — **مشتق است نه دلخواه**: بیشترین حدسی که یک IP
+#     می‌تواند زیرِ بودجهٔ درخواستِ خودش **مشروع** تولید کند، یعنی ۱۰×۳.
+#
+# **صادقانه: سقفِ per-IP نرخِ مهاجمِ تک‌هدف/تک‌مبدأ را کم نمی‌کند** — آن‌جا سقفِ
+# per-admin زودتر می‌بندد. چیزی که می‌خرد این است که رفعِ بالا بلاکِ اندپوینت را
+# برداشت، پس بدونِ آن حجمِ خامِ verify از یک مبدأ **بی‌کران** می‌شد؛ و برخلافِ
+# سقفِ per-admin، بلاک‌شدنِ IPِ مهاجم قفلِ ادمین نیست.
+#
+# **بودجهٔ نهایی: ۵ کد × ۳ حدس = ۱۵ حدس در ۶۰۰ ثانیه** (از ۳۰). و اهرمِ واقعی
+# برای بهترکردنِ این افق **طولِ کد** است نه این شمارنده‌ها: همین ۱۵ در برابرِ
+# ۱۰^۸ به ~۰٫۵٪ در سال می‌رسد. ثبت شد، ساخته نشد — چون UXِ ورود را عوض می‌کند
+# و تصمیمِ اپراتور است.
+_RL_WINDOW = 600
+_RL_REQ_PER_ADMIN = 5
+_RL_REQ_PER_IP = 10
+_CODE_TTL = 300
+_CODE_TRIES = 3
+_RL_VERIFY_PER_IP = _RL_REQ_PER_IP * _CODE_TRIES
+
+#: بلندترین شناسهٔ تلگرامی که می‌پذیریم. `str.isdigit()` طولی را رد نمی‌کند و
+#: `int()` در پایتون ۳٫۱۱+ روی رشتهٔ بالای ۴۳۰۰ رقم **`ValueError` می‌دهد**
+#: (اجراشده) — یعنی یک فرمِ بزرگ، ۵۰۰ می‌گرفت نه «نامعتبر».
+_ADMIN_ID_MAXLEN = 20
+
+
+def _client_ip(request: web.Request) -> str:
+    """آدرسِ همتای سوکت — عمداً `X-Forwarded-For` خوانده **نمی‌شود**.
+
+    XFF را خودِ کلاینت ست می‌کند، پس اعتماد به آن سقفِ per-IP را برای همان
+    استقراری که باید محافظتش کند (پنلِ مستقیماً روی اینترنت، همان چیزی که
+    `install.sh` با TLSِ خودش می‌سازد) به یک no-op تبدیل می‌کند: مهاجم به‌ازای
+    هر درخواست یک مقدارِ تازه می‌گذارد.
+
+    بهایش صریح است: پشتِ یک پروکسیِ معکوس همهٔ کلاینت‌ها یک سطل می‌شوند. به
+    همین دلیل عددهای per-IP **بالاتر از** عددهای per-admin چیده شده‌اند، پس یک
+    ادمینِ عادی هیچ‌وقت اول به این سقف نمی‌خورد.
+    """
+    return request.remote or "?"
+
+
+async def _rate_limit(r: aioredis.Redis, key: str, limit: int, window: int) -> bool:
+    """یک پنجرهٔ ثابتِ شمارنده‌ای. `True` یعنی این درخواست مجاز است.
+
+    یک پیاده‌سازی برای هر سه سطل — پیش از این همان قاعده **دو بار دستی** نوشته
+    شده بود، همان شکلی که §۷ برای `remove_cookie_file` ثبت کرده.
+
+    `expire` وقتی TTL گم باشد هم دوباره زده می‌شود، نه فقط روی `n == 1`.
+    `INCR` و `EXPIRE` دو فرمانِ جدا هستند؛ اگر پروسه بینشان بمیرد کلید **بدونِ
+    انقضا** می‌ماند و شمارنده تا ابد بالا می‌رود — یعنی قفلِ دائمیِ ورود که خودش
+    ترمیم نمی‌شود و فقط با پاک‌کردنِ دستیِ کلید باز می‌شود (همان شکستی که §۷ برای
+    `dl:active` ثبت کرده). با این فرم، درخواستِ بعدی ترمیمش می‌کند و هزینه‌اش
+    همان دو فرمان می‌ماند.
+    """
+    n = await r.incr(key)
+    if n == 1 or await r.ttl(key) < 0:
+        await r.expire(key, window)
+    return n <= limit
+
+
 async def _send_code(chat_id: int, code: str) -> bool:
     url = f"{settings.local_api_base.rstrip('/')}/bot{settings.bot_token}/sendMessage"
     text = (f"🔐 کدِ ورود به پنلِ تل‌ابزار:\n\n<code>{code}</code>\n\n"
@@ -1669,20 +1769,28 @@ async def _send_code(chat_id: int, code: str) -> bool:
         return False
 
 
+def _is_admin_id(admin_id: str) -> bool:
+    """شناسهٔ فرم یک ادمینِ ثبت‌شده است؟ (طول‌دار، وگرنه `int()` می‌ترکد)"""
+    return (admin_id.isdigit() and len(admin_id) <= _ADMIN_ID_MAXLEN
+            and int(admin_id) in settings.admin_id_set)
+
+
 async def auth_request(request: web.Request) -> web.Response:
+    r: aioredis.Redis = request.app["redis"]
+    # سقفِ IP **پیش از** اعتبارسنجیِ شناسه، وگرنه کوبیدن با شناسهٔ نامعتبر رایگان است.
+    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}",
+                             _RL_REQ_PER_IP, _RL_WINDOW):
+        return _login_page(error="درخواستِ زیاد از این آدرس؛ چند دقیقه بعد امتحان کن.")
     form = await request.post()
     admin_id = (form.get("admin_id") or "").strip()
-    if not admin_id.isdigit() or int(admin_id) not in settings.admin_id_set:
+    if not _is_admin_id(admin_id):
         return _login_page(error="شناسهٔ ادمین نامعتبر است.")
-    r: aioredis.Redis = request.app["redis"]
-    rk = f"panelreq:{admin_id}"
-    n = await r.incr(rk)
-    if n == 1:
-        await r.expire(rk, 600)
-    if n > 5:
+    if not await _rate_limit(r, f"panelreq:{admin_id}", _RL_REQ_PER_ADMIN, _RL_WINDOW):
         return _login_page(error="درخواستِ زیاد؛ چند دقیقه بعد امتحان کن.")
     code = f"{secrets.randbelow(1000000):06d}"
-    await r.set(f"panelcode:{admin_id}", code, ex=300)
+    await r.set(f"panelcode:{admin_id}", code, ex=_CODE_TTL)
+    # کدِ تازه بودجهٔ حدسِ تازه می‌آورد. این «ریست» حالا بی‌خطر است، چون بودجه
+    # دیگر اندپوینت را نمی‌بندد — به کدی بسته است که همین الان عوض شد.
     await r.delete(f"paneltry:{admin_id}")
     if not await _send_code(int(admin_id), code):
         return _login_page(error="نتوانستم کد را بفرستم؛ مطمئن شو ربات را /start کرده‌ای.")
@@ -1690,22 +1798,35 @@ async def auth_request(request: web.Request) -> web.Response:
 
 
 async def auth_verify(request: web.Request) -> web.Response:
+    r: aioredis.Redis = request.app["redis"]
+    if not await _rate_limit(r, f"panelip:ver:{_client_ip(request)}",
+                             _RL_VERIFY_PER_IP, _RL_WINDOW):
+        return _login_page(error="تلاشِ زیاد از این آدرس؛ چند دقیقه بعد امتحان کن.")
     form = await request.post()
     admin_id = (form.get("admin_id") or "").strip()
     code = (form.get("code") or "").strip()
-    if not admin_id.isdigit():
+    # همان گاردی که `auth_request` دارد. بدونش، هر شناسهٔ عددیِ دلخواه یک کلیدِ
+    # `paneltry:` می‌ساخت — اندازه‌گیری‌شده: ۲۰۰ شناسه از یک IP، ۲۰۰ کلید.
+    if not _is_admin_id(admin_id):
         return _login_page(error="نامعتبر.")
-    r: aioredis.Redis = request.app["redis"]
     tk = f"paneltry:{admin_id}"
     tries = await r.incr(tk)
-    if tries == 1:
-        await r.expire(tk, 300)
-    if tries > 6:
-        return _login_page(error="تلاشِ زیاد؛ از نو کد بگیر.")
+    if tries == 1 or await r.ttl(tk) < 0:
+        await r.expire(tk, _CODE_TTL)
     real = await r.get(f"panelcode:{admin_id}")
-    if not real or code != real:
+    # روی **بایت** مقایسه می‌شود، نه رشته: `secrets.compare_digest` روی strِ
+    # غیرASCII `TypeError` می‌دهد (اجراشده) و `'۱۲۳۴۵۶'.isdigit()` صادق است، پس
+    # فرمِ رشته‌ای یک کدِ با رقمِ فارسی را به ۵۰۰ تبدیل می‌کرد نه به «کد نادرست».
+    ok = bool(real) and secrets.compare_digest(code.encode(), real.encode())
+    if not ok:
+        if tries >= _CODE_TRIES:
+            # **کد** را می‌کشیم، نه اندپوینت را: کاربر یک کدِ تازه می‌گیرد و
+            # بلافاصله ادامه می‌دهد، در حالی که مهاجم برای حدسِ بیشتر باید از
+            # سقفِ درخواستِ کد رد شود.
+            await r.delete(f"panelcode:{admin_id}", tk)
+            return _login_page(error="کد سوخت؛ از نو کد بگیر.")
         return _login_page(step=2, admin_id=admin_id, sent=True, error="کد نادرست است.")
-    await r.delete(f"panelcode:{admin_id}")
+    await r.delete(f"panelcode:{admin_id}", tk)
     resp = web.HTTPFound("/")
     # secure را از اسکیمِ واقعی بگیر: روی HTTPِ ساده (بدونِ TLS/پروکسی) کوکیِ Secure
     # توسطِ مرورگر دور انداخته می‌شود → لوپِ بی‌پایانِ بازگشت به /login. پشتِ Cloudflare/
