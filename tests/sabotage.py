@@ -112,6 +112,9 @@ _STC = "tests/panel/test_stats_cards.py"
 _URW = "tests/panel/test_users_rows.py"
 _PGF = "tests/panel/test_pagefacts.py"
 _PCT = "tests/panel/test_page_contract.py"
+_I18 = "tests/test_i18n_fallback.py"
+_LPK = "tests/test_langpack.py"
+_LNG = "tests/panel/test_langs_page.py"
 
 # «گروهِ خودکار را بردار» — یک خرابکاری با **سه** ادعای متفاوت، پس یک‌بار
 # تعریف می‌شود. دو تا باید بیفتند و یکی عمداً **نباید**، که کلِ نکته است:
@@ -1962,6 +1965,186 @@ CASES: list[dict] = [
      "new": "    without_noise = _DROP.sub(\" \", _html.unescape(html))",
      "target": _PGF,
      "expect": "test_escaped_markup_the_page_shows_literally_survives"},
+
+    # ── فاز B: چندزبانه‌سازی از راهِ export/import ──────────────────
+    # یکی به‌ازای هر قاعده‌ای که اگر بی‌صدا برگردد، خرابی‌اش **دیدنی نیست**.
+    {"name": "i18n: an untranslated key falls back to Persian again",
+     "path": "app/i18n.py",
+     "old": "        CATALOG.get(lang or DEFAULT, {}).get(key)\n"
+            "        or CATALOG[FALLBACK].get(key)",
+     "new": "        CATALOG.get(lang or DEFAULT, CATALOG[DEFAULT]).get(key)",
+     "target": _I18,
+     "expect": "test_an_untranslated_key_falls_back_to_english_not_persian"},
+
+    # کنترلِ معکوسِ **دامنه**: برگرداندنِ سقوط به فارسی باید ادعاهای خودِ
+    # fallback را بیندازد (موردِ بالا) و مسیرِ export/import را **نیندازد** —
+    # چون آن مسیر مبدأش `fa` است و `fa` کاتالوگ دارد، پس هر دو زنجیره یک جواب
+    # می‌دهند. هدفش عمداً فایلِ **دیگری** است: `expect: None` یعنی «هیچ تستی در
+    # فایلِ هدف نیفتد»، پس اگر هدف را همان `_I18` بگذاری، سه تستی که دقیقاً
+    # دربارهٔ همین سقوط‌اند می‌افتند و کنترل به دلیلِ غلط «نگرفت» می‌دهد.
+    # (این اشتباه یک‌بار ثبت شد و همین‌جا تصحیح شد.)
+    {"name": "i18n: the fallback change does not disturb the fa-sourced pack (reverse control)",
+     "path": "app/i18n.py",
+     "old": "        CATALOG.get(lang or DEFAULT, {}).get(key)\n"
+            "        or CATALOG[FALLBACK].get(key)",
+     "new": "        CATALOG.get(lang or DEFAULT, CATALOG[DEFAULT]).get(key)",
+     "target": _LPK,
+     "expect": None},
+
+    {"name": "i18n: the panel writes its own copy of the fallback chain",
+     "path": "app/admin_web.py",
+     "old": "    return default_text(lang, key)",
+     "new": '    return CATALOG.get(lang, {}).get(key) or CATALOG["fa"].get(key) or key',
+     "target": _I18,
+     "expect": "test_the_panel_and_the_bot_share_one_fallback_chain"},
+
+    {"name": "langpack: the language code is length-gated instead of format-gated",
+     "path": "app/langpack.py",
+     "old": r'_TAG_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")',
+     "new": r'_TAG_RE = re.compile(r"^[A-Za-z]{2}$")',
+     "target": _LPK,
+     "expect": "test_a_real_language_tag_is_accepted_and_canonicalised[pt-br]"},
+
+    {"name": "langpack: the code is stored as typed, so pt-BR and pt-br split",
+     "path": "app/langpack.py",
+     "old": '    parts = code.split("-")\n    out = [parts[0].lower()]',
+     "new": '    parts = [code]\n    out = [parts[0]]',
+     "target": _LPK,
+     "expect": "test_case_only_variants_collapse_to_one_language"},
+
+    {"name": "langpack: the column bound is dropped as dead code",
+     "path": "app/langpack.py",
+     "old": "    if len(code) > MAX_CODE_LEN:",
+     "new": "    if False:",
+     "target": _LPK,
+     "expect": "test_a_tag_longer_than_the_column_is_refused"},
+
+    {"name": "langpack: a code-fenced reply is no longer unwrapped",
+     "path": "app/langpack.py",
+     "old": "    m = _FENCE_RE.match(text)",
+     "new": "    m = None",
+     "target": _LPK,
+     "expect": "test_parsing_survives_what_a_chat_reply_does_to_text[json-fence]"},
+
+    {"name": "langpack: a dropped placeholder is accepted again",
+     "path": "app/langpack.py",
+     "old": "        err = textstore.validate(src, value, require_all_placeholders=True)",
+     "new": "        err = textstore.validate(src, value)",
+     "target": _LPK,
+     "expect": "test_a_dropped_placeholder_is_refused_even_though_the_editor_allows_it"},
+
+    {"name": "textstore: the missing-placeholder branch never fires",
+     "path": "app/textstore.py",
+     "old": "    if require_all_placeholders:\n        gone = dfields - vfields",
+     "new": "    if False:\n        gone = dfields - vfields",
+     "target": _LPK,
+     "expect": "test_a_dropped_placeholder_is_refused_even_though_the_editor_allows_it"},
+
+    {"name": "textstore: the plain editor rule silently got stricter (reverse control)",
+     "path": "app/textstore.py",
+     "old": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = False)",
+     "new": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = True)",
+     "target": "tests/test_phase2a.py",
+     "expect": None},   # قاعدهٔ پایه نباید از این تغییر خبردار شود…
+
+    {"name": "textstore: …but the import rule must notice it",
+     "path": "app/textstore.py",
+     "old": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = False)",
+     "new": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = True)",
+     "target": _LPK,
+     "expect": "test_a_dropped_placeholder_is_refused_even_though_the_editor_allows_it"},
+
+    {"name": "langpack: the placeholder contract comes from the catalog, not the source",
+     "path": "app/langpack.py",
+     "old": "        src = source_texts.get(key, default_text(rv.source, key))",
+     "new": "        src = default_text(rv.source, key)",
+     "target": _LPK,
+     "expect": "test_the_placeholder_contract_comes_from_the_source_text_not_the_catalog"},
+
+    {"name": "langpack: an unknown key is skipped instead of blocking the pack",
+     "path": "app/langpack.py",
+     "old": '            rv.errors.append((key, "کلیدِ ناشناخته — در کاتالوگِ ربات نیست."))',
+     "new": "            pass",
+     "target": _LPK,
+     "expect": "test_an_unknown_key_is_named_and_blocks_the_whole_pack"},
+
+    {"name": "panel: import writes what it validated even when something failed",
+     "path": "app/admin_web.py",
+     "old": "    if not rv.ok:\n        return await _langs_render(request, review=rv, raw=raw, replace=replace)",
+     "new": "    if False:\n        return await _langs_render(request, review=rv, raw=raw, replace=replace)",
+     "target": _LNG,
+     "expect": "test_a_rejected_pack_writes_nothing_at_all"},
+
+    {"name": "panel: the default language is overwritten without asking",
+     "path": "app/admin_web.py",
+     "old": '    if code == i18n_DEFAULT and form.get("confirm") != "yes":',
+     "new": "    if False:",
+     "target": _LNG,
+     "expect": "test_importing_over_the_default_language_asks_first"},
+
+    {"name": "panel: every language needs confirmation, not just the default (reverse control)",
+     "path": "app/admin_web.py",
+     "old": '    if code == i18n_DEFAULT and form.get("confirm") != "yes":',
+     "new": '    if form.get("confirm") != "yes":',
+     "target": _LNG,
+     "expect": "test_a_non_default_language_needs_no_confirmation"},
+
+    {"name": "panel: merge silently becomes replace",
+     "path": "app/admin_web.py",
+     "old": "    await textstore.set_texts(code, rv.entries, replace=replace)",
+     "new": "    await textstore.set_texts(code, rv.entries, replace=True)",
+     "target": _LNG,
+     "expect": "test_merge_leaves_the_keys_the_pack_does_not_mention"},
+
+    {"name": "panel: replace silently becomes merge",
+     "path": "app/admin_web.py",
+     "old": "    await textstore.set_texts(code, rv.entries, replace=replace)",
+     "new": "    await textstore.set_texts(code, rv.entries, replace=False)",
+     "target": _LNG,
+     "expect": "test_replace_drops_the_keys_the_pack_does_not_mention"},
+
+    {"name": "panel: a pack retargeted by the model is trusted",
+     "path": "app/admin_web.py",
+     "old": "        if in_file and langpack.normalize_code(in_file) != code:",
+     "new": "        if False:",
+     "target": _LNG,
+     "expect": "test_a_pack_retargeted_by_the_model_is_caught"},
+
+    {"name": "panel: export ships the code default instead of the admin's own text",
+     "path": "app/admin_web.py",
+     "old": "        texts=langpack.effective_texts(source, textstore.lang_texts(source)))",
+     "new": "        texts=langpack.effective_texts(source, {}))",
+     "target": _LNG,
+     "expect": "test_the_export_carries_the_admins_own_edits_not_the_code_default"},
+
+    {"name": "panel: re-export restarts from the default language instead of continuing",
+     "path": "app/admin_web.py",
+     "old": '<a class=btn-sm href="/langs/export?lang={{r.code}}&source={{r.code}}">',
+     "new": '<a class=btn-sm href="/langs/export?lang={{r.code}}&source={{default_lang}}">',
+     "target": _LNG,
+     "expect": "test_re_exporting_a_half_translated_language_carries_what_is_done"},
+
+    {"name": "panel: deleting a language leaves its texts behind",
+     "path": "app/textstore.py",
+     "old": "        await s.execute(sa_delete(TextOverride).where(TextOverride.lang == code))\n"
+            "        await s.execute(sa_delete(Language).where(Language.code == code))",
+     "new": "        await s.execute(sa_delete(Language).where(Language.code == code))",
+     "target": _LNG,
+     "expect": "test_deleting_a_language_takes_its_texts_with_it"},
+
+    {"name": "panel: the language list goes back to a hardcoded pair",
+     "path": "app/admin_web.py",
+     "old": "    langs = dict(BUILTIN_NAMES)\n    langs.update(await textstore.languages())",
+     "new": "    langs = dict(BUILTIN_NAMES)",
+     "target": _LNG,
+     "expect": "test_the_imported_language_becomes_selectable_on_the_other_pages"},
+
+    {"name": "panel: coverage is a fixed label instead of a computed number",
+     "path": "app/admin_web.py",
+     "old": "        done = total if builtin else len(textstore.lang_texts(code))",
+     "new": "        done = total",
+     "target": _LNG,
+     "expect": "test_the_page_states_how_many_keys_a_language_still_lacks"},
 ]
 
 

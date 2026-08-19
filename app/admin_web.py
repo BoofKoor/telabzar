@@ -40,7 +40,8 @@ from . import textstore
 from .config import settings
 from .db import Sessionmaker
 from .downloader import KNOWN_PLATFORMS, PLATFORM_LABELS
-from .i18n import CATALOG, t as _t
+from . import langpack
+from .i18n import BUILTIN_NAMES, DEFAULT as i18n_DEFAULT, default_text, t as _t
 from .keyboards import OPS_BY_KIND
 from .models import DownloadCache, File, Job, Node, User
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
@@ -325,6 +326,11 @@ a{text-decoration:none;color:inherit}
 .pad{padding:14px 18px}
 .row{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px dashed #eef2f7;gap:12px}
 .row:last-child{border-bottom:0}.row label{font-size:13.5px;color:#334155}.row label small{display:block;color:#94a3b8;font-size:11.5px;margin-top:2px}
+/* جعبهٔ چسباندنِ یک بلوکِ کد (کوکی، بستهٔ زبان). دو مصرف‌کننده دارد، پس مشترک
+   است نه داخلِ بلاکِ یک صفحه — قاعده‌ای که در دو جا دست‌نویس شود واگرا می‌شود. */
+.ta{width:100%;box-sizing:border-box;background:#0b1220;color:#7dd3fc;border:1px solid #1e293b;border-radius:11px;
+  padding:11px 13px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.75;resize:vertical;
+  direction:ltr;text-align:left;unicode-bidi:isolate}
 .ta-inline{width:230px;min-height:64px;border:1px solid #cbd5e1;border-radius:9px;padding:8px 10px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#fff;color:var(--ink);resize:vertical;unicode-bidi:isolate}
 .inp{width:160px;height:36px;border:1px solid #cbd5e1;border-radius:9px;padding:0 11px;font-size:13.5px;font-family:inherit;text-align:center;background:#fff;color:var(--ink)}
 .sel{width:160px;height:36px;border:1px solid #cbd5e1;border-radius:9px;padding:0 8px;font-size:13.5px;font-family:inherit;background:#fff;color:var(--ink)}
@@ -423,6 +429,7 @@ _BASE = """<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
   <a class="{{'on' if active=='settings'}}" href=/>⚙️ تنظیمات</a>
   <a class="{{'on' if active=='texts'}}" href=/texts>✏️ متن‌ها</a>
   <a class="{{'on' if active=='buttons'}}" href=/buttons>🎨 کلیدها</a>
+  <a class="{{'on' if active=='langs'}}" href=/langs>🌐 زبان‌ها</a>
   <a class="{{'on' if active=='cookies'}}" href=/cookies>🍪 کوکی‌ها</a>
   <a class="{{'on' if active=='health'}}" href=/health>🩺 سلامت</a>
   <a class="{{'on' if active=='nodes'}}" href=/nodes>🖧 نودها</a>
@@ -508,9 +515,6 @@ _SETTINGS = """{% extends 'base' %}{% block title %}تنظیمات{% endblock %}
 
 _COOKIES = """{% extends 'base' %}{% block title %}کوکی‌ها{% endblock %}{% block heading %}اکانت‌های کوکی{% endblock %}
 {% block style %}
-.ta{width:100%;box-sizing:border-box;background:#0b1220;color:#7dd3fc;border:1px solid #1e293b;border-radius:11px;
-  padding:11px 13px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.75;resize:vertical;
-  direction:ltr;text-align:left;unicode-bidi:isolate}
 .ck-form{display:flex;gap:10px;margin:0 0 10px;flex-wrap:wrap;align-items:center}
 .ck-form .inp{flex:1;min-width:190px;text-align:start}
 .ck-hint{color:#94a3b8;font-size:12px}
@@ -1012,8 +1016,9 @@ _TEXTS = """{% extends 'base' %}{% block title %}متن‌ها{% endblock %}{% b
 <div class=card>
   <form class=tx-tools method=get action=/texts>
     <select class=sel name=lang onchange="this.form.submit()">
-      <option value=fa {% if lang=='fa' %}selected{% endif %}>فارسی</option>
-      <option value=en {% if lang=='en' %}selected{% endif %}>English</option>
+      {% for code, nm in langs.items() %}
+      <option value="{{code}}" {% if lang==code %}selected{% endif %}>{{nm}}</option>
+      {% endfor %}
     </select>
     <input class=inp name=q value="{{q}}" placeholder="جست‌وجوی کلید یا متن…" style="flex:1;min-width:180px">
     <button class=btn-sm>جست‌وجو</button>
@@ -1090,8 +1095,9 @@ _BUTTONS ="""{% extends 'base' %}{% block title %}کلیدها{% endblock %}{% b
   <h3>✏️ چیدمان و استایلِ منوی «{{kindlabel}}» <span class=tag>بکش برای جابه‌جایی · بی‌ری‌استارت</span></h3>
   <div class=hint>متن · رنگ (آبی/سبز/قرمز) · ایموجیِ پرمیوم · عرض (تمام/نصف/یک‌سوم؛ ردیف‌ها را می‌سازد) · نمایش. زبانِ متن:
     <select class=sel style="height:30px" onchange="location.href='/buttons?kind={{kind}}&lang='+this.value">
-      <option value=fa {% if lang=='fa' %}selected{% endif %}>فارسی</option>
-      <option value=en {% if lang=='en' %}selected{% endif %}>English</option></select></div>
+      {% for code, nm in langs.items() %}
+      <option value="{{code}}" {% if lang==code %}selected{% endif %}>{{nm}}</option>
+      {% endfor %}</select></div>
   {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
   {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
   <form method=post action=/buttons/save id=btnform>
@@ -1177,6 +1183,126 @@ function rebuildPreview(){
 })();
 </script>{% endblock %}"""
 
+_LANGS = """{% extends 'base' %}{% block title %}زبان‌ها{% endblock %}{% block heading %}زبان‌ها{% endblock %}
+{% block body %}
+{% if saved %}<div class=card><div class=pad><div class=saved>✅ {{saved}}</div></div></div>{% endif %}
+{% if error %}<div class=card><div class=pad><div class=errbox>⚠️ {{error}}</div></div></div>{% endif %}
+
+{% if rv %}
+<div class=card>
+  <h3>{% if rv.ok %}🧾 گزارشِ بسته{% else %}⛔ بسته رد شد{% endif %}
+    <span class=tag><bdi>{{rv.name}}</bdi> · <span class=mono>{{rv.lang}}</span></span></h3>
+  <div class=pad>
+    {% if rv.ok %}
+      <div class=hint>
+        <b>{{rv.entries|length}}</b> از <b>{{rv.total}}</b> کلید در این بسته است
+        (<span class=num>{{rv.coverage}}٪</span>) ·
+        <b>{{rv.changed}}</b> کلید عوض می‌شود ·
+        <b>{{rv.same}}</b> کلید همان است که هست ·
+        <b>{{rv.untouched}}</b> کلید در بسته نیست
+        {% if replace %}و با «جایگزینیِ کامل» <b>پاک</b> می‌شود{% else %}و دست‌نخورده می‌ماند{% endif %}.
+        {% if rv.untranslated %}<br>⚠️ <b>{{rv.untranslated|length}}</b> کلید عیناً همان متنِ مبدأ است
+        (ترجمه‌نشده).{% endif %}
+      </div>
+      {% if confirm == 'ask' %}
+      <div class=errbox style=margin-top:12px>
+        این زبانِ <b>پیش‌فرضِ</b> ربات است. با تأیید، <b>{{rv.changed}}</b> متنِ زندهٔ
+        ربات عوض می‌شود و <b>{{rv.untouched}}</b> متن دست‌نخورده می‌ماند.
+      </div>
+      <form method=post action=/langs/import style=margin-top:12px>
+        <textarea name=pack hidden>{{raw}}</textarea>
+        <input type=hidden name=lang value="{{rv.lang}}">
+        <input type=hidden name=name value="{{rv.name}}">
+        {% if replace %}<input type=hidden name=replace value=on>{% endif %}
+        <input type=hidden name=confirm value=yes>
+        <button class=btn-go>بله، اعمال کن</button>
+        <a class=btn-sm href=/langs>انصراف</a>
+      </form>
+      {% endif %}
+    {% else %}
+      <div class=hint><b>{{rv.errors|length}}</b> کلید رد شد، پس <b>هیچ‌چیز نوشته نشد</b>.
+        همین فهرست را به همان چت‌بات بده و بستهٔ اصلاح‌شده را دوباره بچسبان.</div>
+      <div class=tbl-wrap style=margin-top:10px>
+        <table><thead><tr><th>کلید</th><th>دلیل</th></tr></thead><tbody>
+        {% for key, why in rv.errors[:40] %}
+          <tr><td><code class=mono>{{key}}</code></td><td>{{why}}</td></tr>
+        {% endfor %}
+        </tbody></table>
+      </div>
+      {% if rv.errors|length > 40 %}
+        <div class=hint>… و <b>{{rv.errors|length - 40}}</b> خطای دیگر.</div>{% endif %}
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<div class=card>
+  <h3>🌐 زبان‌های ربات <span class=tag>{{total}} کلیدِ متن</span></h3>
+  <div class=tbl-wrap>
+    <table><thead><tr><th>زبان</th><th>کد</th><th>ترجمه‌شده</th><th></th></tr></thead><tbody>
+    {% for r in rows %}
+      <tr>
+        <td><bdi>{{r.name}}</bdi>
+          {% if r.builtin %}<span class=chip>داخلی</span>{% endif %}</td>
+        <td><span class=mono>{{r.code}}</span></td>
+        <td><span class=num>{{r.done}}/{{r.total}}</span>
+          <span class=meter><i style="width:{{r.pct}}%"></i></span>
+          <span class=num>{{r.pct}}٪</span></td>
+        <td>
+          {# مبدأ = **خودِ همان زبان**، نه همیشه فارسی: برای زبانی که نیمه‌ترجمه
+             است، `effective_texts` مقدارِ ترجمه‌شده را می‌دهد و برای بقیه به
+             انگلیسی می‌افتد — یعنی بسته دقیقاً همان چیزی می‌شود که باید کامل
+             شود. ساختنِ زبانِ **تازه** فرمِ جداگانهٔ پایین را دارد. #}
+          <a class=btn-sm href="/langs/export?lang={{r.code}}&source={{r.code}}">دریافتِ بسته</a>
+          {% if not r.builtin %}
+          <form method=post action=/langs/delete style=display:inline>
+            <input type=hidden name=code value="{{r.code}}">
+            <button class=btn-sm>حذف</button>
+          </form>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody></table>
+  </div>
+</div>
+
+<div class=card>
+  <h3>⬇️ ساختنِ بستهٔ ترجمه</h3>
+  <div class=pad>
+    <div class=hint>فایل را بگیر، به یک چت‌بات بده و بگو ترجمه‌اش کند، بعد خروجی را
+      در کادرِ پایین بچسبان. دستورِ کار داخلِ خودِ فایل نوشته شده.</div>
+    <form method=get action=/langs/export style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <input class=inp name=lang placeholder="کدِ زبان (es، pt-BR…)" dir=ltr required>
+      <input class=inp name=name placeholder="نامِ نمایشی (Español)">
+      <select class=sel name=source>
+        {% for code, nm in langs.items() %}
+        <option value="{{code}}" {% if code==default_lang %}selected{% endif %}>از {{nm}}</option>
+        {% endfor %}
+      </select>
+      <button class=btn-go>دریافتِ فایل</button>
+    </form>
+  </div>
+</div>
+
+<div class=card>
+  <h3>⬆️ چسباندنِ بستهٔ ترجمه‌شده</h3>
+  <form method=post action=/langs/import>
+    <div class=pad>
+      <input class=inp name=lang placeholder="کدِ زبان (es، pt-BR…)" dir=ltr required>
+      <input class=inp name=name placeholder="نامِ نمایشی (Español)">
+      <label class=hint style="display:inline-flex;gap:6px;align-items:center">
+        <input type=checkbox name=replace {% if replace %}checked{% endif %}>
+        جایگزینیِ کامل (کلیدهایی که در بسته نیستند <b>پاک</b> شوند)
+      </label>
+      <textarea class=ta name=pack rows=8 dir=ltr
+        placeholder='{ "telabzar_i18n": 1, "lang": "es", … }'>{{raw}}</textarea>
+      <button class=save>سنجش و import</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+"""
+
 _NODES = """{% extends 'base' %}{% block title %}نودها{% endblock %}{% block heading %}نودهای توزیع‌شده{% endblock %}
 {% block style %}
 .nd{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:12px}
@@ -1237,7 +1363,7 @@ ENV = Environment(
     loader=DictLoader({
         "base": _BASE, "settings": _SETTINGS, "cookies": _COOKIES,
         "health": _HEALTH, "users": _USERS, "stats": _STATS, "login": _LOGIN,
-        "texts": _TEXTS, "buttons": _BUTTONS, "nodes": _NODES,
+        "texts": _TEXTS, "buttons": _BUTTONS, "nodes": _NODES, "langs": _LANGS,
     }),
     autoescape=select_autoescape(default=True, default_for_string=True),
 )
@@ -1641,7 +1767,9 @@ async def _stats(rng: str = "7d") -> dict:  # noqa: PLR0915 — یک تابعِ 
     s["src_up_pct"], s["src_dl_pct"] = _pct(s["src_up"], s["files"]), _pct(s["src_dl"], s["files"])
     s["by_kind"] = _bars(kind_rows, lambda k: _KIND_FA.get(k, k))
     s["by_op"] = _bars(op_rows, lambda k: _OP_FA.get(k, k))
-    s["by_lang"] = _bars(lang_rows, lambda k: {"fa": "فارسی", "en": "English"}.get(k, k))
+    # نامِ زبان از `BUILTIN_NAMES` می‌آید نه یک کپیِ سومِ دست‌نویس؛ کدِ ناشناخته
+    # (زبانِ افزوده‌ای که هنوز ثبت نشده) خامْ نشان داده می‌شود، که صادقانه است.
+    s["by_lang"] = _bars(lang_rows, lambda k: BUILTIN_NAMES.get(k, k))
     s["by_platform"] = _bars(plat_rows, lambda k: _PLATFORM_FA.get(k, k or "—"))
     s["queued"] = st_rows.get("queued", 0) + st_rows.get("running", 0)
     s["cancelled"] = st_rows.get("cancelled", 0)
@@ -2138,7 +2266,30 @@ async def stats_page(request: web.Request) -> web.Response:
 
 
 # ── متن‌ها/لیبل‌ها (override زمانِ‌اجرا روی locales) ──────────────
-_TEXT_KEYS = sorted(set(CATALOG["fa"]) | set(CATALOG["en"]))
+#: از `langpack` می‌آید، نه از یک کپیِ دوم — همان فهرست که export/import هم
+#: رویش کار می‌کند، وگرنه صفحه و فایل می‌توانند سرِ «کلیدها کدام‌اند» واگرا شوند.
+_TEXT_KEYS = list(langpack.TEXT_KEYS)
+
+
+async def _languages(refresh: bool = False) -> dict[str, str]:
+    """کد → نامِ نمایشی برای **همهٔ** زبان‌های در دسترس: داخلی‌ها + افزوده‌ها.
+
+    تنها جایی که این فهرست ساخته می‌شود. پیش از این هر صفحه‌ای که زبان داشت یک
+    تاپلِ هاردکدِ `("fa","en")` داشت (۷ تا در همین فایل)، و اضافه‌شدنِ یک زبان
+    یعنی پیداکردنِ هر هفت‌تا.
+    """
+    if refresh:
+        await textstore.refresh_if_stale()
+    langs = dict(BUILTIN_NAMES)
+    langs.update(await textstore.languages())
+    return langs
+
+
+async def _pick_lang(raw: str | None) -> tuple[str, dict[str, str]]:
+    """(زبانِ معتبر, فهرستِ زبان‌ها) — ناشناخته به `DEFAULT` می‌افتد."""
+    langs = await _languages()
+    code = (raw or "").strip()
+    return (code if code in langs else i18n_DEFAULT), langs
 
 # دسته‌بندیِ کلیدها بر اساسِ پیشوند (سگمنتِ پیش از اولین «_»)؛ هرچه نیفتد → «سایر».
 _TEXT_CATS: list[tuple[str, set[str]]] = [
@@ -2158,7 +2309,8 @@ _TEXT_CAT_TITLES = [t for t, _ in _TEXT_CATS] + ["🧩 سایر"]
 
 
 def _text_default(lang: str, key: str) -> str:
-    return CATALOG.get(lang, {}).get(key) or CATALOG["fa"].get(key) or key
+    """پیش‌فرضِ یک کلید — از `i18n`، تا صفحه و ربات **یک** زنجیرهٔ fallback داشته باشند."""
+    return default_text(lang, key)
 
 
 def _text_cat_index(key: str) -> int:
@@ -2201,9 +2353,7 @@ async def texts_page(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     await textstore.refresh_if_stale()  # همیشه از DB تازه؛ نمای کهنه نده (باگِ ریست پس از update)
-    lang = request.query.get("lang", "fa")
-    if lang not in ("fa", "en"):
-        lang = "fa"
+    lang, langs = await _pick_lang(request.query.get("lang"))
     q = request.query.get("q", "")
     groups = _texts_groups(lang, q)
     total = sum(g["n"] for g in groups)
@@ -2211,7 +2361,7 @@ async def texts_page(request: web.Request) -> web.Response:
     saved = {"1": "متن ذخیره شد (بی‌ری‌استارت اعمال شد).",
              "r": "به پیش‌فرض برگشت."}.get(request.query.get("ok", ""), "")
     return _render("texts", admin_id=_session_admin(request), active="texts",
-                   pill_ok=await _pill_ok(request.app), lang=lang, q=q,
+                   pill_ok=await _pill_ok(request.app), lang=lang, langs=langs, q=q,
                    groups=groups, total=total, edited=edited, saved=saved,
                    error=request.query.get("err", ""))
 
@@ -2220,13 +2370,18 @@ async def texts_save(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     form = await request.post()
-    lang = (form.get("lang") or "fa").strip()
+    langs = await _languages(refresh=True)
+    raw_lang = (form.get("lang") or "").strip()
+    lang = raw_lang if raw_lang in langs else i18n_DEFAULT
     key = (form.get("key") or "").strip()
     q = (form.get("q") or "").strip()
     value = (form.get("value") or "").replace("\r\n", "\n")
-    valid_key = key in CATALOG.get(lang, {}) or key in CATALOG["fa"]
-    if lang not in ("fa", "en") or not valid_key:
-        raise _texts_redirect(lang if lang in ("fa", "en") else "fa", q, err="کلیدِ نامعتبر.")
+    # زبانِ ناشناخته و کلیدِ ناشناخته دو خطای متفاوت‌اند و باید متفاوت گفته شوند؛
+    # پیش از این هر دو «کلیدِ نامعتبر» می‌گرفتند، یعنی پیام علتِ غلط را نام می‌برد.
+    if raw_lang not in langs:
+        raise _texts_redirect(lang, q, err=f"زبانِ ناشناخته: «{raw_lang}».")
+    if key not in langpack.TEXT_KEYS:
+        raise _texts_redirect(lang, q, err="کلیدِ نامعتبر.")
     default = _text_default(lang, key)
     if value.strip() == default.strip():  # برابرِ پیش‌فرض = حذفِ override
         await textstore.reset_text(lang, key)
@@ -2242,12 +2397,14 @@ async def texts_reset(request: web.Request) -> web.Response:
     if not _session_admin(request):
         raise web.HTTPFound("/login")
     form = await request.post()
-    lang = (form.get("lang") or "fa").strip()
+    langs = await _languages(refresh=True)
+    raw_lang = (form.get("lang") or "").strip()
+    lang = raw_lang if raw_lang in langs else i18n_DEFAULT
     key = (form.get("key") or "").strip()
     q = (form.get("q") or "").strip()
-    if lang in ("fa", "en") and key:
+    if raw_lang in langs and key:
         await textstore.reset_text(lang, key)
-    raise _texts_redirect(lang if lang in ("fa", "en") else "fa", q, ok="r")
+    raise _texts_redirect(lang, q, ok="r")
 
 
 # ── چیدمان و استایلِ کلیدهای منوی کارت (per-kind) ──────────────
@@ -2321,15 +2478,14 @@ async def buttons_page(request: web.Request) -> web.Response:
     kind = request.query.get("kind", "video")
     if kind not in _KIND_LABEL:
         kind = "video"
-    lang = request.query.get("lang", "fa")
-    if lang not in ("fa", "en"):
-        lang = "fa"
+    lang, langs = await _pick_lang(request.query.get("lang"))
     items = _menu_editor_items(kind, lang)
     pv_rows, hidden_items = _menu_preview(items)
     saved = {"1": "ذخیره شد (بی‌ری‌استارت اعمال شد).",
              "r": "به چیدمانِ پیش‌فرض برگشت."}.get(request.query.get("ok", ""), "")
     return _render("buttons", admin_id=_session_admin(request), active="buttons",
-                   pill_ok=await _pill_ok(request.app), kind=kind, lang=lang, kinds=_KIND_TABS,
+                   pill_ok=await _pill_ok(request.app), kind=kind, lang=lang, langs=langs,
+                   kinds=_KIND_TABS,
                    kindlabel=_KIND_LABEL[kind], items=items, pv_rows=pv_rows,
                    hidden_items=hidden_items, close_label=_t(lang, "btn_close"),
                    prev_msg="🎬 نمونهٔ کارتِ فایل", saved=saved,
@@ -2341,8 +2497,8 @@ async def buttons_save(request: web.Request) -> web.Response:
         raise web.HTTPFound("/login")
     form = await request.post()
     kind = (form.get("kind") or "video").strip()
-    lang = (form.get("lang") or "fa").strip()
-    if kind not in _KIND_LABEL or lang not in ("fa", "en"):
+    lang = (form.get("lang") or "").strip()
+    if kind not in _KIND_LABEL or lang not in await _languages(refresh=True):
         raise web.HTTPFound("/buttons")
     key_by_op = dict(OPS_BY_KIND.get(kind, []))
     order = [op for op in (form.get("order") or "").split(",") if op in key_by_op]
@@ -2394,10 +2550,134 @@ async def buttons_reset(request: web.Request) -> web.Response:
         raise web.HTTPFound("/login")
     form = await request.post()
     kind = (form.get("kind") or "video").strip()
-    lang = (form.get("lang") or "fa").strip()
+    lang, _ = await _pick_lang(form.get("lang"))
     if kind in _KIND_LABEL:
         await textstore.reset_menu_layout(kind)
     raise _result("/buttons", kind=kind, lang=lang, ok="r")
+
+
+# ── زبان‌ها: export/import بستهٔ ترجمه ──────────────────────────
+#: پیام‌های موفقیتِ `/langs` (همان الگوی `saved` در بقیهٔ صفحه‌ها).
+_LANG_OK = {
+    "i": "بستهٔ زبان import شد (بی‌ری‌استارت اعمال شد).",
+    "d": "زبان حذف شد.",
+}
+
+
+def _lang_rows(langs: dict[str, str]) -> list[dict]:
+    """یک ردیف به‌ازای هر زبان، با پوششِ **محاسبه‌شده** نه برچسبِ ثابت."""
+    total = len(langpack.TEXT_KEYS)
+    rows = []
+    for code, name in langs.items():
+        builtin = code in BUILTIN_NAMES
+        # زبانِ داخلی کاتالوگِ کد دارد، پس پوششش طبقِ تعریف کامل است؛ زبانِ
+        # افزوده فقط به‌اندازهٔ ردیف‌هایش ترجمه دارد و بقیه به انگلیسی می‌افتد.
+        done = total if builtin else len(textstore.lang_texts(code))
+        rows.append({"code": code, "name": name, "builtin": builtin,
+                     "done": done, "total": total,
+                     "pct": done * 100 // total if total else 0})
+    return rows
+
+
+async def _langs_render(request, *, error: str = "", review=None,
+                        raw: str = "", replace: bool = False, confirm: str = "") -> web.Response:
+    langs = await _languages()
+    return _render("langs", admin_id=_session_admin(request), active="langs",
+                   pill_ok=await _pill_ok(request.app), langs=langs,
+                   rows=_lang_rows(langs), default_lang=i18n_DEFAULT,
+                   total=len(langpack.TEXT_KEYS), rv=review, raw=raw,
+                   replace=replace, confirm=confirm,
+                   saved=_LANG_OK.get(request.query.get("ok", ""), ""), error=error)
+
+
+async def langs_page(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    await textstore.refresh_if_stale()
+    return await _langs_render(request)
+
+
+async def langs_export(request: web.Request) -> web.Response:
+    """بستهٔ ترجمه برای دادن به یک چت‌بات. همین شکل دوباره import می‌شود."""
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    await textstore.refresh_if_stale()
+    langs = await _languages()
+    try:
+        code = langpack.normalize_code(request.query.get("lang", ""))
+    except langpack.PackError as exc:
+        return await _langs_render(request, error=str(exc))
+    source = request.query.get("source", "") or i18n_DEFAULT
+    if source not in langs:
+        source = i18n_DEFAULT
+    name = (request.query.get("name", "") or "").strip() or langs.get(code) or code
+    pack = langpack.build_pack(
+        lang=code, name=name, source=source,
+        texts=langpack.effective_texts(source, textstore.lang_texts(source)))
+    return web.Response(
+        text=pack, content_type="application/json", charset="utf-8",
+        headers={"Content-Disposition": f'attachment; filename="telabzar-{code}.json"'})
+
+
+async def langs_import(request: web.Request) -> web.Response:
+    """بستهٔ چسبانده‌شده → سنجش → (تأیید برای زبانِ پیش‌فرض) → نوشتن.
+
+    اتمیک: اگر حتی یک کلید خطا داشته باشد **هیچ‌چیز** نوشته نمی‌شود و فهرستِ
+    کلید+دلیل برمی‌گردد، تا ادمین همان فهرست را به چت‌بات بدهد و دوباره بچسباند.
+    """
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    await textstore.refresh_if_stale()
+    form = await request.post()
+    raw = str(form.get("pack") or "")
+    replace = form.get("replace") == "on"
+    langs = await _languages()
+
+    try:
+        pack = langpack.parse_pack(raw)
+        code = langpack.normalize_code(str(form.get("lang") or "") or pack.get("lang") or "")
+        # کدِ فرم حاکم است و کدِ داخلِ فایل فقط **مقایسه** می‌شود: یک چت‌بات
+        # می‌تواند `"lang": "es"` را بی‌خبر به چیزِ دیگری عوض کند، و آن‌وقت
+        # ترجمه زیرِ زبانِ اشتباه می‌نشیند بدونِ هیچ نشانه‌ای.
+        in_file = str(pack.get("lang") or "")
+        if in_file and langpack.normalize_code(in_file) != code:
+            raise langpack.PackError(
+                f"کدِ زبانِ داخلِ فایل («{in_file}») با کدِ فرم («{code}») یکی نیست.")
+    except langpack.PackError as exc:
+        return await _langs_render(request, error=str(exc), raw=raw, replace=replace)
+
+    name = (str(form.get("name") or "").strip()
+            or str(pack.get("name") or "").strip() or langs.get(code) or code)
+    source = str(pack.get("source") or i18n_DEFAULT)
+    rv = langpack.review(
+        pack,
+        source_texts=langpack.effective_texts(source, textstore.lang_texts(source)),
+        current=langpack.effective_texts(code, textstore.lang_texts(code)))
+    rv.name = name
+    if not rv.ok:
+        return await _langs_render(request, review=rv, raw=raw, replace=replace)
+
+    # زبانِ **پیش‌فرض** تأییدِ صریح می‌خواهد: یک پیست می‌تواند کلِ رابطِ فارسی را
+    # عوض کند، و برخلافِ زبان‌های دیگر این‌جا هیچ نسخهٔ «قبلی»ای در کاتالوگ نیست
+    # که بشود با یک reset برگشت. برای بقیهٔ زبان‌ها لازم نیست.
+    if code == i18n_DEFAULT and form.get("confirm") != "yes":
+        return await _langs_render(request, review=rv, raw=raw, replace=replace, confirm="ask")
+
+    if code not in BUILTIN_NAMES:
+        await textstore.add_language(code, name)
+    await textstore.set_texts(code, rv.entries, replace=replace)
+    raise _result("/langs", ok="i")
+
+
+async def langs_delete(request: web.Request) -> web.Response:
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    form = await request.post()
+    code = str(form.get("code") or "").strip()
+    if code in BUILTIN_NAMES:
+        return await _langs_render(request, error="زبانِ داخلی حذف‌شدنی نیست.")
+    await textstore.remove_language(code)
+    raise _result("/langs", ok="d")
 
 
 # ── نودهای توزیع‌شده (master/node روی WireGuard) ────────────────
@@ -2994,6 +3274,10 @@ def build_app() -> web.Application:
     app.router.add_get("/buttons", buttons_page)
     app.router.add_post("/buttons/save", buttons_save)
     app.router.add_post("/buttons/reset", buttons_reset)
+    app.router.add_get("/langs", langs_page)
+    app.router.add_get("/langs/export", langs_export)
+    app.router.add_post("/langs/import", langs_import)
+    app.router.add_post("/langs/delete", langs_delete)
     app.router.add_get("/nodes", nodes_page)
     app.router.add_post("/nodes/add", nodes_add)
     app.router.add_post("/nodes/remove", nodes_remove)
