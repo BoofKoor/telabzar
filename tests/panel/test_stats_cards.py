@@ -13,6 +13,10 @@ from __future__ import annotations
 
 from pagefacts import shows
 from test_panel_css_classes import _fetch
+# یک پیاده‌سازیِ `_card`، نه دو کپیِ دست‌نویس — همان قاعدهٔ `remove_cookie_file`.
+# (به `<div class=card` چسبیده است؛ اگر §۵ آن را عوض کند، همان‌جا یک بار
+#  به‌روز می‌شود و هر دو فایل با هم جابه‌جا می‌شوند.)
+from test_scope_labels import _card
 
 
 async def test_the_recorded_error_reaches_the_errors_card(seeded):
@@ -48,8 +52,13 @@ async def test_the_file_source_split_is_rendered(seeded):
 async def test_the_per_op_rows_name_their_operations(seeded):
     """کارتِ «پرکاربردترین عملیات» باید نامِ opها را بدهد نه فقط عدد.
 
-    `_bars` برچسب را از قبل فارسی کرده و کلیدش `k` است — با اجرا معلوم شد، نه
-    با خواندن: نسخهٔ اولِ این تست `r["op"]` می‌خواست و `KeyError` داد.
+    **ادعا به همان کارت محدود است، و این با سابوتاژ لازم شد نه با احتیاط.**
+    نسخهٔ اول روی کلِ صفحه assert می‌زد و خالی‌کردنِ حلقهٔ `by_op` نینداختش،
+    چون همان برچسب‌ها **دو جای دیگر** هم هستند: جدولِ «کارایی هر عملیات»
+    (که `op`ش از قبل فارسی است، `admin_web.py:1694`) و — آموزنده‌تر — متنِ
+    توضیحیِ خودِ صفحه که «(فشرده‌سازی، تبدیل، برش، …)» را به‌عنوان **مثال**
+    می‌نویسد. یعنی نثرِ خودِ صفحه ادعای گارد را برآورده می‌کرد: همان تلهٔ §۶
+    یک پله بالاتر، این‌بار نه در سورسِ گارد بلکه در محتوای صفحه.
     """
     from app import admin_web as aw
 
@@ -58,16 +67,23 @@ async def test_the_per_op_rows_name_their_operations(seeded):
     labels = {r["k"] for r in s["by_op"]}
     assert labels == {aw._OP_FA[o] for o in ("compress", "convert", "trim")}, (
         f"دادهٔ کاشته‌شده عوض شده: {labels}")
-    shows(await _fetch(seeded, "/stats"), *labels)
+    shows(_card(await _fetch(seeded, "/stats"), "پرکاربردترین عملیات"), *labels)
 
 
 async def test_the_op_performance_table_names_its_operations(seeded):
-    """جدولِ کارایی opِ **خام** را می‌دهد، نه برچسبِ فارسی — دو مسیرِ متفاوت."""
+    """جدولِ کارایی — لایهٔ **دومِ** همان واقعیت، پس ادعای جدا و سابوتاژِ جدا.
+
+    تصحیحِ یک ادعای خودم: این جدول opِ **خام** نمی‌دهد. `admin_web.py:1694`
+    مقدارِ `_OP_FA.get(op, op)` می‌گذارد، یعنی دقیقاً همان برچسبِ فارسیِ
+    کارتِ بالا. پس تنها چیزی که این دو تست را از هم جدا می‌کند **کارت** است،
+    نه متن — و بدونِ محدودکردن به کارت، هر کدام با رندرِ آن‌یکی سبز می‌ماند.
+    """
     from app import admin_web as aw
 
     s = await aw._stats("all")
     assert s["op_perf"], "پیش‌شرط: جاب کاشته شده باشد"
-    shows(await _fetch(seeded, "/stats"), *[r["op"] for r in s["op_perf"]])
+    card = _card(await _fetch(seeded, "/stats"), "کارایی هر عملیات")
+    shows(card, *[r["op"] for r in s["op_perf"]])
 
 
 async def test_a_database_with_no_failures_says_so(panel):

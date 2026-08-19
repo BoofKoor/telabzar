@@ -104,6 +104,13 @@ _CSB = "tests/panel/test_cookie_status_badges.py"
 _SKC = "tests/panel/test_settings_key_coverage.py"
 _SCL = "tests/panel/test_scope_labels.py"
 _PST = "tests/test_probe_stats.py"
+_HLT = "tests/panel/test_health_page.py"
+_TXT = "tests/panel/test_texts_page.py"
+_NDS = "tests/panel/test_nodes_page.py"
+_BTN = "tests/panel/test_buttons_page.py"
+_STC = "tests/panel/test_stats_cards.py"
+_URW = "tests/panel/test_users_rows.py"
+_PGF = "tests/panel/test_pagefacts.py"
 
 # «گروهِ خودکار را بردار» — یک خرابکاری با **سه** ادعای متفاوت، پس یک‌بار
 # تعریف می‌شود. دو تا باید بیفتند و یکی عمداً **نباید**، که کلِ نکته است:
@@ -1766,6 +1773,174 @@ CASES: list[dict] = [
      "new": "                return",
      "target": f"{_PST}::test_a_pick_is_counted_once_and_the_second_is_a_repick",
      "expect": None},
+
+    # ── پوششِ قالب‌های پنل: یک واقعیتِ رندرشده را بردار ─────────────────
+    # هر مورد یکی از سیزده حذفِ **اندازه‌گیری‌شده‌ای** است که روی `f00d37e`
+    # هیچ تستی را نمی‌انداخت. سابوتاژ عمداً **ریزدانه** است نه «بدنه را خالی
+    # کن»، و این یک قیدِ روشی است نه سلیقه: خالی‌کردنِ بدنه هم‌زمان کفِ
+    # ضدِتوخالیِ گاردِ کلاس (`len(used) >= 15`) را می‌شکند، پس نمی‌شود فهمید
+    # کدام لایه گرفته است. اندازه‌گیری نشان داد گاردِ کلاس **هیچ‌کدام** از این
+    # سیزده را نمی‌گیرد، پس هر مورد دقیقاً یک لایه را جدا اثبات می‌کند —
+    # همان «دفاع در عمق یعنی تست در عمق»ِ §۶.
+    {"name": "panel/health: the processing queue depth vanishes",
+     "path": "app/admin_web.py",
+     "old": "<b>{{health.q_main}}</b>", "new": "<b></b>",
+     "target": _HLT, "expect": "test_every_queue_depth_reaches_the_page"},
+
+    {"name": "panel/health: the live-download count vanishes",
+     "path": "app/admin_web.py",
+     "old": "<b>{{health.dl_active}}</b>", "new": "<b></b>",
+     "target": _HLT, "expect": "test_every_queue_depth_reaches_the_page"},
+
+    {"name": "panel/health: the engine versions vanish",
+     "path": "app/admin_web.py",
+     "old": "gallery-dl {{ e['gallery-dl'] or '—' }}", "new": "",
+     "target": _HLT, "expect": "test_the_engine_versions_reach_the_page"},
+
+    {"name": "panel/health: the cookie-pool count vanishes",
+     "path": "app/admin_web.py",
+     "old": "<bdi>{{p.live}}</bdi> سالم", "new": "",
+     "target": _HLT,
+     "expect": "test_the_cookie_pool_line_reports_each_platform_and_its_count"},
+
+    {"name": "panel/health: the disk meter vanishes",
+     "path": "app/admin_web.py",
+     "old": "{{health.disk_used}}/{{health.disk_total}}G", "new": "",
+     "target": _HLT, "expect": "test_the_disk_meter_reports_what_it_measured"},
+
+    {"name": "panel/health: the redis service row vanishes",
+     "path": "app/admin_web.py",
+     "old": "  <div class=svc>⚡ Redis <span class=\"badge {{'ok' if health.redis else 'warn'}}\">"
+            "{{'آنلاین' if health.redis else 'خطا'}}</span></div>\n",
+     "new": "",
+     "target": _HLT, "expect": "test_every_boolean_service_reports_its_state"},
+
+    {"name": "panel/health: the disk meter renders unconditionally (reverse control)",
+     "path": "app/admin_web.py",
+     "old": "{% if health.disk_total %}<div class=stat><b>دیسکِ ‎/work</b>",
+     "new": "{% if True %}<div class=stat><b>دیسکِ ‎/work</b>",
+     "target": _HLT, "expect": "test_an_unmeasurable_disk_hides_the_meter"},
+
+    {"name": "panel/users: the telegram id vanishes from the row",
+     "path": "app/admin_web.py",
+     "old": "{{u.tg}}{% if u.is_admin %}", "new": "{% if u.is_admin %}",
+     "target": _URW, "expect": "test_each_row_reports_the_telegram_id_it_is_about"},
+
+    {"name": "panel/users: the pager loses its position",
+     "path": "app/admin_web.py",
+     "old": "صفحهٔ {{page+1}} از {{pages}}", "new": "",
+     "target": _URW, "expect": "test_the_pager_states_where_the_admin_is"},
+
+    {"name": "panel/users: the header stops counting",
+     "path": "app/admin_web.py",
+     "old": "{{total}} کل", "new": "",
+     "target": _URW, "expect": "test_the_header_counts_total_and_blocked"},
+
+    {"name": "panel/nodes: the node list renders empty",
+     "path": "app/admin_web.py",
+     "old": "{% for n in nodes %}\n    <div class=nd>",
+     "new": "{% for n in [] %}\n    <div class=nd>",
+     "target": _NDS,
+     "expect": "test_a_registered_node_is_listed_with_its_identifying_facts"},
+
+    {"name": "panel/texts: the whole catalogue renders empty",
+     "path": "app/admin_web.py",
+     "old": "{% for g in groups %}\n  <details class=tx-cat",
+     "new": "{% for g in [] %}\n  <details class=tx-cat",
+     "target": _TXT, "expect": "test_every_category_renders_its_title"},
+
+    {"name": "panel/texts: the editor box loses the current value",
+     "path": "app/admin_web.py",
+     "old": "<textarea name=value rows=2>{{it.current}}</textarea>",
+     "new": "<textarea name=value rows=2></textarea>",
+     "target": _TXT, "expect": "test_a_key_is_editable_with_its_current_value"},
+
+    {"name": "panel/texts: search stops filtering",
+     "path": "app/admin_web.py",
+     "old": "        if ql and ql not in key.lower() and ql not in default.lower() "
+            "and ql not in current.lower():\n            continue",
+     "new": "        if False:\n            continue",
+     "target": _TXT,
+     "expect": "test_the_search_narrows_the_list_to_what_matches"},
+
+    {"name": "panel/buttons: the op rows render empty",
+     "path": "app/admin_web.py",
+     "old": "      {% for it in items %}\n        <div class=bt-row data-op=\"{{it.op}}\">",
+     "new": "      {% for it in [] %}\n        <div class=bt-row data-op=\"{{it.op}}\">",
+     "target": _BTN, "expect": "test_every_op_of_the_kind_renders_a_row[video]"},
+
+    {"name": "panel/buttons: the kind tabs vanish",
+     "path": "app/admin_web.py",
+     "old": "{% for k, label in kinds %}", "new": "{% for k, label in [] %}",
+     "target": _BTN, "expect": "test_every_kind_gets_a_tab"},
+
+    # متنِ دکمه **دو بار** رندر می‌شود (جعبهٔ ویرایش + پیش‌نمایشِ زنده). یک
+    # ادعای انتها‌به‌انتها هیچ‌کدام را اثبات نمی‌کند، چون لایهٔ دیگر برآورده‌اش
+    # می‌کند و «نگرفت» شبیهِ تستِ ضعیف به‌نظر می‌رسد. اندازه‌گیری‌شده: نسخهٔ اول
+    # دقیقاً همین‌طور رد شد. پس دو مورد، هرکدام برای یک لایه.
+    {"name": "panel/buttons: the editor box loses the button's current label",
+     "path": "app/admin_web.py",
+     "old": 'name="text_{{it.op}}" value="{{it.text}}"',
+     "new": 'name="text_{{it.op}}" value=""',
+     "target": _BTN, "expect": "test_the_editor_box_carries_the_current_label"},
+
+    {"name": "panel/buttons: the live preview stops showing the label",
+     "path": "app/admin_web.py",
+     "old": '<span class="tgb {{b.cls}}" {% if b.color %}style="background:{{b.color}};'
+            'color:#fff"{% endif %}>{{b.text}}</span>',
+     "new": '<span class="tgb {{b.cls}}" {% if b.color %}style="background:{{b.color}};'
+            'color:#fff"{% endif %}></span>',
+     "target": _BTN, "expect": "test_the_live_preview_shows_the_current_label"},
+
+    {"name": "panel/stats: the errors card renders empty",
+     "path": "app/admin_web.py",
+     "old": "{% for e in s.errors %}", "new": "{% for e in [] %}",
+     "target": _STC, "expect": "test_the_recorded_error_reaches_the_errors_card"},
+
+    # همان دو-لایگی، با یک پیچِ اضافه: برچسب‌های فارسیِ op در **سه** جا
+    # می‌آیند — کارتِ `by_op`، جدولِ `op_perf` (که `op`ش از قبل فارسی است،
+    # `admin_web.py:1694`)، و متنِ توضیحیِ خودِ صفحه که همان‌ها را به‌عنوان
+    # مثال می‌نویسد. پس هر ادعا باید به **کارتِ** خودش محدود شود.
+    {"name": "panel/stats: the per-op card renders empty",
+     "path": "app/admin_web.py",
+     "old": "{% if s.by_op %}{% for r in s.by_op %}", "new": "{% if s.by_op %}{% for r in [] %}",
+     "target": _STC, "expect": "test_the_per_op_rows_name_their_operations"},
+
+    {"name": "panel/stats: the op-performance table renders empty",
+     "path": "app/admin_web.py",
+     "old": "{% for r in s.op_perf %}", "new": "{% for r in [] %}",
+     "target": _STC, "expect": "test_the_op_performance_table_names_its_operations"},
+
+    {"name": "panel/cookies: a status dot is defined but never rendered",
+     "path": "app/admin_web.py",
+     "old": '      <span class="sdot s-{{c.status}}"></span>\n', "new": "", "count": 2,
+     "target": _CSB,
+     "expect": "test_every_seeded_status_paints_a_dot_on_a_real_row"},
+
+    # ── هلپرِ `pagefacts`: خودارجاعی، نه صرفاً «چک می‌تواند بیفتد» ─────────
+    # کامنتِ CSS داخلِ `<style>` **ارسال می‌شود** و یک‌بار گاردِ کلاس را کور
+    # کرد. اگر `page_text` استایل را دور نریزد، هر ادعایی می‌تواند از داخلِ
+    # نثرِ توضیحیِ خودمان برآورده شود.
+    {"name": "pagefacts: stylesheets and comments are scanned as visible text",
+     "path": "tests/panel/pagefacts.py",
+     "old": '_DROP = re.compile(r"<!--.*?-->|<style[^>]*>.*?</style>|'
+            '<script[^>]*>.*?</script>", re.S | re.I)',
+     "new": '_DROP = re.compile(r"(?!x)x")',
+     "target": _PGF,
+     "expect": "test_a_fact_named_only_inside_a_css_comment_is_reported_missing"},
+
+    {"name": "pagefacts: tags are dropped without a separator",
+     "path": "tests/panel/pagefacts.py",
+     "old": "    without_tags = _TAG.sub(\" \", without_noise)",
+     "new": "    without_tags = _TAG.sub(\"\", without_noise)",
+     "target": _PGF, "expect": "test_two_numbers_in_adjacent_tags_do_not_fuse"},
+
+    {"name": "pagefacts: entities are expanded before tags are stripped",
+     "path": "tests/panel/pagefacts.py",
+     "old": "    without_noise = _DROP.sub(\" \", html)",
+     "new": "    without_noise = _DROP.sub(\" \", _html.unescape(html))",
+     "target": _PGF,
+     "expect": "test_escaped_markup_the_page_shows_literally_survives"},
 ]
 
 

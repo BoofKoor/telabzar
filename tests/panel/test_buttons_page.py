@@ -53,15 +53,50 @@ async def test_the_selected_kind_is_the_one_rendered(panel):
     shows(await _fetch(panel, "/buttons?kind=audio"), _KIND_LABEL["audio"])
 
 
-async def test_each_row_carries_the_current_label_of_its_button(panel):
-    """متنِ فعلیِ دکمه باید داخلِ جعبه باشد، نه فقط نامِ op.
+#: نگهبانِ متن — بی‌همتا، تا «در صفحه هست» واقعاً همین را بگوید.
+LABEL = "برچسبِ نگهبانِ ۹۱۷۳"
 
-    این همان نیمه‌ای است که از‌دست‌رفتنِ داده را ممکن می‌کند: جعبهٔ تهی در
-    ذخیرهٔ دسته‌ای «این override را پاک کن» معنی می‌دهد.
-    """
+
+async def _with_label(panel, kind: str = "video") -> tuple[str, str]:
+    """یک برچسبِ نگهبان روی اولین opِ این kind بنشان و صفحه را برگردان."""
     from app import textstore
     from app.keyboards import OPS_BY_KIND
 
-    op, key = OPS_BY_KIND["video"][0]
-    await textstore.set_text("fa", key, "برچسبِ نگهبانِ ۹۱۷۳")
-    shows(await _fetch(panel, "/buttons?kind=video"), op, "برچسبِ نگهبانِ ۹۱۷۳")
+    op, key = OPS_BY_KIND[kind][0]
+    await textstore.set_text("fa", key, LABEL)
+    return op, await _fetch(panel, f"/buttons?kind={kind}")
+
+
+def _preview(html: str) -> str:
+    """فقط بلوکِ پیش‌نمایش — از `id=prevkeys` تا کارتِ بعدی."""
+    return html.split("id=prevkeys")[1].split("<div class=card")[0]
+
+
+# ── دو لایهٔ **مستقل** که یک واقعیت را نشان می‌دهند ─────────────────────────
+# متنِ فعلیِ دکمه دو بار رندر می‌شود: یک‌بار در جعبهٔ ویرایش و یک‌بار در
+# پیش‌نمایشِ زنده. با یک ادعای انتها‌به‌انتها («برچسب در صفحه هست») سابوتاژِ
+# هر لایه بی‌اثر می‌ماند، چون لایهٔ دیگر آن ادعا را برآورده می‌کند — و از
+# بیرون شبیهِ «تستِ ضعیف» است. اندازه‌گیری‌شده: نسخهٔ اولِ این تست دقیقاً
+# همین‌طور شکست خورد. پس هر لایه ادعای خودش و سابوتاژِ خودش را دارد.
+async def test_the_editor_box_carries_the_current_label(panel):
+    """جعبهٔ ویرایش باید متنِ فعلی را داشته باشد.
+
+    این همان نیمه‌ای است که از‌دست‌رفتنِ داده را ممکن می‌کند: جعبهٔ تهی در
+    ذخیرهٔ دسته‌ای «این override را پاک کن» معنی می‌دهد — همان باگی که §۷ ثبت
+    کرده. پس ادعا روی خودِ `value=` بسته می‌شود، نه روی «جایی در صفحه».
+    """
+    op, html = await _with_label(panel)
+    assert f'name="text_{op}" value="{LABEL}"' in html, (
+        f"جعبهٔ ویرایشِ «{op}» متنِ فعلی را حمل نمی‌کند")
+
+
+async def test_the_live_preview_shows_the_current_label(panel):
+    """پیش‌نمایش باید همان چیزی را نشان بدهد که کاربر در تلگرام می‌بیند."""
+    _op, html = await _with_label(panel)
+    assert LABEL in _preview(html), "پیش‌نمایش برچسبِ فعلی را نشان نمی‌دهد"
+
+
+async def test_each_row_names_its_op(panel):
+    """نامِ op کنارِ جعبه — بدونش معلوم نیست کدام دکمه ویرایش می‌شود."""
+    op, html = await _with_label(panel)
+    shows(html, op)
