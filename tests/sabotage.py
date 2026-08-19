@@ -111,6 +111,7 @@ _BTN = "tests/panel/test_buttons_page.py"
 _STC = "tests/panel/test_stats_cards.py"
 _URW = "tests/panel/test_users_rows.py"
 _PGF = "tests/panel/test_pagefacts.py"
+_PCT = "tests/panel/test_page_contract.py"
 
 # «گروهِ خودکار را بردار» — یک خرابکاری با **سه** ادعای متفاوت، پس یک‌بار
 # تعریف می‌شود. دو تا باید بیفتند و یکی عمداً **نباید**، که کلِ نکته است:
@@ -1910,6 +1911,26 @@ CASES: list[dict] = [
      "path": "app/admin_web.py",
      "old": "{% for r in s.op_perf %}", "new": "{% for r in [] %}",
      "target": _STC, "expect": "test_the_op_performance_table_names_its_operations"},
+
+    # §۴٫۵ سند، موردهای ۱ و ۵. فرگمنتِ مشترک با الحاقِ **رشته‌ایِ پایتون** در دو
+    # جا نشانده می‌شود، پس شکستنِ یک‌طرفه‌اش کاملاً ممکن است — و تا امروز هیچ
+    # تستی نیمهٔ داشبورد را نمی‌زد.
+    {"name": "panel/contract: the shared health partial drops off the dashboard",
+     "path": "app/admin_web.py",
+     "old": '<div class=col>""" + _HEALTH_CARDS + """</div>\n</div>{% endblock %}"""\n\n_COOKIES',
+     "new": '<div class=col></div>\n</div>{% endblock %}"""\n\n_COOKIES',
+     "target": _PCT,
+     "expect": "test_the_shared_health_partial_renders_on_both_pages[/]"},
+
+    # شکلِ واقع‌بینانه: درصدی که روی مخرجِ صفر حساب شود. `pool[0]` عمداً استفاده
+    # **نشد** — جینجا اندیسِ خارج از بازه را `Undefined` می‌دهد و بی‌صدا تهی
+    # رندر می‌کند، پس اصلاً ۵۰۰ نمی‌شود و سابوتاژ چیزی ثابت نمی‌کرد.
+    {"name": "panel/contract: a page 500s on an empty deployment",
+     "path": "app/admin_web.py",
+     "old": "    {% if pool %}{% for p in pool %}",
+     "new": "    {{ 100 // (pool|length) }}{% if pool %}{% for p in pool %}",
+     "target": _PCT,
+     "expect": "test_every_page_answers_on_an_empty_deployment[/health]"},
 
     {"name": "panel/cookies: a status dot is defined but never rendered",
      "path": "app/admin_web.py",
