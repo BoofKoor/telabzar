@@ -115,6 +115,8 @@ _PCT = "tests/panel/test_page_contract.py"
 _I18 = "tests/test_i18n_fallback.py"
 _LPK = "tests/test_langpack.py"
 _LNG = "tests/panel/test_langs_page.py"
+_STF = "tests/test_start_flow.py"
+_PAR = "tests/test_locale_parity.py"
 
 # «گروهِ خودکار را بردار» — یک خرابکاری با **سه** ادعای متفاوت، پس یک‌بار
 # تعریف می‌شود. دو تا باید بیفتند و یکی عمداً **نباید**، که کلِ نکته است:
@@ -1835,9 +1837,14 @@ CASES: list[dict] = [
      "old": "صفحهٔ {{page+1}} از {{pages}}", "new": "",
      "target": _URW, "expect": "test_the_pager_states_where_the_admin_is"},
 
+    # الگو تا فاز B یکتا بود و بعد **پیشوندِ** یک رشتهٔ تازه شد: صفحهٔ `/langs`
+    # سربرگِ «{{total}} کلیدِ متن» را آورد، پس `{{total}} کل` دو بار جور می‌شد و
+    # مورد با `SabotageError` می‌افتاد — دقیقاً همان چیزی که آن استثنا برایش
+    # هست، ولی تا امروز کسی دفترچه را بعد از #۱۲۹ کامل replay نکرده بود.
+    # لنگرِ `{%` دوباره یکتایش می‌کند. (نه باگِ محصول است نه ادعای عوض‌شده.)
     {"name": "panel/users: the header stops counting",
      "path": "app/admin_web.py",
-     "old": "{{total}} کل", "new": "",
+     "old": "{{total}} کل{%", "new": "{%",
      "target": _URW, "expect": "test_the_header_counts_total_and_blocked"},
 
     {"name": "panel/nodes: the node list renders empty",
@@ -2132,8 +2139,12 @@ CASES: list[dict] = [
      "target": _LNG,
      "expect": "test_deleting_a_language_takes_its_texts_with_it"},
 
+    # فاز C سازندهٔ فهرست را از `admin_web._languages` به
+    # `i18n.available_languages` برد (ربات نمی‌تواند `admin_web` را import کند)،
+    # پس این مورد هم به همان‌جا منتقل شد. ادعا عوض نشده: زبانِ import‌شده باید
+    # روی صفحه‌های دیگرِ پنل انتخاب‌شدنی باشد.
     {"name": "panel: the language list goes back to a hardcoded pair",
-     "path": "app/admin_web.py",
+     "path": "app/i18n.py",
      "old": "    langs = dict(BUILTIN_NAMES)\n    langs.update(await textstore.languages())",
      "new": "    langs = dict(BUILTIN_NAMES)",
      "target": _LNG,
@@ -2145,6 +2156,134 @@ CASES: list[dict] = [
      "new": "        done = total",
      "target": _LNG,
      "expect": "test_the_page_states_how_many_keys_a_language_still_lacks"},
+
+    # ── فاز C: انتخابِ زبان و منوهای کاربر، سمتِ ربات ──
+    {"name": "phase-c: /start goes back to the hardcoded fa/en menu",
+     "path": "app/routers/start.py",
+     "old": "    langs = await available_languages()\n    return t(lang, \"choose_language\")",
+     "new": "    langs = {\"fa\": \"فارسی\", \"en\": \"English\"}\n    return t(lang, \"choose_language\")",
+     "target": _STF,
+     "expect": "test_a_language_added_from_the_panel_shows_up_in_the_start_menu"},
+
+    {"name": "phase-c: the keyboard ignores the list it was handed",
+     "path": "app/keyboards.py",
+     "old": "    for code, name in langs.items():\n        mark = \"✅ \" if code == current else \"\"",
+     "new": "    for code, name in {\"fa\": \"فارسی\", \"en\": \"English\"}.items():\n"
+            "        mark = \"✅ \" if code == current else \"\"",
+     "target": _STF,
+     "expect": "test_a_language_added_from_the_panel_shows_up_in_the_start_menu"},
+
+    {"name": "phase-c: an added language code is coerced back to the default",
+     "path": "app/routers/start.py",
+     "old": "    code = callback_data.code if callback_data.code in langs else DEFAULT",
+     "new": "    code = callback_data.code if callback_data.code in (\"fa\", \"en\") else DEFAULT",
+     "target": _STF,
+     "expect": "test_picking_an_added_language_is_stored_and_not_coerced_to_fa"},
+
+    {"name": "phase-c: the panel rebuilds the list instead of delegating",
+     "path": "app/admin_web.py",
+     "old": "    return await i18n_available_languages()",
+     "new": "    langs = dict(BUILTIN_NAMES)\n    langs.update(await textstore.languages())\n    return langs",
+     "target": _STF,
+     "expect": "test_the_language_list_is_built_in_exactly_one_place"},
+
+    {"name": "phase-c: the language list loses its ORDER BY",
+     "path": "app/textstore.py",
+     "old": "            select(Language).order_by(Language.name, Language.code)",
+     "new": "            select(Language)",
+     "target": _STF,
+     "expect": "test_the_added_languages_come_back_in_a_stable_order"},
+
+    {"name": "phase-c: an existing user is asked for their language again",
+     "path": "app/routers/start.py",
+     "old": "    if user is None or not user.lang:",
+     "new": "    if True:",
+     "target": _STF,
+     "expect": "test_a_user_who_already_chose_is_never_asked_again"},
+
+    {"name": "phase-c: a settings-initiated change lands on welcome, not settings",
+     "path": "app/routers/start.py",
+     "old": "    from_settings = bool(user is not None and user.lang)",
+     "new": "    from_settings = False",
+     "target": _STF,
+     "expect": "test_changing_the_language_from_settings_returns_to_settings"},
+
+    {"name": "phase-c: the lying language_set toast comes back",
+     "path": "app/routers/start.py",
+     "old": "    await cq.answer()\n\n\n@router.callback_query(Nav.filter())",
+     "new": "    await cq.answer(t(code, \"language_set\"))\n\n\n@router.callback_query(Nav.filter())",
+     "target": _STF,
+     "expect": "test_no_language_set_toast_is_sent_any_more"},
+
+    # این مورد یک ضعفِ واقعی در تستِ خودم پیدا کرد و بعد اصلاح شد: ادعای
+    # `…come_from_the_declarative_list` انتظارش را از همان `HOME_ITEMS` می‌سازد
+    # که این سابوتاژ ویرایشش می‌کند، پس هر دو طرف با هم کوچک می‌شدند و سبز
+    # می‌ماند. حالا یک ادعای **لفظیِ** جدا هست و `expect` به آن اشاره می‌کند.
+    {"name": "phase-c: a welcome key is dropped from the declarative list",
+     "path": "app/keyboards.py",
+     "old": "    (\"settings\", \"btn_settings\"),\n    (\"help\", \"btn_help\"),",
+     "new": "    (\"help\", \"btn_help\"),",
+     "target": _STF,
+     "expect": "test_the_welcome_screen_offers_settings_and_help"},
+
+    {"name": "phase-c: the settings menu loses its only item",
+     "path": "app/keyboards.py",
+     "old": "SETTINGS_ITEMS: tuple[tuple[str, str], ...] = (\n    (\"lang\", \"btn_change_language\"),\n)",
+     "new": "SETTINGS_ITEMS: tuple[tuple[str, str], ...] = ()",
+     "target": _STF,
+     "expect": "test_settings_opens_with_the_language_item_and_a_back_key"},
+
+    # ── فاز C: گاردِ پاریتیِ کاتالوگ (باگِ زندهٔ فاز B) ──
+    {"name": "parity: a key exists in fa but not in en",
+     "path": "app/locales/en.py",
+     "old": '    "btn_help": "📘 How to use",\n',
+     "new": "",
+     "target": _PAR,
+     "expect": "test_the_two_catalogs_hold_exactly_the_same_keys"},
+
+    {"name": "parity: a placeholder is dropped on one side only",
+     "path": "app/locales/en.py",
+     "old": '"detected_image": "🖼 <b>Image</b> detected\\n{name} · {size}',
+     "new": '"detected_image": "🖼 <b>Image</b> detected\\n{name}',
+     "target": _PAR,
+     "expect": "test_every_key_carries_the_same_placeholders_in_both_languages"},
+
+    {"name": "parity: an HTML tag is dropped on one side only",
+     "path": "app/locales/en.py",
+     "old": '"settings_title": "⚙️ <b>Settings</b>',
+     "new": '"settings_title": "⚙️ Settings',
+     "target": _PAR,
+     "expect": "test_every_key_carries_the_same_html_tags_in_both_languages"},
+
+    {"name": "parity: a new bot string never reaches the translation pack",
+     "path": "app/langpack.py",
+     "old": 'TEXT_KEYS: tuple[str, ...] = tuple(sorted(set(CATALOG["fa"]) | set(CATALOG["en"])))',
+     "new": 'TEXT_KEYS: tuple[str, ...] = tuple(\n'
+            '    k for k in sorted(set(CATALOG["fa"]) | set(CATALOG["en"]))\n'
+            '    if k != "help_text")',
+     "target": _PAR,
+     "expect": "test_the_new_phase_c_strings_reach_the_translation_pack"},
+
+    # کنترلِ معکوسِ ۱ — گاردِ پاریتی دربارهٔ **کاتالوگ** است نه دربارهٔ جریان.
+    # برداشتنِ منوی زبان از `/start` نباید هیچ ادعای پاریتی‌ای را بیندازد؛
+    # اگر بیندازد یعنی آن تست‌ها دارند چیزِ دیگری می‌سنجند.
+    {"name": "parity control: gutting the /start menu leaves the catalog guard green",
+     "path": "app/routers/start.py",
+     "old": "        text, kb = await _lang_menu(lang, current=None, back_to=None)\n"
+            "        await message.answer(text, reply_markup=kb)",
+     "new": "        await message.answer(t(lang, \"choose_language\"))",
+     "target": _PAR,
+     "expect": None},
+
+    # کنترلِ معکوسِ ۲ — تست‌ها روی **ساختار** assert می‌کنند نه روی copy.
+    # بازنویسیِ واژه‌های یک رشتهٔ فارسی نباید هیچ‌چیز را بیندازد، وگرنه هر
+    # ویرایشِ متنِ ادمین به یک تستِ قرمز تبدیل می‌شود و کسی تست را حذف می‌کند.
+    {"name": "phase-c control: rewording a Persian string breaks nothing",
+     "path": "app/locales/fa.py",
+     "old": '    "btn_settings": "⚙️ تنظیمات",',
+     "new": '    "btn_settings": "⚙️ پیکربندی و تنظیمات",',
+     "target": _STF,
+     "expect": None},
 ]
 
 

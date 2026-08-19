@@ -5,7 +5,31 @@ from aiogram.filters.callback_data import CallbackData
 
 
 class Lang(CallbackData, prefix="lang"):
+    """انتخابِ زبان. **عمداً تک‌فیلدی می‌ماند.**
+
+    وسوسه این است که یک فیلدِ `src` اضافه شود تا «انتخابِ اول» از «تغییر از
+    تنظیمات» جدا شود. اندازه‌گیری‌شده روی aiogram 3.30 که چرا نه: `unpack`
+    سخت‌گیر است و مقدارِ پیش‌فرضِ پایتونی نجاتش نمی‌دهد —
+
+        Lang2.unpack('lang:fa') → TypeError: takes 2 arguments but 1 were given
+
+    یعنی هر کاربری که لحظهٔ استقرار یک منوی زبانِ بی‌جواب روی صفحه دارد، ضربه
+    می‌زند و **هیچ هندلری جور نمی‌شود** (دکمه می‌چرخد و هیچ). به‌جایش آن تفکیک
+    از **حالت** مشتق می‌شود: `routers/start.py` نگاه می‌کند `user.lang` پیش از
+    نوشتن تهی بود یا نه.
+    """
+
     code: str
+
+
+class Nav(CallbackData, prefix="nv"):
+    """پیمایشِ منوهای کاربر (خوش‌آمد ↔ تنظیمات ↔ آموزش ↔ انتخابِ زبان).
+
+    یک فیلد، تا افزودنِ مقصدِ تازه یک ردیف در `keyboards.HOME_ITEMS` /
+    `SETTINGS_ITEMS` باشد و نه یک کلاسِ تازه. `nv:settings` = ۱۱ بایت.
+    """
+
+    to: str  # home | settings | lang | help
 
 
 class Act(CallbackData, prefix="act"):

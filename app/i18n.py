@@ -41,6 +41,28 @@ def default_text(lang: str | None, key: str) -> str:
     )
 
 
+async def available_languages() -> dict[str, str]:
+    """کد → نامِ نمایشی برای **همهٔ** زبان‌های در دسترس: داخلی‌ها + افزوده‌ها.
+
+    **تنها جایی که این فهرست ساخته می‌شود** — هم ربات از این می‌خواند
+    (`routers/start.py`) هم پنل (`admin_web._languages`). دو کپیِ دست‌نویس
+    واگرا می‌شوند و هیچ‌کدام دیگری را خبر نمی‌کند؛ همان الگوی
+    `remove_cookie_file` که §۷ ثبتش کرده.
+
+    **چرا این‌جا و نه در `textstore` یا `admin_web`** — با جهتِ وابستگی تعیین
+    شد نه سلیقه. `routers/` نمی‌تواند `admin_web` را import کند (ایمیجِ ربات
+    jinja2/cryptography ندارد)، و `textstore` نمی‌تواند `i18n` را import کند
+    چون خودِ `i18n` واردکنندهٔ `textstore` است. تنها ماژولی که هم
+    `BUILTIN_NAMES` را می‌بیند هم `textstore.languages()` را، همین است.
+
+    ترتیب: اول داخلی‌ها (fa, en)، بعد افزوده‌ها به ترتیبِ نامِ نمایشی —
+    `textstore.languages()` خودش `ORDER BY` دارد.
+    """
+    langs = dict(BUILTIN_NAMES)
+    langs.update(await textstore.languages())
+    return langs
+
+
 def _fmt(template: str, kwargs: dict) -> str | None:
     """فرمت با kwargs؛ None اگر شکست (تا بتوان به پیش‌فرض برگشت)."""
     if not kwargs:
