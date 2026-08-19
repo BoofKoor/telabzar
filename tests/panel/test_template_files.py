@@ -110,6 +110,38 @@ def test_a_template_file_ends_with_exactly_one_newline(path):
         f"{path.name} بیش از یک خطِ جدیدِ پایانی دارد — یک `\\n` به هر صفحه اضافه می‌شود")
 
 
+def test_the_stylesheet_that_ships_is_the_file_on_disk(panel_css_text):
+    """CSS از فایل خوانده می‌شود ولی **درون‌خطی** تزریق می‌شود.
+
+    اگر روزی به `<link>` برود، این تست قرمز می‌شود و آن **درست** است: آن سوییچ
+    بایت‌های HTML را عوض می‌کند و سه خوانندهٔ `<style>`ِ همان پاسخ را می‌شکند،
+    پس باید تصمیمِ آگاهانه باشد نه یک اثرِ جانبی.
+    """
+    assert panel_css_text.strip(), "panel.css خالی است"
+    assert panel_css_text == aw._CSS
+
+
+async def test_the_served_page_carries_the_stylesheet_from_the_file(panel, panel_css_text):
+    """کنترلِ انتها‌به‌انتها: فایل واقعاً به مرورگر می‌رسد.
+
+    بدونِ این، «`_CSS` برابرِ فایل است» می‌تواند صادق باشد در حالی که `_render`
+    اصلاً تزریقش نمی‌کند.
+    """
+    html = await (await panel.client.get("/", cookies=panel.cookies)).text()
+    marker = "@font-face{font-family:'Vazirmatn'"
+    assert marker in panel_css_text and marker in html
+    assert ".card{background:" in html, "قواعدِ اصلی در صفحه نیستند"
+
+
+def test_the_stylesheet_ends_with_exactly_one_newline(panel_css_text):
+    assert panel_css_text.endswith("\n") and not panel_css_text.endswith("\n\n")
+
+
+@pytest.fixture
+def panel_css_text() -> str:
+    return (Path(aw._STATIC_DIR) / "css" / "panel.css").read_text(encoding="utf-8")
+
+
 def test_no_page_template_is_left_behind_as_a_python_string():
     """ضدِ رگرسیون: قالبِ بعدی هم باید فایل باشد، نه رشته‌ای در `admin_web`."""
     leftovers = [n for n in ("_BASE", "_STATS", "_COOKIES", "_LOGIN", "_HEALTH_CARDS")

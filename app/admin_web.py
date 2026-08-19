@@ -16,6 +16,7 @@ import hmac
 import json
 import logging
 import os
+import pathlib
 import re
 import secrets
 import shutil
@@ -290,143 +291,19 @@ def _session_admin(request: web.Request) -> int | None:
     return aid if aid in settings.admin_id_set else None
 
 
-# ── فونت + استایلِ مشترک ────────────────────────────────────────
-# webfontِ متغیرِ Vazirmatn از /static سرو می‌شود؛ font-display:swap تا رندر بلاک نشود.
-_FONT_FACE = (
-    "@font-face{font-family:'Vazirmatn';src:url('/static/fonts/Vazirmatn.woff2') format('woff2');"
-    "font-weight:100 900;font-style:normal;font-display:swap}"
-)
-_CSS = _FONT_FACE + """
-*{margin:0;padding:0;box-sizing:border-box;font-family:'Vazirmatn','Segoe UI',Tahoma,system-ui,sans-serif}
-:root{--bg:#eef2f7;--card:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--teal:#0d9488;
---teal2:#14b8a6;--green:#16a34a;--amber:#d97706;--red:#dc2626}
-body{background:var(--bg);color:var(--ink)}
-a{text-decoration:none;color:inherit}
-.app{display:flex;min-height:100vh}
-.side{width:236px;background:linear-gradient(180deg,#0f172a,#15223b);color:#cbd5e1;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
-.brand{padding:22px;font-size:20px;font-weight:800;color:#fff}.brand small{display:block;font-size:11px;color:#7dd3fc;margin-top:2px}
-.nav{padding:8px 12px;display:flex;flex-direction:column;gap:4px}
-.nav a{display:flex;align-items:center;gap:10px;padding:11px 14px;border-radius:11px;color:#cbd5e1;font-size:14.5px}
-.nav a.on{background:linear-gradient(90deg,rgba(20,184,166,.22),rgba(20,184,166,.05));color:#fff;box-shadow:inset 3px 0 0 var(--teal2)}
-.nav a:not(.on):not(.soon):hover{background:rgba(255,255,255,.05)}
-.nav a.soon{opacity:.45;cursor:default}.foot{margin-top:auto;padding:16px 20px;font-size:12px;color:#64748b}
-.main{flex:1;min-width:0}.top{height:62px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 26px;position:sticky;top:0;z-index:5}
-.top h1{font-size:17px}.who{display:flex;align-items:center;gap:14px;font-size:13px;color:var(--muted);flex-wrap:wrap;justify-content:flex-end}
-.pill{display:inline-flex;align-items:center;gap:7px;background:#ecfdf5;color:#047857;padding:6px 12px;border-radius:999px;font-weight:600;font-size:12.5px}
-.pill.bad{background:#fffbeb;color:#b45309}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--green)}.pill.bad .dot{background:var(--amber)}
-.lo{color:#64748b}
-.body{padding:22px 26px}
-.grid2{display:grid;grid-template-columns:1fr 372px;gap:16px;align-items:start}
-@media(max-width:1000px){.grid2{grid-template-columns:1fr}}
-.col{display:flex;flex-direction:column;gap:16px}
-.card{background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
-.body>.card+.card,form>.card+.card{margin-top:16px}
-.card h3{font-size:14px;font-weight:700;padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:9px}
-.tag{font-size:11px;font-weight:600;color:var(--teal);background:#f0fdfa;padding:3px 9px;border-radius:8px;white-space:nowrap}
-.card h3 .tag{margin-inline-start:auto}
-.card h3 .tag+.tag{margin-inline-start:6px}
-.hint{color:#64748b;font-size:12px;line-height:2;padding:12px 18px;border-bottom:1px solid var(--line);
-  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.tabs{display:flex;gap:6px;flex-wrap:wrap;padding:12px 18px 0}
-.tab{padding:7px 12px;border-radius:9px;font-size:12.5px;color:#475569;background:#f1f5f9;border:1px solid transparent}
-.tab:hover{background:#e2e8f0}
-.tab.on{background:#f0fdfa;color:var(--teal);border-color:#99f6e4;font-weight:700}
-.rows{padding:6px 18px 14px}
-.pad{padding:14px 18px}
-.row{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px dashed #eef2f7;gap:12px}
-.row:last-child{border-bottom:0}.row label{font-size:13.5px;color:#334155}.row label small{display:block;color:#94a3b8;font-size:11.5px;margin-top:2px}
-/* جعبهٔ چسباندنِ یک بلوکِ کد (کوکی، بستهٔ زبان). دو مصرف‌کننده دارد، پس مشترک
-   است نه داخلِ بلاکِ یک صفحه — قاعده‌ای که در دو جا دست‌نویس شود واگرا می‌شود. */
-.ta{width:100%;box-sizing:border-box;background:#0b1220;color:#7dd3fc;border:1px solid #1e293b;border-radius:11px;
-  padding:11px 13px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.75;resize:vertical;
-  direction:ltr;text-align:left;unicode-bidi:isolate}
-.ta-inline{width:230px;min-height:64px;border:1px solid #cbd5e1;border-radius:9px;padding:8px 10px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#fff;color:var(--ink);resize:vertical;unicode-bidi:isolate}
-.inp{width:160px;height:36px;border:1px solid #cbd5e1;border-radius:9px;padding:0 11px;font-size:13.5px;font-family:inherit;text-align:center;background:#fff;color:var(--ink)}
-.sel{width:160px;height:36px;border:1px solid #cbd5e1;border-radius:9px;padding:0 8px;font-size:13.5px;font-family:inherit;background:#fff;color:var(--ink)}
-.tg{appearance:none;width:46px;height:26px;border-radius:999px;background:#cbd5e1;position:relative;cursor:pointer;flex:none}
-.tg:checked{background:var(--teal2)}.tg::after{content:'';position:absolute;width:20px;height:20px;border-radius:50%;background:#fff;top:3px;right:3px;transition:.15s}
-.tg:checked::after{right:23px}
-.save{margin:2px 18px 18px;height:44px;width:calc(100% - 36px);background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff;border:0;border-radius:11px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;box-shadow:0 6px 16px rgba(13,148,136,.28)}
-.svc{display:flex;align-items:center;gap:10px;padding:9px 0;font-size:13.5px}.svc:not(:last-child){border-bottom:1px dashed #eef2f7}
-.badge{margin-inline-start:auto;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:8px}
-.ok{background:#ecfdf5;color:#047857}.warn{background:#fffbeb;color:#b45309}.dim{background:#f1f5f9;color:#64748b}
-/* `.err` = ردهٔ «خطر» که تا امروز در این نوار وجود نداشت، پس هر بجی که با آن
-   رندر می‌شد — یعنی «باطل» و «چک‌پوینت»، دقیقاً دو حالتی که دخالتِ انسان
-   می‌خواهند — بی‌رنگ درمی‌آمد. `.err` در `_LOGIN` هست ولی آن یک **بلوکِ** خطای
-   صفحهٔ ورود است (padding/margin دارد) و اصلاً روی `/cookies` بار نمی‌شود.
-   این نسخه عمداً فقط رنگ می‌دهد، هم‌شکلِ سه‌تای بالا، وگرنه بج padding و
-   حاشیهٔ بلوکِ لاگین را ارث می‌برد. روی `/login` ترتیب `{{css}}` **اول** است،
-   پس نسخهٔ آن‌جا همچنان برنده می‌ماند و صفحهٔ ورود تغییر نمی‌کند.
-   `.unk` رنگِ چهارم است نه تکرارِ `.dim`: «ادمین عمداً غیرفعالش کرد» و
-   «وضعیتی که نمی‌شناسیم» نباید یک شکل دیده شوند — حالتِ ناشناخته‌ای که شبیهِ
-   حالتِ عادی رندر شود همان شکستِ بی‌صداست. بنفش عمداً بیرونِ خانوادهٔ
-   سبز/زرد/قرمز/خاکستری است تا «خارج از مقیاس» خوانده شود. */
-.err{background:#fef2f2;color:#b91c1c}.unk{background:#f5f3ff;color:#6d28d9;box-shadow:inset 0 0 0 1px #ddd6fe}
-.meter{height:9px;border-radius:999px;background:#e2e8f0;overflow:hidden}.meter i{display:block;height:100%;border-radius:999px}
-.stat{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:13px}.stat b{width:82px;color:#475569}.stat .meter{flex:1}.stat .num{color:#94a3b8;font-size:11.5px;min-width:60px;text-align:left}
-.mini{display:flex;gap:10px;padding:6px 18px 14px}.kpi{flex:1;background:#f8fafc;border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
-.kpi b{font-size:22px;color:var(--teal)}.kpi span{display:block;font-size:11.5px;color:var(--muted);margin-top:3px}
-.save-sm{height:32px;padding:0 18px;border:0;border-radius:9px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff}
-.saved{background:#ecfdf5;color:#047857;font-size:13px;padding:10px 14px;border-radius:10px;margin-bottom:16px;font-weight:600}
-.note{background:#eff6ff;color:#1d4ed8;font-size:12.5px;padding:10px 14px;border-radius:10px;margin-bottom:16px;line-height:1.9}
-.errbox{background:#fef2f2;color:#b91c1c;font-size:12.5px;padding:10px 14px;border-radius:10px;margin-bottom:16px}
-/* پیام‌هایی که مستقیم فرزندِ کارت‌اند باید هم‌ترازِ بقیهٔ محتوا باشند، نه چسبیده به لبه */
-.card>.saved,.card>.errbox,.card>.note,.card>.tx-err,.card>.empty{margin-inline:18px}
-.tbl-wrap{overflow-x:auto}
-.tbl{width:100%;border-collapse:collapse}
-.tbl td.num{white-space:nowrap}
-.tbl th{text-align:right;font-size:11.5px;color:#94a3b8;font-weight:600;padding:9px 12px;border-bottom:1px solid var(--line)}
-.tbl td{padding:12px;font-size:13px;border-bottom:1px dashed #eef2f7;vertical-align:middle}
-.tbl tr:last-child td{border-bottom:0}
-.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:#334155}
-/* متن‌های لاتین/عددی داخلِ صفحهٔ RTL نباید جابه‌جا شوند (تاریخ، حجم، IP، دستور) */
-.mono,.num,code,.hist .b span{unicode-bidi:isolate}
-.num{direction:ltr;unicode-bidi:isolate;text-align:right}
-.ltr{direction:ltr;text-align:left;unicode-bidi:isolate}
-.chip{display:inline-block;font-size:11px;font-weight:600;padding:3px 9px;border-radius:8px;background:#f1f5f9;color:#475569}
-.btn-sm{height:32px;padding:0 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;font-size:12.5px;font-family:inherit;color:#334155;cursor:pointer}
-.btn-sm:hover{background:#f8fafc}
-.btn-danger{border-color:#fecaca;color:#b91c1c}.btn-danger:hover{background:#fef2f2}
-.inline{display:inline}
-.btn-go{height:34px;padding:0 15px;border:0;border-radius:9px;font-size:13px;font-weight:700;font-family:inherit;
-  cursor:pointer;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff}
-.empty{font-size:13px;color:#94a3b8;padding:18px;text-align:center}
-.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:16px}
-@media(max-width:760px){.kpis{grid-template-columns:repeat(2,1fr)}}
-.kpi2{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px}
-.kpi2 b{font-size:26px;color:var(--ink);display:block;line-height:1.2}
-.kpi2 span{font-size:12px;color:var(--muted)}.kpi2 .up{display:inline;padding:0;color:var(--green);font-size:11.5px;font-weight:700}
-.bar-row{display:flex;align-items:center;gap:10px;margin:11px 0;font-size:13px}
-.bar-row b{width:96px;color:#475569;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bar-row .meter{flex:1}.bar-row .num{min-width:44px;text-align:left;color:#94a3b8;font-size:12px}
-.hist{display:flex;align-items:flex-end;gap:9px;height:130px;padding:14px 18px 6px}
-.hist .b{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px;height:100%}
-.hist .b i{width:66%;min-height:3px;background:linear-gradient(180deg,var(--teal2),var(--teal));border-radius:6px 6px 0 0}
-.hist .b em{font-size:11px;color:#475569;font-style:normal;font-weight:700}.hist .b span{font-size:10px;color:#94a3b8}
-.pager{display:flex;align-items:center;justify-content:center;gap:14px;padding:16px;font-size:13px;color:var(--muted)}
-.pager a{padding:8px 14px;border:1px solid #cbd5e1;border-radius:9px;color:#334155;font-size:12.5px}
-.pager a:hover{background:#f8fafc}.pager .off{opacity:.4;pointer-events:none}
-.search{display:flex;gap:10px;margin-bottom:16px}
-.search input{height:38px;border:1px solid #cbd5e1;border-radius:9px;padding:0 12px;font-size:13px;font-family:inherit;width:220px;color:var(--ink)}
-.search button{height:38px;padding:0 16px;background:linear-gradient(90deg,var(--teal),var(--teal2));color:#fff;border:0;border-radius:9px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
-.tag2{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:7px;background:#eef2ff;color:#4338ca}
-/* موبایل/تبلت: سایدبار به یک نوارِ افقیِ بالای صفحه تبدیل می‌شود */
-@media(max-width:860px){
-  .app{flex-direction:column}
-  .side{width:100%;height:auto;position:static;flex-direction:row;flex-wrap:wrap;align-items:center;row-gap:4px}
-  .brand{padding:14px 18px;font-size:17px}.brand small{display:none}
-  .nav{flex-direction:row;flex-wrap:wrap;padding:0 14px 12px;gap:6px}
-  .nav a{padding:8px 11px;font-size:13px;border-radius:9px}
-  .foot{display:none}
-  .top{height:auto;min-height:56px;padding:10px 16px;gap:10px;flex-wrap:wrap}
-  .body{padding:16px}
-}
-@media(max-width:560px){
-  .body{padding:12px}.rows,.pad{padding-inline:12px}.card h3{padding:13px 12px}
-  .tbl th,.tbl td{padding:9px 7px;font-size:12px}
-}
-"""
+# ── استایلِ مشترک ───────────────────────────────────────────────
+# CSS در `app/static/css/panel.css` زندگی می‌کند، نه به‌شکلِ رشته در این فایل.
+#
+# **ولی همچنان درون‌خطی تزریق می‌شود، و این تصمیم است نه تنبلی.** رفتنِ به یک
+# `<link>`ِ خارجی بایت‌های HTML را عوض می‌کند (پس از اثباتِ «هیچ‌چیز عوض نشد»
+# بیرون می‌افتد) و سه خوانندهٔ `<style>`ِ همان پاسخ را می‌شکند —
+# `test_panel_css_classes`، `_rule_for`ِ `test_cookie_status_badges` و پیش‌شرطِ
+# `test_security_headers`. اندازه‌گیری‌شده: ۱۵ شکست اگر فقط این برود، ۱۹ اگر
+# تگِ `<style>` کلاً برود. آن سوییچ (به‌علاوهٔ برداشتنِ `style-src
+# 'unsafe-inline'`) تغییرِ جداست با اثباتِ خودش.
+#
+# فونت از `/static/fonts` می‌آید و `@font-face` سرِ همین فایل است.
+_CSS = pathlib.Path(_STATIC_DIR, "css", "panel.css").read_text(encoding="utf-8")
 
 
 # ── قالب‌ها ──────────────────────────────────────────────────────

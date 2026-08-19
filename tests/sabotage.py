@@ -2337,6 +2337,24 @@ CASES: list[dict] = [
      "new": "",
      "target": _PCT,
      "expect": "test_the_shared_health_partial_renders_on_both_pages[/]"},
+
+    # ── استخراجِ CSS به `app/static/css/panel.css` ─────────────────────
+    # CSS از فایل خوانده می‌شود ولی همچنان درون‌خطی می‌رود. رفتن به `<link>`
+    # باید تصمیمِ آگاهانه باشد، نه اثرِ جانبی — اندازه‌گیری‌شده ۱۵ تا ۱۹ شکست.
+    {"name": "css: the stylesheet stops being inlined",
+     "path": "app/templates/base.html",
+     "old": "<style>{{css}}{% block style %}{% endblock %}</style>",
+     "new": '<link rel=stylesheet href="/static/css/panel.css">',
+     "target": _TPF,
+     "expect": "test_the_served_page_carries_the_stylesheet_from_the_file"},
+
+    # و کنترلِ اینکه فایل واقعاً منبع است، نه یک کپیِ جاافتاده در پایتون.
+    {"name": "css: the module stops reading the file",
+     "path": "app/admin_web.py",
+     "old": '_CSS = pathlib.Path(_STATIC_DIR, "css", "panel.css").read_text(encoding="utf-8")',
+     "new": '_CSS = "body{background:#fff}"',
+     "target": _TPF,
+     "expect": "test_the_stylesheet_that_ships_is_the_file_on_disk"},
 ]
 
 
