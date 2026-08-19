@@ -60,13 +60,71 @@ async def test_the_csp_permits_what_the_panel_actually_serves(panel):
     assert "script-src 'self' 'unsafe-inline'" in csp
 
 
+_EXTERNAL = re.compile(r"(?:src|href)=[\"']?https?://[^\"' >]+")
+
+
+def _panel_asset_files() -> list[Path]:
+    """هر فایلی که چیزی از آن به HTMLِ پنل می‌رسد — **کشف‌محور**.
+
+    دامنه باید خودش رشد کند، وگرنه همان حفره‌ای که این تابع برایش نوشته شد
+    دوباره باز می‌شود (پایینِ داکس‌استرینگِ تست).
+    """
+    app = ROOT / "app"
+    return sorted([app / "admin_web.py", *app.glob("templates/*.html"),
+                   *app.glob("static/css/*.css")])
+
+
+def external_refs(paths) -> list[str]:
+    out = []
+    for p in paths:
+        out += _EXTERNAL.findall(p.read_text(encoding="utf-8"))
+    return out
+
+
 def test_the_panel_has_no_external_resources_for_the_csp_to_break():
     """چیزی که `default-src 'self'` را امن می‌کند: صفر منبعِ خارجی.
 
     اگر روزی کسی یک CDN اضافه کند، CSP بی‌صدا بلاکش می‌کند و صفحه نیمه‌خراب
-    می‌شود. این تست همان لحظه قرمز می‌شود و می‌گوید یا منبع را محلی کن یا CSP
-    را آگاهانه عوض کن.
+    می‌شود. این تست همان لحظه قرمز می‌شود.
+
+    **و این تست یک‌بار بی‌صدا مرد — نه از تغییرِ کسی، بلکه از استخراجِ قالب‌ها.**
+    تا پیش از آن فقط `app/admin_web.py` را می‌خواند، و اندازه‌گیری‌شده **هر ۲۰**
+    موردِ `href=`/`src=` داخلِ **ثابت‌های قالب** بود و **صفر** در بقیهٔ فایل. پس
+    لحظه‌ای که قالب‌ها به `app/templates/*.html` رفتند، این تست فایلی را اسکن
+    می‌کرد که هیچ‌کدام را ندارد و **برای همیشه سبز می‌ماند** — دقیقاً همان ردهٔ
+    «گاردِ دائماً سبز» که §۶ بارها ثبت کرده، این‌بار ساخته‌شده به‌دستِ همان
+    کامیتی که استخراج را انجام داد. دامنه حالا کشف‌محور است.
     """
-    src = (ROOT / "app" / "admin_web.py").read_text(encoding="utf-8")
-    external = re.findall(r"(?:src|href)=[\"']?https?://[^\"' >]+", src)
+    files = _panel_asset_files()
+    external = external_refs(files)
     assert not external, f"منبعِ خارجی که CSP بلاکش می‌کند: {external}"
+
+
+def test_the_scope_really_covers_the_templates():
+    """کنترلِ دامنه: «صفر منبعِ خارجی» نباید یعنی «صفر فایلِ اسکن‌شده».
+
+    بدونِ این، حذفِ الگوی `templates/*.html` از `_panel_asset_files` هیچ‌چیز را
+    قرمز نمی‌کند.
+    """
+    names = {p.name for p in _panel_asset_files()}
+    assert "admin_web.py" in names
+    assert "base.html" in names and "stats.html" in names
+    assert sum(1 for n in names if n.endswith(".html")) >= 12, (
+        f"قالب‌ها اسکن نمی‌شوند: {sorted(names)}")
+
+
+def test_a_cdn_planted_in_a_template_is_caught(tmp_path):
+    """کنترلِ منفی: چکر باید یک URLِ واقعی را داخلِ یک قالب بگیرد.
+
+    روی یک قالبِ **موقت** اجرا می‌شود نه داخلِ درختِ ریپو: یک اجرای نیمه‌کاره
+    نباید فایلِ آلوده جا بگذارد (§۷ — همان درسی که دفترچهٔ سابوتاژ داد). اینکه
+    دامنهٔ واقعی هم قالب‌ها را می‌بیند، تستِ بالا جدا می‌سنجد.
+    """
+    good = tmp_path / "clean.html"
+    good.write_text('<link rel=stylesheet href="/static/css/panel.css">', encoding="utf-8")
+    assert external_refs([good]) == []
+
+    bad = tmp_path / "poisoned.html"
+    bad.write_text('<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>',
+                   encoding="utf-8")
+    assert external_refs([bad]) == ["src=\"https://cdn.jsdelivr.net/npm/chart.js"]

@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block title %}سلامت{% endblock %}{% block heading %}سلامتِ سیستم{% endblock %}
+{% block body %}<div class=grid2>
+<div class=col>{% include "_health_cards.html" %}</div>
+<div class=col>
+  <div class=card><h3>🍪 وضعیتِ کوکی‌ها</h3><div class=rows>
+    {% if pool %}{% for p in pool %}
+      <div class=svc>{{ pfa.get(p.platform, p.platform) }}
+        <span style="margin-inline-start:auto;color:#64748b;font-size:12.5px"><bdi>{{p.live}}</bdi> سالم{% if p.cd %} · <bdi>{{p.cd}}</bdi> کنارگذاشته{% endif %}{% if p.bad %} · <bdi>{{p.bad}}</bdi> باطل{% endif %}</span></div>
+    {% endfor %}{% else %}<div class=empty>کوکی‌ای ثبت نشده.</div>{% endif %}
+  </div></div>
+  <div class=card><h3>ℹ️ راهنما</h3><div class=rows style=font-size:12.5px;color:#64748b;line-height:2>
+    نرخِ موفقیتِ per-host از شمارنده‌های امروز محاسبه می‌شود. افتِ ناگهانیِ یک پلتفرم معمولاً یعنی
+    کوکی بلاک شده یا pot-provider/پروکسی مشکل دارد — قبل از شکایتِ کاربرها این‌جا دیده می‌شود.
+  </div></div>
+</div>
+</div>{% endblock %}
