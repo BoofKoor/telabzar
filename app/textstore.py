@@ -19,7 +19,7 @@ from sqlalchemy import delete as sa_delete, select
 
 from . import settings_store
 from .db import Sessionmaker
-from .models import ButtonStyle, MenuButton, TextOverride
+from .models import ButtonStyle, Language, MenuButton, TextOverride
 
 log = logging.getLogger("telabzar.textstore")
 
@@ -152,6 +152,76 @@ async def reset_text(lang: str, key: str) -> None:
     await _bump_and_reload()
 
 
+def lang_texts(lang: str) -> dict[str, str]:
+    """overrideهای یک زبان از کشِ درون‌پروسه. (sync — صدازننده باید تازه کرده باشد)"""
+    return {k: v for (lg, k), v in _overrides.items() if lg == lang}
+
+
+async def set_texts(lang: str, mapping: dict[str, str], *, replace: bool = False) -> None:
+    """چند کلید را در **یک تراکنش** می‌نویسد و **یک‌بار** نسخه را bump می‌کند.
+
+    `set_text` را در حلقه صدا نزن: هر فراخوانی یک commit و یک `INCR txtver` و
+    یک لودِ کاملِ DB است، پس یک importِ ۲۱۴کلیدی می‌شد ۲۱۴ بارگذاریِ کامل.
+
+    `replace=True` یعنی این زبان **فقط** همین mapping را داشته باشد (ردیف‌های
+    دیگرش پاک می‌شوند)؛ پیش‌فرض ادغام است. شکلِ delete-then-insert عمداً همان
+    شکلِ `set_menu_layout` است — یک تراکنش، پس اتمیک و last-writer-wins.
+    """
+    async with Sessionmaker() as s:
+        if replace:
+            await s.execute(sa_delete(TextOverride).where(TextOverride.lang == lang))
+            for key, value in mapping.items():
+                s.add(TextOverride(lang=lang, key=key, value=value))
+        else:
+            rows = (await s.execute(select(TextOverride).where(
+                TextOverride.lang == lang))).scalars().all()
+            existing = {r.key: r for r in rows}
+            for key, value in mapping.items():
+                row = existing.get(key)
+                if row is None:
+                    s.add(TextOverride(lang=lang, key=key, value=value))
+                else:
+                    row.value = value
+        await s.commit()
+    await _bump_and_reload()
+
+
+async def drop_lang(lang: str) -> None:
+    """همهٔ overrideهای یک زبان را پاک می‌کند."""
+    async with Sessionmaker() as s:
+        await s.execute(sa_delete(TextOverride).where(TextOverride.lang == lang))
+        await s.commit()
+    await _bump_and_reload()
+
+
+# ── ثبتِ زبان‌های افزوده (نامِ نمایشی؛ بقیه از text_overrides مشتق می‌شود) ──
+async def languages() -> dict[str, str]:
+    """کد → نامِ نمایشی، برای زبان‌های **افزوده‌شده** (نه fa/en)."""
+    async with Sessionmaker() as s:
+        rows = (await s.execute(select(Language))).scalars().all()
+    return {r.code: r.name for r in rows}
+
+
+async def add_language(code: str, name: str) -> None:
+    """ثبت/به‌روزرسانیِ نامِ یک زبانِ افزوده. (نوشتنِ متن‌ها کارِ `set_texts` است)"""
+    async with Sessionmaker() as s:
+        row = await s.get(Language, code)
+        if row is None:
+            s.add(Language(code=code, name=name))
+        else:
+            row.name = name
+        await s.commit()
+
+
+async def remove_language(code: str) -> None:
+    """ردیفِ زبان **و** همهٔ متن‌هایش. یک تراکنش، تا زبانِ نیم‌پاک‌شده نماند."""
+    async with Sessionmaker() as s:
+        await s.execute(sa_delete(TextOverride).where(TextOverride.lang == code))
+        await s.execute(sa_delete(Language).where(Language.code == code))
+        await s.commit()
+    await _bump_and_reload()
+
+
 # ── استایلِ کلیدها (رنگ + آیکونِ ایموجیِ پرمیوم) ────────────────
 def clean_button(style: str, emoji: str) -> tuple[str | None, str | None]:
     """ورودیِ خام → مقادیرِ معتبر (style مجاز، emoji فقط رقمی)؛ نامعتبر → None."""
@@ -252,8 +322,16 @@ def _html_error(value: str) -> str | None:
     return None
 
 
-def validate(default_text: str, value: str) -> str | None:
-    """پیامِ خطا (فارسی) اگر value نامعتبر است، وگرنه None."""
+def validate(default_text: str, value: str, *, require_all_placeholders: bool = False) -> str | None:
+    """پیامِ خطا (فارسی) اگر value نامعتبر است، وگرنه None.
+
+    `require_all_placeholders` فقط برای **import** روشن می‌شود و شکافِ
+    اندازه‌گیری‌شدهٔ زیر را می‌بندد: قاعدهٔ پایه فقط placeholderِ **اضافه** را رد
+    می‌کند، پس «‏{mb}‎» را کاملاً **حذف کردن** مجاز است — و آن‌وقت متن سالم است
+    ولی عدد هرگز به کاربر نمی‌رسد. برای ویرایشِ دستیِ `/texts` این آزادی عمدی
+    است (ادمین می‌داند چه می‌کند)؛ برای فایلی که یک مترجمِ ماشینی ساخته نیست،
+    چون افتادنِ یک placeholder محتمل‌ترین خطای آن است و **کاملاً خاموش**.
+    """
     if not value.strip():
         return "متن نمی‌تواند خالی باشد (برای حذفِ override از «بازگشت به پیش‌فرض» استفاده کن)."
     if len(value) > _MAX_LEN:
@@ -263,9 +341,14 @@ def validate(default_text: str, value: str) -> str | None:
         vfields = _fields(value)
     except ValueError:
         return "نحوِ placeholder نادرست است ({ } را بررسی کن)."
-    extra = vfields - _fields(default_text)
+    dfields = _fields(default_text)
+    extra = vfields - dfields
     if extra:
         return "placeholderِ ناشناخته: " + ", ".join("{" + e + "}" for e in sorted(extra))
+    if require_all_placeholders:
+        gone = dfields - vfields
+        if gone:
+            return "placeholderِ جاافتاده: " + ", ".join("{" + g + "}" for g in sorted(gone))
     # با مقادیرِ ساختگی تمیز فرمت شود (کشفِ { } خراب)
     try:
         value.format(**{f: "" for f in _fields(default_text)})

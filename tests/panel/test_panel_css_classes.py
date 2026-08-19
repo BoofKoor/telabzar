@@ -32,7 +32,8 @@ import pytest
 
 #: هر مسیرِ GETی که یک صفحهٔ HTML می‌دهد. `/healthz` و `/node/*` بیرون‌اند
 #: (HTML نیستند) و `/logout` فقط ریدایرکت است.
-PAGES = ("/", "/cookies", "/health", "/users", "/stats", "/texts", "/buttons", "/nodes")
+PAGES = ("/", "/cookies", "/health", "/users", "/stats", "/texts", "/buttons", "/nodes",
+         "/langs")
 
 _CLASS_ATTR_Q = re.compile(r'class="([^"]*)"')
 _CLASS_ATTR_BARE = re.compile(r"class=([A-Za-z][\w-]*)")

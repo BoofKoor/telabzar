@@ -17,13 +17,22 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
 
+#: عرضِ ستونِ کدِ زبان، در **هر سه** جایی که کدِ زبان ذخیره می‌شود
+#: (`User.lang`, `TextOverride.lang`, `Language.code`). یک ثابت، نه سه عدد —
+#: چون واگراییِ این سه یعنی زبانی که import می‌شود ولی به کاربر بسته نمی‌شود.
+LANG_LEN = 16
+
 
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     tg_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
-    lang: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    #: کدِ زبان — **BCP 47**، نه دو حرف. `String(16)` جا برای `pt-BR` و
+    #: `zh-Hant-TW` باز می‌گذارد؛ کرانِ واقعی در `langpack.normalize_code` است
+    #: (فرمت، نه طول). عرضِ ستون باید با `TextOverride.lang` و `Language.code`
+    #: یکی بماند، وگرنه زبانی که در متن‌ها جا می‌شود روی کاربر رد می‌شود.
+    lang: Mapped[str | None] = mapped_column(String(LANG_LEN), nullable=True)
     role: Mapped[str] = mapped_column(String(16), default="user")
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -84,11 +93,34 @@ class TextOverride(Base):
 
     __tablename__ = "text_overrides"
 
-    lang: Mapped[str] = mapped_column(String(2), primary_key=True)
+    lang: Mapped[str] = mapped_column(String(LANG_LEN), primary_key=True)
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Language(Base):
+    """زبانِ **افزوده‌شده** — آن‌هایی که کاتالوگِ کد ندارند و از پنل import شده‌اند.
+
+    `fa`/`en` این‌جا ردیف **ندارند**: آن‌ها از `i18n.CATALOG` می‌آیند و نامشان در
+    `i18n.BUILTIN_NAMES` است. دو منبعِ حقیقت برای یک مفهوم، همان واگرایی‌ای است
+    که §۷ بارها ثبتش کرده، پس مرز صریح است: «زبانِ داخلی = کاتالوگ دارد» و
+    «زبانِ افزوده = ردیفِ این جدول».
+
+    تنها چیزی که این‌جا هست و از `text_overrides` **مشتق‌شدنی نیست** نامِ نمایشی
+    است؛ بقیه (پوشش، تعدادِ ترجمه) از همان ردیف‌ها حساب می‌شود. عمداً ستونِ
+    `enabled` ندارد — امروز هیچ مسیری خاموشش نمی‌کند، و حالتی که هیچ کدی
+    نمی‌سازدش دقیقاً همان `DISABLED`ِ مردهٔ استخرِ کوکی است.
+    """
+
+    __tablename__ = "languages"
+
+    code: Mapped[str] = mapped_column(String(LANG_LEN), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
 
