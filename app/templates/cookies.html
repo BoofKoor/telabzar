@@ -1,0 +1,193 @@
+{% extends "base.html" %}{% block title %}کوکی‌ها{% endblock %}{% block heading %}اکانت‌های کوکی{% endblock %}
+{% block style %}
+.ck-form{display:flex;gap:10px;margin:0 0 10px;flex-wrap:wrap;align-items:center}
+.ck-form .inp{flex:1;min-width:190px;text-align:start}
+.ck-hint{color:#94a3b8;font-size:12px}
+.ck-go{display:flex;gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap}
+.ck-row{display:flex;align-items:center;gap:11px;padding:11px 0;border-top:1px solid var(--line);flex-wrap:wrap}
+.ck-row:first-child{border-top:0}
+/* رنگِ پایهٔ `.sdot` بنفشِ همان `.unk` است، پس وضعیتی که `.s-*` ندارد نقطهٔ
+   **بنفش** می‌گیرد نه نقطهٔ نامرئی — و با بجِ بنفشش هم‌خوان می‌شود. هر وضعیتِ
+   شناخته‌شده یک خط پایین‌تر بازنویسی‌اش می‌کند. */
+.sdot{width:9px;height:9px;border-radius:50%;flex:none;background:#a855f7}
+.s-healthy{background:#16a34a}.s-suspect{background:#d97706}.s-invalid{background:#dc2626}
+.s-cooldown{background:#0ea5e9}.s-disabled{background:#cbd5e1}.s-frozen{background:#b91c1c}
+/* `unproven` («آخرین تلاش ناموفق») از روزِ اول در این ردیف جا افتاده بود، پس
+   نقطه‌اش شفاف رندر می‌شد در حالی که بجش زرد بود. کهربایی، ولی یک پله روشن‌تر
+   از `suspect` تا دو حالتِ متفاوت دو نقطهٔ متفاوت بمانند. */
+.s-unproven{background:#f59e0b}
+.ck-name{font-size:13.5px;font-weight:700;min-width:96px}
+.ck-meta{color:#94a3b8;font-size:12px;min-width:170px}
+.ck-acts{display:flex;gap:6px;flex-wrap:wrap;margin-inline-start:auto}
+.guide{margin:0;padding-inline-start:20px;font-size:12.5px;line-height:2.1;color:#334155}
+.guide li{margin-bottom:2px}
+.repl{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:12px;margin:2px 0 10px}
+{% endblock %}
+{% block body %}
+{% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
+{% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
+
+<div class=card>
+  <h3>📌 روالِ درستِ استخراجِ کوکی <span class=tag>مهم‌ترین عاملِ عمرِ اکانت</span></h3>
+  <div class=pad>
+    <div class=note style=margin-bottom:12px>
+      <b>چرا کوکیِ یوتیوب زود می‌میرد:</b> اگر تبِ یوتیوب در مرورگرِ عادی باز بماند،
+      یوتیوب کوکی را <b>می‌چرخاند</b> و نسخه‌ای که export کرده‌ای باطل می‌شود. راهِ
+      درست طبقِ ویکیِ خودِ yt-dlp این است:
+    </div>
+    <ol class=guide>
+      <li>یک پنجرهٔ <b>ناشناس (Incognito / Private)</b> باز کن و لاگین کن.</li>
+      <li><b>در همان تب</b> برو به <span class="mono ltr">youtube.com/robots.txt</span>.</li>
+      <li>کوکی‌های <span class="mono ltr">youtube.com</span> را export کن.</li>
+      <li>پنجرهٔ ناشناس را <b>ببند</b> — <b>لاگ‌اوت نکن</b> (لاگ‌اوت سشن را باطل می‌کند).</li>
+    </ol>
+    <div class=hint style="border:0;padding:10px 0 0">
+      اینستاگرام: همان روال، ولی کافی است <span class=mono>sessionid</span> را داشته باشی.
+      سشنِ اینستاگرام به <b>IP و دستگاه</b> حساس است؛ کوکی را از همان‌جایی بگیر که
+      قرار است استفاده شود و اکانت‌ها را قاطیِ هم نکن.
+    </div>
+  </div>
+</div>
+
+<div class=card>
+  <h3>➕ افزودنِ اکانت <span class=tag>کپی/پیست — بدونِ فایل</span></h3>
+  <div class=pad>
+    <div class=note>محتوای <b>cookies.txt</b> (Netscape) یا خروجیِ <b>JSON</b>ِ افزونهٔ
+      <span class=mono>Cookie-Editor</span> را کپی کن و این‌جا بچسبان. برای اینستاگرام فقط
+      <span class=mono>sessionid</span> کافی است. از اکانتِ یک‌بارمصرف استفاده کن، نه اصلی.
+      {% if not dir_ok %}<br><b>توجه:</b> پوشهٔ کوکی‌ها (<span class=mono>{{cookies_dir or 'COOKIES_DIR'}}</span>) پیدا/نوشتنی نیست.{% endif %}
+      {% if dl_node_online %}<br>🖧 نودِ دانلود آنلاین است — کوکی‌ها خودکار به آن همگام می‌شوند ({{mirrored}} در Redis).{% endif %}
+    </div>
+    <form method=post action=/cookies/add>
+      <div class=ck-form>
+        <select class=sel name=platform>
+          {% for key, fa in platforms %}<option value="{{key}}">{{fa}}</option>{% endfor %}
+        </select>
+        <input class=inp name=label placeholder="برچسبِ اکانت (مثلاً ig-acc4)">
+        <span class=ck-hint>برچسب فقط برای شناساییِ خودت است</span>
+      </div>
+      <textarea class=ta name=content rows=4 required dir=ltr
+        placeholder="# Netscape HTTP Cookie File&#10;.instagram.com&#9;TRUE&#9;/&#9;TRUE&#9;1789…&#9;sessionid&#9;42891…"></textarea>
+      <div class=ck-go>
+        <button class=btn-go>بررسی و افزودن</button>
+        <span class=ck-hint>هنگامِ افزودن، ساختار و کوکیِ کلیدی بررسی می‌شود.</span>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if exits %}
+<div class=card><h3>🌐 خروجی‌ها <span class=tag>امروز</span></h3><div class=rows>
+  <div class=hint style="border:0;padding:0 0 10px">
+    وقتی <b>همهٔ</b> اکانت‌ها می‌افتند، معمولاً مقصر سشن‌ها نیستند بلکه IPی است که
+    از آن بیرون می‌رویم — اینستاگرام IP را هویت می‌داند و رنجِ دیتاسنتر را می‌بندد.
+    این جدول همان تفاوت را نشان می‌دهد.
+  </div>
+  {% for e in exits %}
+    <div class=stat><b>{{ pfa.get(e.platform, e.platform) }} · <span class=mono>{{e.exit}}</span></b>
+      <div class=meter><i style="width:{{e.rate}}%;background:{{'#16a34a' if e.rate>=70 else '#dc2626' if e.blocked else '#d97706'}}"></i></div>
+      <span class=num>{{e.rate}}% · {{e.ok}}/{{e.ok+e.fail}}</span></div>
+    {% if e.blocked %}<div class=errbox>هیچ دانلودِ موفقی از این خروجی برای
+      «{{ pfa.get(e.platform, e.platform) }}» ثبت نشده ({{e.fail}} شکست). به‌احتمالِ زیاد
+      IPِ این خروجی مسدود است، نه کوکی‌ها — تعویضِ سشن کمکی نمی‌کند؛ خروجی/پروکسی را عوض کن.</div>{% endif %}
+  {% endfor %}
+</div></div>
+{% endif %}
+
+{% if mirror_gap %}
+<div class=card style="border-color:#fecaca"><h3>⚠️ ناهمخوانیِ آینهٔ کوکی‌ها</h3><div class=pad>
+  {# عدد و واژهٔ لاتین را کنارِ هم نگذار: در پاراگرافِ RTL جابه‌جا رندر می‌شوند.
+     هر کدام باید بینِ کلمه‌های فارسی بنشیند. #}
+  <div class=errbox>روی دیسک <bdi>{{disk_count}}</bdi> کوکی هست، ولی فقط
+    <bdi>{{mirrored}}</bdi> تا از آن‌ها در Redis آینه شده — نودِ دانلود بقیه را
+    اصلاً نمی‌بیند.</div>
+  <form class=inline method=post action=/cookies/resync style="margin-top:10px">
+    <button class=btn-go>همگام‌سازیِ دوباره</button></form>
+</div></div>
+{% endif %}
+
+{% if attention %}
+<div class=card style="border-color:#fecaca">
+  <h3>🛑 نیازمندِ رسیدگی <span class="tag" style="background:#fef2f2;color:#b91c1c">{{attention|length}}</span></h3>
+  <div class=pad>
+    <div class=hint style="border:0;padding:0 0 10px">
+      این اکانت‌ها با تلاشِ خودکار درست نمی‌شوند (چک‌پوینت/۲FA یا کوکیِ باطل).
+      ربات هم موقعِ رخ‌دادن در تلگرام خبر می‌دهد و می‌توانی همان‌جا کوکیِ تازه بچسبانی.
+    </div>
+    {% for c in attention %}
+    <div class=ck-row>
+      <span class="sdot s-{{c.status}}"></span>
+      <b class=ck-name>{{c.label}}</b>
+      <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
+      <span class=ck-meta>{{ pfa.get(c.platform, c.platform) }}
+        {%- if c.last_error %} · <span class=mono>{{c.last_error}}</span>{% endif %}</span>
+      <span class=ck-acts>
+        <form class=inline method=post action=/cookies/unfreeze>
+          <input type=hidden name=name value="{{c.name}}">
+          <button class=btn-sm>✅ رسیدگی شد</button></form>
+        <form class=inline method=post action=/cookies/delete onsubmit="return confirm('حذفِ {{c.label}}؟')">
+          <input type=hidden name=name value="{{c.name}}"><button class="btn-sm btn-danger">حذف</button></form>
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% for g in groups %}
+<div class=card>
+  <h3>{{ pfa.get(g.platform, g.platform) }}
+    <span class=tag>{{g.healthy}} سالم از {{g.total}}</span></h3>
+  <div class=pad style=padding-top:2px>
+    {% for c in g['items'] %}
+    <div class=ck-row>
+      <span class="sdot s-{{c.status}}"></span>
+      <b class=ck-name>{{c.label}}</b>
+      <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
+      <span class=ck-meta>آخرین موفقیت: {{c.last_ok_fa}} · خطا: <bdi>{{c.fail_streak}}</bdi> · افزوده: {{c.added_fa}}
+        · سهمیه: {% if c.budget %}<bdi>{{c.used}}/{{c.budget}}</bdi> در ساعت{% else %}<bdi>{{c.used}}</bdi> در ساعت · بی‌سقف{% endif %}{% if c.warming %} <span class=chip>در حالِ گرم‌شدن</span>{% endif %}
+        {%- if c.node_id %} · خروجی: <span class=mono>{{c.node_name}}</span>{% endif %}
+        {%- if c.err_txt %}<br><span style="color:#b45309">آخرین خطا ({{c.err_fa}}):
+          <span class=mono>{{c.err_txt}}</span></span>{% endif %}</span>
+      <span class=ck-acts>
+        <button class=btn-sm onclick="var d=document.getElementById('i-{{loop.index0}}-{{g.platform}}');
+          d.style.display=d.style.display=='none'?'block':'none';return false">🧬 هویت</button>
+        <button class=btn-sm onclick="var d=document.getElementById('r-{{loop.index0}}-{{g.platform}}');
+          d.style.display=d.style.display=='none'?'block':'none';return false">🔄 کوکیِ تازه</button>
+        <form class=inline method=post action=/cookies/cooldown><input type=hidden name=name value="{{c.name}}">
+          <input type=hidden name=action value="{{'clear' if c.status=='cooldown' else 'set'}}">
+          <button class=btn-sm>{{'فعال‌سازی' if c.status=='cooldown' else 'کنارگذاشتن'}}</button></form>
+        <form class=inline method=post action=/cookies/delete onsubmit="return confirm('حذفِ {{c.label}}؟')">
+          <input type=hidden name=name value="{{c.name}}"><button class="btn-sm btn-danger">حذف</button></form>
+      </span>
+    </div>
+    <div class=repl id="i-{{loop.index0}}-{{g.platform}}" style=display:none>
+      <div style="color:#64748b;font-size:12px;margin-bottom:7px">
+        هویتِ این اکانت — کوکی همیشه با <b>همین خروجی و همین UA</b> استفاده می‌شود.
+        سرویس‌ها IP را هویت می‌دانند؛ جابه‌جاییِ IPِ یک سشن سریع‌ترین راهِ چک‌پوینت است.
+      </div>
+      <form method=post action=/cookies/identity class=ck-form>
+        <input type=hidden name=name value="{{c.name}}">
+        <select class=sel name=node_id>
+          <option value="">خروجی: هرکدام</option>
+          {% for n in nodes %}<option value="{{n.id}}" {% if c.node_id==n.id %}selected{% endif %}>{{n.name}}</option>{% endfor %}
+        </select>
+        <input class=inp name=proxy value="{{c.proxy}}" placeholder="پروکسیِ اختصاصی (اختیاری)">
+        <input class=inp name=user_agent value="{{c.user_agent}}" placeholder="User-Agent (اختیاری)">
+        <button class=btn-go>ذخیره</button>
+      </form>
+    </div>
+    <div class=repl id="r-{{loop.index0}}-{{g.platform}}" style=display:none>
+      <div style="color:#64748b;font-size:12px;margin-bottom:7px">کوکیِ تازهٔ همین اکانت را بچسبان — برچسب و تاریخچه حفظ می‌شود:</div>
+      <form method=post action=/cookies/replace>
+        <input type=hidden name=name value="{{c.name}}">
+        <textarea class=ta name=content rows=3 required dir=ltr placeholder=".instagram.com&#9;TRUE&#9;/&#9;TRUE&#9;…&#9;sessionid&#9;…"></textarea>
+        <div class=ck-go><button class=btn-go>بررسی و جایگزینی</button></div>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endfor %}
+{% if not groups %}<div class=card><div class=empty>هنوز اکانتی اضافه نشده.</div></div>{% endif %}
+{% endblock %}

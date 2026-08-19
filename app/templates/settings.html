@@ -1,0 +1,27 @@
+{% extends "base.html" %}{% block title %}تنظیمات{% endblock %}{% block heading %}تنظیمات{% endblock %}
+{% block body %}<div class=grid2>
+<div class=col>
+  {% if saved %}<div class=saved>✅ تغییرات ذخیره شد (بدونِ ری‌استارت اعمال شد).</div>{% endif %}
+  {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
+  <form method=post action=/save>
+  {% for title, fields in groups %}
+    <div class=card><h3>{{title}}{% if loop.first %}<span class=tag>بدونِ ری‌استارت</span>{% endif %}</h3><div class=rows>
+    {% for key, label, hint in fields %}
+      <div class=row><label>{{label}}{% if hint %}<small>{{hint}}</small>{% endif %}</label>
+      {% set kind = meta[key][0] %}
+      {% if kind == 'bool' %}<input class=tg type=checkbox name="{{key}}" {% if v[key] %}checked{% endif %}>
+      {% elif key in enums %}<select class=sel name="{{key}}">
+        {% for opt in enums[key] %}<option value="{{opt}}" {% if v[key]|string == opt %}selected{% endif %}>{{ labels.get(opt, opt) }}</option>{% endfor %}
+      </select>
+      {% elif key in longtext %}<textarea class="ta-inline" name="{{key}}" rows=3
+        dir=ltr spellcheck=false>{{v[key]}}</textarea>
+      {% else %}<input class=inp name="{{key}}" value="{{v[key]}}">{% endif %}
+      </div>
+    {% endfor %}
+    </div></div>
+  {% endfor %}
+    <button class=save>ذخیرهٔ تغییرات</button>
+  </form>
+</div>
+<div class=col>{% include "_health_cards.html" %}</div>
+</div>{% endblock %}

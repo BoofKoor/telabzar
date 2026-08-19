@@ -1,0 +1,55 @@
+{% extends "base.html" %}{% block title %}نودها{% endblock %}{% block heading %}نودهای توزیع‌شده{% endblock %}
+{% block style %}
+.nd{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:12px}
+.nd+.nd{margin-top:9px}
+.nd .st{width:9px;height:9px;border-radius:50%;flex:none}
+.nd .on{background:#16a34a}.nd .off{background:#cbd5e1}
+.nd .meta{flex:1;min-width:0}.nd .meta b{font-size:14px}
+.nd .meta small{color:#94a3b8;font-size:11.5px;display:block;margin-top:2px}
+.nd .rl{font-size:12px;background:#f0fdfa;color:var(--teal);padding:3px 9px;border-radius:8px;white-space:nowrap}
+.cmd{background:#0b1220;color:#7dd3fc;font-family:ui-monospace,monospace;font-size:12.5px;padding:12px;border-radius:10px;
+  word-break:break-all;line-height:1.9;user-select:all;direction:ltr;text-align:left;unicode-bidi:isolate}
+.nd-form{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+.nd-form .inp{width:200px;text-align:start}
+{% endblock %}
+{% block body %}
+<div class=card>
+  <h3>🖧 نودها <span class=tag>{{nodes|length}} نود · {{online}} آنلاین</span>
+    {% if reaped %}<span class=tag style="background:#fef3c7;color:#92400e">↩ {{reaped}} جابِ برگردانده‌شده</span>{% endif %}</h3>
+  <div class=pad>
+    {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
+    {% if not master_ready %}<div class=errbox>⚠️ WireGuardِ مستر پیکربندی نشده (WG_MASTER_PUBKEY / WG_ENDPOINT / ADMIN_BASE). راهنما در README.</div>{% endif %}
+    {% if not nodes %}<div class=empty>هنوز نودی وصل نشده. با «افزودن نود» یک دستورِ نصب بساز.</div>{% endif %}
+    {% for n in nodes %}
+    <div class=nd>
+      <span class="st {{'on' if n.online else 'off'}}"></span>
+      <div class=meta><b>{{n.emoji}} {{n.name}}</b>
+        <small>{{n.role_label}} · <bdi>{{n.wg_ip}}</bdi>
+        {%- if n.online %} · بار: <bdi>{{n.load}}</bdi> · انجام: <bdi>{{n.done}}</bdi> · نسخه <bdi>{{n.ver}}</bdi>
+        {%- else %} · آفلاین{% endif %}</small></div>
+      <span class=rl>{{n.role}}</span>
+      <form method=post action=/nodes/remove onsubmit="return confirm('این نود حذف شود؟')">
+        <input type=hidden name=id value="{{n.id}}">
+        <button class=btn-sm>حذف</button></form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+<div class=card>
+  <h3>➕ افزودنِ نود</h3>
+  <div class=pad>
+    {% if token %}
+      <div class=note>روی سرورِ نود (Ubuntu/Debian، با root) این را اجرا کن — توکن یک‌بارمصرف و ۳۰ دقیقه معتبر است:</div>
+      <div class=cmd>{{install_cmd}}</div>
+    {% else %}
+      <div class=note>نقشِ نود را انتخاب کن؛ یک دستورِ نصب برایت می‌سازد.</div>
+      <form class=nd-form method=post action=/nodes/add>
+        <select class=sel name=role style="min-width:220px">
+          {% for k, r in roles.items() %}<option value="{{k}}">{{r.emoji}} {{r.label}}</option>{% endfor %}
+        </select>
+        <input class=inp name=name placeholder="نامِ نود (مثلاً de-1)">
+        <button class=btn-go>ساختِ دستورِ نصب</button>
+      </form>
+    {% endif %}
+  </div>
+</div>{% endblock %}

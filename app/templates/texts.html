@@ -1,0 +1,74 @@
+{% extends "base.html" %}{% block title %}متن‌ها{% endblock %}{% block heading %}متن‌ها و لیبل‌ها{% endblock %}
+{% block style %}
+.tx-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:14px 18px;margin:0;
+  border-bottom:1px solid var(--line)}
+.tx-tools .tag{margin-inline-start:auto}
+.tx-list{padding:14px 18px}
+.tx-cat{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;background:rgba(255,255,255,.02);overflow:hidden}
+.tx-cat:last-child{margin-bottom:0}
+.tx-cat>summary{cursor:pointer;padding:12px 14px;font-weight:600;list-style:none;display:flex;align-items:center;gap:8px}
+.tx-cat>summary::-webkit-details-marker{display:none}
+.tx-cat>summary::before{content:'▸';color:#64748b;transition:transform .15s}
+.tx-cat[open]>summary::before{transform:rotate(90deg)}
+.tx-cat .cnt{color:#64748b;font-size:12px;font-weight:400}
+.tx-cat .ed{color:var(--teal2);font-size:12px}
+.tx-body{padding:0 14px 12px}
+.tx-item{border-top:1px solid var(--line);padding:11px 0}
+.tx-key{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tx-def{color:#94a3b8;font-size:12.5px;margin:6px 0;white-space:pre-wrap;word-break:break-word}
+.tx-item textarea{flex:1;min-width:0;box-sizing:border-box;background:#f8fafc;color:var(--ink);border:1px solid #cbd5e1;
+  border-radius:9px;padding:8px 10px;font-family:inherit;font-size:13.5px;line-height:1.7;resize:vertical}
+.tx-item textarea:focus{outline:0;border-color:var(--teal2);background:#fff;box-shadow:0 0 0 3px rgba(20,184,166,.14)}
+.tx-edit{display:flex;gap:8px;align-items:flex-start}
+.tx-actions{display:flex;flex-direction:column;gap:6px;flex:none}
+.tx-actions .btn-sm,.tx-actions .save-sm{width:100%;white-space:nowrap}
+@media(max-width:640px){.tx-edit{flex-direction:column}.tx-actions{flex-direction:row;width:100%}}
+.tx-err{background:rgba(220,38,38,.14);border:1px solid rgba(220,38,38,.5);color:#fecaca;padding:9px 12px;border-radius:10px;margin-bottom:10px}
+{% endblock %}
+{% block body %}
+<div class=card>
+  <form class=tx-tools method=get action=/texts>
+    <select class=sel name=lang onchange="this.form.submit()">
+      {% for code, nm in langs.items() %}
+      <option value="{{code}}" {% if lang==code %}selected{% endif %}>{{nm}}</option>
+      {% endfor %}
+    </select>
+    <input class=inp name=q value="{{q}}" placeholder="جست‌وجوی کلید یا متن…" style="flex:1;min-width:180px">
+    <button class=btn-sm>جست‌وجو</button>
+    {% if q %}<a class=btn-sm href="/texts?lang={{lang}}">پاک‌کردن</a>{% endif %}
+    <span class=tag>{{total}} متن · {{edited}} ویرایش‌شده · بی‌ری‌استارت</span>
+  </form>
+  {% if saved %}<div class=saved style=margin-top:14px>✅ {{saved}}</div>{% endif %}
+  {% if error %}<div class=tx-err style=margin-top:14px>⚠️ {{error}}</div>{% endif %}
+  {% if not groups %}<div class=empty>چیزی مطابقِ «{{q}}» پیدا نشد.</div>{% endif %}
+  <div class=tx-list>
+  {% for g in groups %}
+  <details class=tx-cat {% if g.open %}open{% endif %}>
+    <summary>{{g.title}} <span class=cnt>({{g.n}})</span>
+      {% if g.edited %}<span class=ed>· {{g.edited}} ویرایش‌شده</span>{% endif %}</summary>
+    <div class=tx-body>
+    {% for it in g['items'] %}
+      <div class=tx-item>
+        <div class=tx-key><code class=mono>{{it.key}}</code>
+          {% if it.overridden %}<span class=chip>ویرایش‌شده</span>{% endif %}</div>
+        <div class=tx-def>پیش‌فرض: {{it.default}}</div>
+        <form method=post action=/texts/save>
+          <input type=hidden name=key value="{{it.key}}">
+          <input type=hidden name=lang value="{{lang}}">
+          <input type=hidden name=q value="{{q}}">
+          <div class=tx-edit>
+            <textarea name=value rows=2>{{it.current}}</textarea>
+            <div class=tx-actions>
+              <button class=save-sm>ذخیره</button>
+              {% if it.overridden %}
+              <button class=btn-sm formaction=/texts/reset>بازگشت به پیش‌فرض</button>{% endif %}
+            </div>
+          </div>
+        </form>
+      </div>
+    {% endfor %}
+    </div>
+  </details>
+  {% endfor %}
+  </div>
+</div>{% endblock %}

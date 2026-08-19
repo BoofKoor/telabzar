@@ -117,6 +117,7 @@ _LPK = "tests/test_langpack.py"
 _LNG = "tests/panel/test_langs_page.py"
 _STF = "tests/test_start_flow.py"
 _PAR = "tests/test_locale_parity.py"
+_TPF = "tests/panel/test_template_files.py"
 
 # «گروهِ خودکار را بردار» — یک خرابکاری با **سه** ادعای متفاوت، پس یک‌بار
 # تعریف می‌شود. دو تا باید بیفتند و یکی عمداً **نباید**، که کلِ نکته است:
@@ -2284,6 +2285,58 @@ CASES: list[dict] = [
      "new": '    "btn_settings": "⚙️ پیکربندی و تنظیمات",',
      "target": _STF,
      "expect": None},
+
+    # ── استخراجِ قالب‌ها به `app/templates/` ────────────────────────────
+    # مهم‌ترین یافتهٔ آن فاز: خودِ استخراج یک گاردِ موجود را بی‌اثر می‌کرد.
+    # اندازه‌گیری‌شده: هر ۲۰ موردِ `href=`/`src=` در ثابت‌های قالب بود و صفر در
+    # بقیهٔ `admin_web.py`، پس آن تست پس از استخراج فایلی را اسکن می‌کرد که
+    # هیچ‌کدام را ندارد و **برای همیشه سبز** می‌ماند.
+    {"name": "templates: a CDN planted in a template is not noticed",
+     "path": "tests/panel/test_security_headers.py",
+     "old": '*app.glob("templates/*.html"),\n',
+     "new": "",
+     "target": _SEC,
+     "expect": "test_the_scope_really_covers_the_templates"},
+
+    # و کنترلِ همان از سمتِ داده: با دامنهٔ درست، یک CDNِ واقعی باید بیفتد.
+    {"name": "templates: an external script really is caught",
+     "path": "app/templates/base.html",
+     "old": "<meta charset=utf-8>",
+     "new": '<meta charset=utf-8><script src="https://cdn.jsdelivr.net/npm/chart.js"></script>',
+     "target": _SEC,
+     "expect": "test_the_panel_has_no_external_resources_for_the_csp_to_break"},
+
+    # قالبی بیرونِ `app/` = ۵۰۰ روی تولید با CIِ سبز.
+    {"name": "templates: the template dir moves outside app/",
+     "path": "app/admin_web.py",
+     "old": 'os.path.dirname(os.path.abspath(__file__)), "templates")',
+     "new": 'os.path.dirname(os.path.abspath(__file__)), "..", "templates")',
+     "target": _TPF,
+     "expect": "test_every_runtime_asset_dir_ships_in_the_admin_image"},
+
+    # Jinja **یک** خطِ پایانی می‌خورد؛ دومی به هر صفحه یک `\n` اضافه می‌کند.
+    {"name": "templates: a second trailing newline leaks into every page",
+     "path": "app/templates/base.html",
+     "old": "</body></html>\n",
+     "new": "</body></html>\n\n",
+     "target": _TPF,
+     "expect": "test_a_template_file_ends_with_exactly_one_newline[base.html]"},
+
+    # کامنتِ Dockerfile نباید پوشش شمرده شود (تلهٔ خودارجاعی).
+    {"name": "templates: the COPY parser stops stripping comments",
+     "path": "tests/panel/test_template_files.py",
+     "old": 'lines = [re.sub(r"#.*$", "", ln) for ln in',
+     "new": 'lines = [ln for ln in',
+     "target": _TPF,
+     "expect": "test_the_copy_parser_ignores_comments"},
+
+    # فرگمنتِ مشترک: شکستنِ یک صفحه در حالی که دیگری سالم می‌ماند.
+    {"name": "templates: the shared health fragment is dropped from the dashboard",
+     "path": "app/templates/settings.html",
+     "old": '{% include "_health_cards.html" %}',
+     "new": "",
+     "target": _PCT,
+     "expect": "test_the_shared_health_partial_renders_on_both_pages[/]"},
 ]
 
 

@@ -1,0 +1,122 @@
+{% extends "base.html" %}{% block title %}کلیدها{% endblock %}{% block heading %}استایل و چیدمانِ کلیدها{% endblock %}
+{% block style %}
+.tgprev{background:linear-gradient(135deg,#dbeafe,#eef4fb);border:1px solid #cddcf0;border-radius:16px;padding:14px}
+.tgmsg{background:#fff;border-radius:12px;padding:8px 12px;font-size:12.5px;color:#334155;margin-bottom:8px;display:inline-block}
+.tgrow{display:flex;gap:6px;margin-bottom:6px}
+.tgb{flex:1;display:flex;align-items:center;justify-content:center;padding:9px 8px;border-radius:8px;font-size:12.5px;font-weight:600;background:#f1f5f9;color:#1e293b;text-align:center}
+.tgb.hid{opacity:.4;border:1px dashed #94a3b8;background:#fff}
+.bt-row{display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px dashed #eef2f7;background:#fff;border-radius:8px}
+.bt-row .grip{color:#94a3b8;font-size:18px;cursor:grab;letter-spacing:-3px;user-select:none}
+.bt-row .op{font-size:10.5px;color:#94a3b8;min-width:70px}
+.bt-row .inp{height:32px}.bt-row .sel{height:32px}
+.bt-row.dragging{opacity:.4;background:#f0fdfa}
+.bt-head{display:flex;gap:8px;color:#94a3b8;font-size:11px;padding:2px 4px 6px;border-bottom:1px solid var(--line)}
+{% endblock %}
+{% block body %}
+<div class=card>
+  <h3>📱 پیش‌نمایشِ زنده <span class=tag>همان‌طور که کاربر می‌بیند</span></h3>
+  <div class=tabs>
+    {% for k, label in kinds %}<a class="tab {% if k==kind %}on{% endif %}" href="/buttons?kind={{k}}&lang={{lang}}">{{label}}</a>{% endfor %}
+  </div>
+  <div class=pad>
+    <div class=tgprev>
+      <div class=tgmsg>{{prev_msg}}</div>
+      <div id=prevkeys>
+        {% for row in pv_rows %}<div class=tgrow>{% for b in row %}<span class="tgb {{b.cls}}" {% if b.color %}style="background:{{b.color}};color:#fff"{% endif %}>{{b.text}}</span>{% endfor %}</div>{% endfor %}
+        {% if hidden_items %}<div class=tgrow>{% for it in hidden_items %}<span class="tgb hid">👁‍🗨 {{it.text}}</span>{% endfor %}</div>{% endif %}
+        <div class=tgrow><span class="tgb">{{close_label}}</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class=card>
+  <h3>✏️ چیدمان و استایلِ منوی «{{kindlabel}}» <span class=tag>بکش برای جابه‌جایی · بی‌ری‌استارت</span></h3>
+  <div class=hint>متن · رنگ (آبی/سبز/قرمز) · ایموجیِ پرمیوم · عرض (تمام/نصف/یک‌سوم؛ ردیف‌ها را می‌سازد) · نمایش. زبانِ متن:
+    <select class=sel style="height:30px" onchange="location.href='/buttons?kind={{kind}}&lang='+this.value">
+      {% for code, nm in langs.items() %}
+      <option value="{{code}}" {% if lang==code %}selected{% endif %}>{{nm}}</option>
+      {% endfor %}</select></div>
+  {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
+  {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
+  <form method=post action=/buttons/save id=btnform>
+    <input type=hidden name=kind value="{{kind}}">
+    <input type=hidden name=lang value="{{lang}}">
+    <input type=hidden name=order id=orderfield value="{{ items|map(attribute='op')|join(',') }}">
+    <div class=pad style="padding-top:2px">
+      <div class=bt-head><span style="width:22px"></span><span style="width:70px">op</span><span style="flex:1">متن</span>
+        <span style="width:96px">رنگ</span><span style="width:96px">ایموجی</span><span style="width:104px">عرض</span><span style="width:44px">نمایش</span></div>
+      <div id=rowlist>
+      {% for it in items %}
+        <div class=bt-row data-op="{{it.op}}">
+          <span class=grip>⠿</span>
+          <span class=op>{{it.op}}</span>
+          <input class=inp name="text_{{it.op}}" value="{{it.text}}" style="flex:1;min-width:90px">
+          <select class=sel name="style_{{it.op}}" style="width:96px">
+            <option value="" {% if not it.style %}selected{% endif %}>—</option>
+            <option value=primary {% if it.style=='primary' %}selected{% endif %}>آبی</option>
+            <option value=success {% if it.style=='success' %}selected{% endif %}>سبز</option>
+            <option value=danger {% if it.style=='danger' %}selected{% endif %}>قرمز</option></select>
+          <input class=inp name="emoji_{{it.op}}" value="{{it.emoji}}" inputmode=numeric placeholder="—" style="width:96px;text-align:center">
+          <select class=sel name="width_{{it.op}}" style="width:104px">
+            <option value=full {% if it.width=='full' %}selected{% endif %}>تمام‌عرض</option>
+            <option value=half {% if it.width=='half' %}selected{% endif %}>نصف</option>
+            <option value=third {% if it.width=='third' %}selected{% endif %}>یک‌سوم</option></select>
+          <input type=checkbox class=tg name="show_{{it.op}}" {% if not it.hidden %}checked{% endif %}>
+        </div>
+      {% endfor %}
+      </div>
+    </div>
+    <button class=save>ذخیرهٔ منوی «{{kindlabel}}»</button>
+    <button class=btn-sm formaction=/buttons/reset style="margin:0 18px 18px">بازگشت به چیدمانِ پیش‌فرضِ این منو</button>
+  </form>
+</div>
+<script>
+var CLOSE_LABEL = {{ close_label|tojson }};
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function colorOf(v){return {primary:'#3b82f6',success:'#22c55e',danger:'#ef4444'}[v]||'';}
+function syncOrder(){
+  var ops=[].map.call(document.querySelectorAll('#rowlist .bt-row'),function(r){return r.dataset.op;});
+  document.getElementById('orderfield').value=ops.join(',');
+}
+function rebuildPreview(){
+  var rows=[].slice.call(document.querySelectorAll('#rowlist .bt-row'));
+  var vis=[];
+  rows.forEach(function(r){
+    var op=r.dataset.op;
+    if(!r.querySelector('input.tg').checked) return;
+    var text=r.querySelector('[name="text_'+op+'"]').value||op;
+    var color=colorOf(r.querySelector('[name="style_'+op+'"]').value);
+    var width=r.querySelector('[name="width_'+op+'"]').value;
+    vis.push({text:text,color:color,width:width});
+  });
+  var cap={full:1,half:2,third:3},out=[],i=0;
+  while(i<vis.length){var c=cap[vis[i].width]||3,j=i;
+    while(j<vis.length&&j-i<c&&vis[j].width===vis[i].width)j++;
+    out.push(vis.slice(i,j));i=j;}
+  var html='';
+  out.forEach(function(row){html+='<div class=tgrow>';
+    row.forEach(function(b){html+='<span class="tgb" style="'+(b.color?('background:'+b.color+';color:#fff'):'')+'">'+esc(b.text)+'</span>';});
+    html+='</div>';});
+  html+='<div class=tgrow><span class="tgb">'+esc(CLOSE_LABEL)+'</span></div>';
+  document.getElementById('prevkeys').innerHTML=html;
+}
+(function(){
+  var list=document.getElementById('rowlist');
+  list.querySelectorAll('.bt-row').forEach(function(row){
+    var grip=row.querySelector('.grip');
+    grip.addEventListener('mousedown',function(){row.setAttribute('draggable','true');});
+    row.addEventListener('dragstart',function(){row.classList.add('dragging');});
+    row.addEventListener('dragend',function(){row.classList.remove('dragging');row.setAttribute('draggable','false');syncOrder();rebuildPreview();});
+  });
+  list.addEventListener('dragover',function(e){e.preventDefault();
+    var dragging=list.querySelector('.dragging');if(!dragging)return;
+    var els=[].slice.call(list.querySelectorAll('.bt-row:not(.dragging)'));
+    var after=els.reduce(function(cl,ch){var box=ch.getBoundingClientRect();var off=e.clientY-box.top-box.height/2;
+      return (off<0&&off>cl.off)?{off:off,el:ch}:cl;},{off:-1e9,el:null}).el;
+    if(after==null)list.appendChild(dragging);else list.insertBefore(dragging,after);
+  });
+  document.getElementById('btnform').addEventListener('input',rebuildPreview);
+  document.getElementById('btnform').addEventListener('change',rebuildPreview);
+  rebuildPreview();
+})();
+</script>{% endblock %}

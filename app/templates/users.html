@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% block title %}کاربران{% endblock %}{% block heading %}کاربران{% endblock %}
+{% block body %}
+{% if done %}<div class=saved>✅ {{done}}</div>{% endif %}
+<form class=search method=get action=/users>
+  <input name=q value="{{q}}" inputmode=numeric placeholder="جستجو با شناسهٔ عددی">
+  <button>جستجو</button>
+  {% if q %}<a class=btn-sm style="display:flex;align-items:center" href=/users>پاک‌کردن</a>{% endif %}
+</form>
+<div class=card><h3>👤 کاربران <span class=tag>{{total}} کل{% if blocked %} · {{blocked}} بلاک{% endif %}</span></h3>
+{% if users %}
+<div class=tbl-wrap><table class=tbl><thead><tr><th>شناسهٔ تلگرام</th><th>نقش</th><th>فایل‌ها</th><th>ثبت‌نام</th><th>آخرین بازدید</th><th>وضعیت</th><th style=text-align:left>عملیات</th></tr></thead><tbody>
+{% for u in users %}
+<tr>
+  <td class=mono>{{u.tg}}{% if u.is_admin %} <span class=tag2>ادمین</span>{% endif %}</td>
+  <td><span class=chip>{{u.role}}</span></td>
+  <td class=num>{{u.files}}</td>
+  <td class="num mono" style=color:#64748b>{{u.created}}</td>
+  <td class="num mono" style=color:#64748b>{{u.seen}}</td>
+  <td>{% if u.blocked %}<span class="badge warn" style=margin:0>بلاک</span>{% else %}<span class="badge ok" style=margin:0>فعال</span>{% endif %}</td>
+  <td style=text-align:left>
+    {% if u.is_admin %}<span class=num style=color:#cbd5e1>—</span>
+    {% else %}<form class=inline method=post action=/users/block>
+      <input type=hidden name=id value="{{u.id}}"><input type=hidden name=page value="{{page}}"><input type=hidden name=q value="{{q}}">
+      <input type=hidden name=action value="{{'unblock' if u.blocked else 'block'}}">
+      <button class="btn-sm {{'' if u.blocked else 'btn-danger'}}">{{'رفعِ بلاک' if u.blocked else 'بلاک'}}</button></form>{% endif %}
+  </td>
+</tr>
+{% endfor %}
+</tbody></table></div>
+<div class=pager>
+  <a class="{{'off' if page<=0}}" href="/users?page={{page-1}}{% if q %}&q={{q}}{% endif %}">→ قبلی</a>
+  <span>صفحهٔ {{page+1}} از {{pages}}</span>
+  <a class="{{'off' if page+1>=pages}}" href="/users?page={{page+1}}{% if q %}&q={{q}}{% endif %}">بعدی ←</a>
+</div>
+{% else %}<div class=empty>کاربری یافت نشد.</div>{% endif %}
+</div>
+{% endblock %}

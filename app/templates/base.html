@@ -1,0 +1,21 @@
+<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>{% block title %}پنلِ مدیریت{% endblock %} · تل‌ابزار</title>
+<style>{{css}}{% block style %}{% endblock %}</style></head><body><div class=app>
+<aside class=side><div class=brand>🧰 تل‌ابزار<small>پنلِ مدیریت</small></div>
+<nav class=nav>
+  <a class="{{'on' if active=='settings'}}" href=/>⚙️ تنظیمات</a>
+  <a class="{{'on' if active=='texts'}}" href=/texts>✏️ متن‌ها</a>
+  <a class="{{'on' if active=='buttons'}}" href=/buttons>🎨 کلیدها</a>
+  <a class="{{'on' if active=='langs'}}" href=/langs>🌐 زبان‌ها</a>
+  <a class="{{'on' if active=='cookies'}}" href=/cookies>🍪 کوکی‌ها</a>
+  <a class="{{'on' if active=='health'}}" href=/health>🩺 سلامت</a>
+  <a class="{{'on' if active=='nodes'}}" href=/nodes>🖧 نودها</a>
+  <a class="{{'on' if active=='users'}}" href=/users>👤 کاربران</a>
+  <a class="{{'on' if active=='stats'}}" href=/stats>📊 آمار</a>
+</nav>
+<div class=foot>نسخهٔ ۱.۰ · D3</div></aside>
+<div class=main><div class=top><h1>{% block heading %}{% endblock %}</h1><div class=who>
+<span class="pill {{'' if pill_ok else 'bad'}}"><span class=dot></span> {{'همه سرویس‌ها آنلاین' if pill_ok else 'بررسیِ سرویس‌ها'}}</span>
+<span>ادمین · {{admin_id}}</span><a href=/logout class=lo>خروج ↩</a></div></div>
+<div class=body>{% block body %}{% endblock %}</div></div></div></body></html>
