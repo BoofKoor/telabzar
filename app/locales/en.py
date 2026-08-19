@@ -8,7 +8,31 @@ MESSAGES: dict[str, str] = {
     ),
     "send_a_file": "Send me a file to get started 📎",
     "coming_soon": "This action ships in the next milestone (M2) ⏳",
+    # Kept although nothing consumes it any more — see the note in fa.py.
     "language_set": "Language set to English ✅",
+    # user menus (welcome / settings / help)
+    "btn_settings": "⚙️ Settings",
+    "btn_help": "📘 How to use",
+    "btn_change_language": "🌐 Change language",
+    "settings_title": "⚙️ <b>Settings</b>\n\nWhat would you like to change?",
+    "help_text": (
+        "📘 <b>Telabzar guide</b>\n\n"
+        "<b>1) Send a file</b>\n"
+        "Document, image, video, music, PDF, archive. I detect the type and "
+        "put an actions menu under it.\n\n"
+        "<b>2) Pick from the menu</b>\n"
+        "• Image: OCR, watermark, resize, rotate, remove background, to PDF\n"
+        "• Video: compress, trim, extract audio, cover, screenshot, GIF, mute\n"
+        "• Music: edit tags, transcribe, trim, normalize, change speed\n"
+        "• PDF and archives: merge, extract, list contents, security scan\n\n"
+        "<b>3) Send a link</b>\n"
+        "YouTube, Instagram, Twitter/X, TikTok, SoundCloud, Spotify, "
+        "Apple Music, Aparat, Vimeo and a few more. The result gets the same "
+        "card and the same menu.\n\n"
+        "💡 For big files I also make a download and streaming link.\n\n"
+        "<b>4) Several files at once</b>\n"
+        "Tap “Zip” or “Merge” and send the rest."
+    ),
     # file card
     "detected_document": "🗎 <b>Document</b> detected\n<code>{name}</code> · {size}\nWhat should I do?",
     "detected_image": "🖼 <b>Image</b> detected\n{name} · {size}\nWhat should I do?",

@@ -41,7 +41,13 @@ from .config import settings
 from .db import Sessionmaker
 from .downloader import KNOWN_PLATFORMS, PLATFORM_LABELS
 from . import langpack
-from .i18n import BUILTIN_NAMES, DEFAULT as i18n_DEFAULT, default_text, t as _t
+from .i18n import (
+    BUILTIN_NAMES,
+    DEFAULT as i18n_DEFAULT,
+    available_languages as i18n_available_languages,
+    default_text,
+    t as _t,
+)
 from .keyboards import OPS_BY_KIND
 from .models import DownloadCache, File, Job, Node, User
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
@@ -2272,17 +2278,20 @@ _TEXT_KEYS = list(langpack.TEXT_KEYS)
 
 
 async def _languages(refresh: bool = False) -> dict[str, str]:
-    """کد → نامِ نمایشی برای **همهٔ** زبان‌های در دسترس: داخلی‌ها + افزوده‌ها.
+    """پوستهٔ پنلی روی `i18n.available_languages()` — تازه‌سازی + همان فهرست.
 
-    تنها جایی که این فهرست ساخته می‌شود. پیش از این هر صفحه‌ای که زبان داشت یک
-    تاپلِ هاردکدِ `("fa","en")` داشت (۷ تا در همین فایل)، و اضافه‌شدنِ یک زبان
-    یعنی پیداکردنِ هر هفت‌تا.
+    فهرست عمداً این‌جا **ساخته نمی‌شود**: از فاز C رباتْ هم همان را می‌خواهد
+    (منوی انتخابِ زبان)، و `routers/` نمی‌تواند این ماژول را import کند
+    (ایمیجِ ربات jinja2/cryptography ندارد). پس سازنده به `i18n` منتقل شد و
+    این‌جا فقط `refresh_if_stale` می‌ماند که پنلی است — پنل میان‌افزارِ
+    per-update ندارد که خودش تازه کند.
+
+    تاریخچه: پیش از فاز B هر صفحه‌ای که زبان داشت یک تاپلِ هاردکدِ
+    `("fa","en")` داشت (۷ تا در همین فایل).
     """
     if refresh:
         await textstore.refresh_if_stale()
-    langs = dict(BUILTIN_NAMES)
-    langs.update(await textstore.languages())
-    return langs
+    return await i18n_available_languages()
 
 
 async def _pick_lang(raw: str | None) -> tuple[str, dict[str, str]]:

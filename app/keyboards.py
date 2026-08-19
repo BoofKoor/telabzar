@@ -1,11 +1,11 @@
 """کیبوردهای اینلاین."""
 from __future__ import annotations
 
-from aiogram.types import CopyTextButton, InlineKeyboardMarkup
+from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from . import textstore
-from .callbacks import Act, Ck, Cmp, Conv, Dl, Lang, Meta, Rot, Rsz, Spd, Tr, Wm
+from .callbacks import Act, Ck, Cmp, Conv, Dl, Lang, Meta, Nav, Rot, Rsz, Spd, Tr, Wm
 from .i18n import t
 
 # رزولوشن‌های هدفِ کاهشِ حجمِ ویدیو → (ارتفاع, بیت‌ریتِ ویدیو kbps)
@@ -85,11 +85,73 @@ CONVERT_FORMATS: dict[str, list[str]] = {
 CONVERTIBLE = set(CONVERT_FORMATS)
 
 
-def lang_keyboard() -> InlineKeyboardMarkup:
+# ── منوهای کاربر (خوش‌آمد / تنظیمات) ────────────────────────────
+# اعلانی، تا افزودنِ آیتمِ بعدی **یک ردیف** باشد و نه یک شاخهٔ تازه: هر تاپل
+# `(مقصدِ Nav, کلیدِ برچسب)` است و هر دو ساز‌ندهٔ زیر روی همین‌ها حلقه می‌زنند.
+# کلیدِ برچسب باید در **هر دو** کاتالوگ باشد (گاردِ `tests/test_locale_parity`).
+HOME_ITEMS: tuple[tuple[str, str], ...] = (
+    ("settings", "btn_settings"),
+    ("help", "btn_help"),
+)
+SETTINGS_ITEMS: tuple[tuple[str, str], ...] = (
+    ("lang", "btn_change_language"),
+)
+
+
+def _nav_kb(items: tuple[tuple[str, str], ...], lang: str,
+            back_to: str | None = None) -> InlineKeyboardMarkup:
+    """فهرستِ اعلانی → کیبورد؛ هر آیتم یک ردیف، و در صورتِ نیاز «بازگشت» ته آن."""
     b = InlineKeyboardBuilder()
-    b.button(text="فارسی 🇮🇷", callback_data=Lang(code="fa"))
-    b.button(text="English 🇬🇧", callback_data=Lang(code="en"))
-    b.adjust(2)
+    for to, label_key in items:
+        b.button(text=t(lang, label_key), callback_data=Nav(to=to))
+    if back_to is not None:
+        b.button(text=t(lang, "btn_back"), callback_data=Nav(to=back_to))
+    b.adjust(1)
+    return b.as_markup()
+
+
+def home_kb(lang: str) -> InlineKeyboardMarkup:
+    """کلیدهای زیرِ پیامِ خوش‌آمد."""
+    return _nav_kb(HOME_ITEMS, lang)
+
+
+def settings_kb(lang: str) -> InlineKeyboardMarkup:
+    """منوی تنظیماتِ کاربر (+ بازگشت به خوش‌آمد)."""
+    return _nav_kb(SETTINGS_ITEMS, lang, back_to="home")
+
+
+def back_kb(lang: str, to: str = "home") -> InlineKeyboardMarkup:
+    """فقط یک «بازگشت» — برای صفحه‌های بی‌آیتم مثلِ آموزش."""
+    return _nav_kb((), lang, back_to=to)
+
+
+def lang_keyboard(langs: dict[str, str], lang: str, *,
+                  current: str | None = None,
+                  back_to: str | None = None) -> InlineKeyboardMarkup:
+    """منوی انتخابِ زبان از فهرستِ **زندهٔ** زبان‌ها.
+
+    فهرست پارامتر است و این‌جا خوانده نمی‌شود: سازنده‌اش
+    (`i18n.available_languages`) async است و این تابع sync می‌ماند — همان
+    الگوی `cookies.Limits`، یعنی خواندنِ async یک‌بار در هندلر و پاس‌دادنِ
+    عکسِ فوری به پایین. هاردکدکردنِ fa/en این‌جا یعنی هر زبانی که با `/langs`
+    اضافه شود نامرئی بماند.
+
+    `lang` زبانِ **برچسبِ بازگشت** است و `current` کدی که تیک می‌خورد. در
+    مسیرِ تنظیمات هر دو یکی‌اند، ولی در `/start` کاربر هنوز زبانی ندارد
+    (`current=None`) و برچسب از پیش‌فرض می‌آید — پس دو معنیِ متفاوت‌اند و
+    یکی‌کردنشان روی مسیرِ اول غلط می‌شد.
+
+    اگر زبانِ ذخیره‌شدهٔ کاربر از `/langs` حذف شده باشد، هیچ ردیفی تیک
+    نمی‌گیرد و چیزی نمی‌شکند — کاربر فقط فهرستِ زنده را می‌بیند.
+    """
+    b = InlineKeyboardBuilder()
+    for code, name in langs.items():
+        mark = "✅ " if code == current else ""
+        b.button(text=f"{mark}{name}", callback_data=Lang(code=code))
+    b.adjust(2)  # زبان‌ها دوتایی؛ «بازگشت» ردیفِ خودش را می‌گیرد
+    if back_to is not None:
+        b.row(InlineKeyboardButton(
+            text=t(lang, "btn_back"), callback_data=Nav(to=back_to).pack()))
     return b.as_markup()
 
 

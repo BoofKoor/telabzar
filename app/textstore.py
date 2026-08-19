@@ -196,9 +196,18 @@ async def drop_lang(lang: str) -> None:
 
 # ── ثبتِ زبان‌های افزوده (نامِ نمایشی؛ بقیه از text_overrides مشتق می‌شود) ──
 async def languages() -> dict[str, str]:
-    """کد → نامِ نمایشی، برای زبان‌های **افزوده‌شده** (نه fa/en)."""
+    """کد → نامِ نمایشی، برای زبان‌های **افزوده‌شده** (نه fa/en).
+
+    `ORDER BY` **شرطِ درستی است نه آراستگی**: خروجی این تابع مستقیم به منویی
+    می‌رود که کاربر می‌بیند (`keyboards.lang_keyboard`)، و `SELECT` بی‌ترتیب
+    هیچ تضمینی نمی‌دهد — Postgres می‌تواند بعد از یک `UPDATE` ردیف‌ها را جای
+    دیگری برگرداند، پس منو بینِ دو رندر جابه‌جا می‌شود. تفکیکِ دومِ `code`
+    برای وقتی است که دو زبان نامِ نمایشیِ یکسان بگیرند.
+    """
     async with Sessionmaker() as s:
-        rows = (await s.execute(select(Language))).scalars().all()
+        rows = (await s.execute(
+            select(Language).order_by(Language.name, Language.code)
+        )).scalars().all()
     return {r.code: r.name for r in rows}
 
 
