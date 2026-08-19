@@ -273,4 +273,18 @@ async def seeded(panel, tmp_path):
     await panel.redis.set(f"dlstat:soundcloud:fail:{day}", 2)
     await panel.redis.set("dlver:master",
                           '{"who":"master","gallery-dl":"1.29","yt-dlp":"2026.07.04"}')
+
+    # عمقِ صف‌ها، با مقادیرِ عمداً **متمایز و سه‌رقمی**. یک عددِ تک‌رقمی در
+    # صفحه‌ای که نرخ و نسخه و گیگابایتِ دیسک هم دارد ادعای ضعیفی می‌سازد: تستِ
+    # «۲ در صفحه هست» می‌تواند به‌دلیلِ غلط سبز بماند. این چهارتا نه با هم جور
+    # می‌شوند نه با چیزِ دیگری در همان صفحه، پس «این عدد رندر شد» واقعاً همان
+    # را می‌گوید. صحتِ این انتخاب با سابوتاژ اثبات می‌شود نه با استدلال:
+    # موردی که عدد را حذف کند باید تستِ متناظر را بیندازد.
+    for key, n in (("arq:queue", 137), ("arq:queue:proc", 251),
+                   ("arq:queue:dl", 149), ("arq:queue:dl:master", 260)):
+        await panel.redis.zadd(key, {f"job{i}": float(i) for i in range(n)})
+    # از مسیرِ خودِ `dl_active` — ساعتِ سرورِ Redis و همان هرس، نه zaddِ دستی.
+    from app import dl_active
+    for i in range(73):
+        await dl_active.enter(panel.redis, f"live{i}")
     return panel
