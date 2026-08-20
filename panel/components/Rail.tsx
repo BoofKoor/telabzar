@@ -21,7 +21,37 @@ const MESH = [
 
 const groupLabel = { color: C.inkFaint, fontSize: 9, letterSpacing: '.22em' } as const
 
-export function Rail({ rain, active }: { rain: { chars: string; dur: string }[]; active: string }) {
+export interface MeshNode {
+  name: string
+  meta: string
+  up: boolean
+}
+
+/** درختِ WG از نودهای واقعی؛ `null` یعنی هنوز داده‌ای نرسیده. */
+function meshRows(mesh: MeshNode[] | null) {
+  if (!mesh) return MESH
+  if (!mesh.length) return [{ tree: 'master', name: 'standalone', color: C.inkDim, meta: 'no nodes' }]
+  return mesh.map((m, i) => ({
+    tree: i === 0 ? 'master ─┬─' : i === mesh.length - 1 ? '└─' : '├─',
+    name: m.name,
+    color: m.up ? C.acc : C.bad,
+    meta: m.meta,
+  }))
+}
+
+export function Rail({
+  rain,
+  active,
+  mesh = null,
+  generated = '',
+}: {
+  rain: { chars: string; dur: string }[]
+  active: string
+  mesh?: MeshNode[] | null
+  /** زمانِ ساختِ payload — تنها چیزی که در پاورقی واقعاً منبع دارد. */
+  generated?: string
+}) {
+  const meshList = meshRows(mesh)
   return (
     <aside
       className="mx-rail"
@@ -108,7 +138,7 @@ export function Rail({ rain, active }: { rain: { chars: string; dur: string }[];
       <div className="mx-railextra" style={{ padding: '10px 12px', borderTop: `1px solid ${C.edgeHair}` }}>
         <div style={{ fontSize: 9, letterSpacing: '.2em', color: C.inkFaint, marginBottom: 7 }}>▚ WG MESH</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 9.5 }}>
-          {MESH.map((m) => (
+          {meshList.map((m) => (
             <div key={m.name} style={{ display: 'flex', gap: 6 }}>
               <span style={{ width: 64, textAlign: 'right', color: C.inkDim }}>{m.tree}</span>
               <span style={{ color: m.color }}>{m.name}</span>
@@ -159,15 +189,26 @@ export function Rail({ rain, active }: { rain: { chars: string; dur: string }[];
           lineHeight: 1.9,
         }}
       >
-        <div>
-          UPTIME <span style={{ color: C.inkMid }}>41d 06:12</span>
-        </div>
-        <div>
-          LOAD <span style={{ color: C.inkMid }}>0.42 0.51 0.47</span>
-        </div>
-        <div>
-          MEM <span style={{ color: C.inkMid }}>11.4/31.3G</span>
-        </div>
+        {/* uptime/load/mem منبعِ واقعی ندارند (`psutil` در هیچ requirements
+            نیست). با دادهٔ واقعی اصلاً رندر نمی‌شوند: عددی که کنارِ عددهای
+            واقعی بنشیند و از آن‌ها تفکیک‌ناپذیر باشد، بدترین شکلِ دروغ است. */}
+        {mesh ? (
+          <div>
+            GENERATED <span style={{ color: C.inkMid }}>{generated || '—'}</span>
+          </div>
+        ) : (
+          <>
+            <div>
+              UPTIME <span style={{ color: C.inkMid }}>41d 06:12</span>
+            </div>
+            <div>
+              LOAD <span style={{ color: C.inkMid }}>0.42 0.51 0.47</span>
+            </div>
+            <div>
+              MEM <span style={{ color: C.inkMid }}>11.4/31.3G</span>
+            </div>
+          </>
+        )}
       </div>
     </aside>
   )

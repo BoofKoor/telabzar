@@ -27,7 +27,7 @@ export default function Page() {
         <>
           <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 300px', gap: 18 }}>
             <Hero rangeLabel={vals.range} rows={vals.heroRows} sub={vals.heroSub} value={vals.heroValue} />
-            <Posture />
+            <Posture headline={vals.posture.headline} lines={vals.posture.lines} ok={vals.posture.ok} />
           </div>
 
           <Kpis kpis={vals.kpis} />
@@ -48,7 +48,7 @@ export default function Page() {
                 latNow={vals.latNow}
               />
 
-              <JobStream rows={vals.logRows} />
+              <JobStream rows={vals.logRows} note={vals.jobStreamNote} />
 
               <div
                 className="mx-duo"
@@ -73,10 +73,17 @@ export default function Page() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
               <Queue queues={vals.queueRows} resources={vals.resources} />
               <FlagList label="SERVICES" sigil="◉" rows={vals.services} />
-              <FlagList label="COOKIE POOL" sigil="⌬" right="2 degraded" rightColor={C.warn} rows={vals.cookies} truncate />
+              <FlagList
+                label="COOKIE POOL"
+                sigil="⌬"
+                right={vals.cookieNote}
+                rightColor={vals.cookieNoteBad ? C.warn : C.inkLo}
+                rows={vals.cookies}
+                truncate
+              />
               <FlagList label="NODES" sigil="⎔" rows={vals.nodes} footer={<WgFooter />} />
               <Errors rows={vals.errors} />
-              <Audit rows={vals.audit} />
+              <Audit rows={vals.audit} gap={vals.auditGap} />
             </div>
           </div>
         </>

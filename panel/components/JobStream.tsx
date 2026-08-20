@@ -4,7 +4,10 @@ import { Section } from './Section'
 /** `tail -f` — ردیفِ اول زمینهٔ سبزِ کم‌رنگ می‌گیرد تا «تازه‌ترین» دیده شود. */
 export function JobStream({
   rows,
+  note,
 }: {
+  /** یادداشتِ دامنه — بدونش کارت وانمود می‌کند کلِ کار را نشان می‌دهد. */
+  note?: string
   rows: {
     key: string
     time: string
@@ -24,7 +27,12 @@ export function JobStream({
   }[]
 }) {
   return (
-    <Section label="JOB STREAM" sigil="⟩" right="tail -f /var/log/telabzar/jobs.ndjson" pad="22px 0 0">
+    <Section
+      label="JOB STREAM"
+      sigil="⟩"
+      right={note || 'tail -f /var/log/telabzar/jobs.ndjson'}
+      pad="22px 0 0"
+    >
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {rows.map((l) => (
           <div

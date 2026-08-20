@@ -68,7 +68,14 @@ export function Hero({
   )
 }
 
-export function Posture() {
+/**
+ * وضعیتِ کلیِ سیستم.
+ *
+ * عمداً **هیچ متنِ هاردکدی** ندارد: «ALL CORE SYSTEMS NOMINAL» روی سیستمی که
+ * دو سرویسش خواب است، بدترین شکلِ دروغِ کنسول است — چون دقیقاً همان جمله‌ای
+ * است که اپراتور با گوشهٔ چشم می‌خواند و رد می‌شود.
+ */
+export function Posture({ headline, lines, ok }: { headline: string; lines: string[]; ok: boolean }) {
   return (
     <div
       style={{
@@ -85,18 +92,19 @@ export function Posture() {
         style={{
           fontSize: 15,
           fontWeight: 700,
-          color: C.acc,
-          textShadow: '0 0 12px rgba(0,229,153,.45)',
+          color: ok ? C.acc : C.warn,
+          textShadow: ok ? '0 0 12px rgba(0,229,153,.45)' : '0 0 12px rgba(255,209,102,.4)',
           lineHeight: 1.35,
         }}
       >
-        ALL CORE
-        <br />
-        SYSTEMS NOMINAL
+        {headline.split('\n').map((l) => (
+          <div key={l}>{l}</div>
+        ))}
       </div>
       <div style={{ fontSize: 10.5, color: C.ink, lineHeight: 1.9 }}>
-        2/3 nodes up · 1 edge down
-        <br />2 cookies degraded
+        {lines.map((l) => (
+          <div key={l}>{l}</div>
+        ))}
       </div>
       <div style={{ display: 'flex', gap: 6, marginTop: 'auto' }}>
         <button

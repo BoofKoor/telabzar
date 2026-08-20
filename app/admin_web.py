@@ -697,10 +697,17 @@ def _fmt_secs(seconds: float | None) -> str:
 
 
 def _bars(rows: list[tuple], labeler=None) -> list[dict]:
-    """(کلید, تعداد) → ردیفِ نوار با درصدِ نسبت به بیشینه."""
+    """(کلید, تعداد) → ردیفِ نوار با درصدِ نسبت به بیشینه.
+
+    `key` **کلیدِ خام** است و `k` برچسبِ فارسیِ نمایشی. قالب‌های Jinja فقط
+    `k` را می‌خوانند، ولی کنسول به خام نیاز دارد: هم برای نگاشتِ رنگِ پلتفرم
+    (`PLATFORM_HUE` روی نامِ انگلیسی کلید می‌خورد) و هم چون کنسول LTR و مونو
+    است و متنِ فارسی آن‌جا باید از `<Fa>` رد شود. برچسب‌زدن در سرور و
+    برچسب‌زدایی در کلاینت، همان دو کپیِ دست‌نویس است که واگرا می‌شود.
+    """
     mx = max((c for _k, c in rows), default=1) or 1
-    return [{"k": (labeler(k) if labeler else k), "n": c, "pct": round(c / mx * 100)}
-            for k, c in rows]
+    return [{"key": k, "k": (labeler(k) if labeler else k), "n": c,
+             "pct": round(c / mx * 100)} for k, c in rows]
 
 
 _TS_H = 96   # بلندیِ نمودارِ روند (px)
@@ -2309,6 +2316,174 @@ async def console_page(request: web.Request) -> web.Response:
     return web.FileResponse(path)
 
 
+#: بازهٔ کنسول → بازهٔ `_stats`. کنسول سه دکمه دارد و `_stats` چهار کلید،
+#: پس نگاشت صریح است نه هم‌نامی — و «TODAY» در `_stats` نامش `24h` است.
+_CONSOLE_RANGES = {"TODAY": "24h", "7D": "7d", "30D": "30d"}
+
+#: پنل‌هایی که **هیچ منبعِ واقعی ندارند** و کنسول باید به‌جای عدد، همین را بگوید.
+#:
+#: این فهرست عمداً در payload می‌رود نه در کامنت. §۷ بارها ثبت کرده که
+#: «fallbackی که بی‌صدا به دادهٔ بی‌مصرف تنزل کند از خطا بدتر است»؛ در یک
+#: کنسولِ عملیاتی، عددِ ساختگی که واقعی به‌نظر برسد بدترین شکلِ همان است —
+#: اپراتور رویش تصمیم می‌گیرد. پس هرچه منبع ندارد این‌جا **نام‌برده** می‌شود
+#: و صفحه به‌جای رندرِ عدد، «منبعی ندارد» نشان می‌دهد.
+_CONSOLE_GAPS = {
+    # جدولِ `jobs` هیچ ردیفِ audit ندارد و هیچ‌جای ریپو هم نمی‌سازد.
+    "audit": "no audit table exists — nothing records admin actions today",
+    # درصدِ پیشرفتِ جابِ در حالِ اجرا فقط در ورکر زندگی می‌کند، نه در DB.
+    "job_progress": "live progress is worker-local; the DB has status, not percent",
+    # cpu/mem/net نیازِ psutil دارند که در هیچ requirements‌ی نیست.
+    "host_cpu": "no psutil in any requirements file — only disk is real",
+}
+
+
+def _console_flag(ok: bool, warn: bool = False) -> str:
+    return "[ OK ]" if ok else ("[WARN]" if warn else "[FAIL]")
+
+
+async def console_api(request: web.Request) -> web.Response:
+    """`/api/console` — دادهٔ **واقعیِ** کنسول.
+
+    ۴۰۱ می‌دهد نه ریدایرکت: یک `fetch` نمی‌تواند ریدایرکت به صفحهٔ HTMLِ ورود
+    را به چیزِ مفیدی تبدیل کند — بدنهٔ HTML با ۲۰۰ برمی‌گردد و کنسول موقعِ
+    `JSON.parse` با پیامی می‌شکند که هیچ ربطی به «نشستت تمام شده» ندارد.
+
+    محاسبه **قرض گرفته می‌شود نه تکرار**: `_stats_cached` و `_health` همان
+    توابعی‌اند که صفحاتِ Jinja می‌خوانند، پس کنسول و پنلِ فارسی نمی‌توانند دو
+    عددِ متفاوت بدهند. کپیِ دومِ دست‌نویس دقیقاً همان واگرایی است که §۷ برای
+    `remove_cookie_file` ثبت کرده.
+    """
+    if not _session_admin(request):
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    rng = request.query.get("range", "7D").upper()
+    stats = await _stats_cached(request.app, _CONSOLE_RANGES.get(rng, "7d"))
+    health = await _health(request.app)
+    redis = request.app["redis"]
+
+    # ── صف و منابع ───────────────────────────────────────────────────
+    queues = {
+        "main": health.get("q_main", 0),
+        "proc": health.get("q_proc", 0),
+        "dl": health.get("q_dl", 0),
+        "active": health.get("dl_active", 0),
+    }
+    disk_pct = health.get("disk_pct", 0)
+    disk_meta = (f"{health.get('disk_used', 0)}/{health.get('disk_total', 0)}G"
+                 if health.get("disk_total") else "—")
+
+    # ── سرویس‌ها ─────────────────────────────────────────────────────
+    pot = health.get("pot")
+    services = [
+        {"name": "postgres", "meta": "reachable" if health["postgres"] else "unreachable",
+         "flag": _console_flag(health["postgres"])},
+        {"name": "redis", "meta": "reachable" if health["redis"] else "unreachable",
+         "flag": _console_flag(health["redis"])},
+    ]
+    if pot is not None:
+        # «تنظیم‌شده ولی نسنجیده» با «پیکربندی‌نشده» یکی نیست — §۷.
+        services.append({"name": "pot-provider",
+                         "meta": "unprobed" if isinstance(pot, str) else
+                                 ("bgutil" if pot else "not answering"),
+                         "flag": _console_flag(bool(pot) and not isinstance(pot, str),
+                                               warn=isinstance(pot, str))})
+
+    # ── استخرِ سشن ───────────────────────────────────────────────────
+    _CK_FLAG = {"healthy": "[ OK ]", "unproven": "[ ? ]", "suspect": "[WARN]",
+                "cooldown": "[COOL]", "invalid": "[FAIL]", "frozen": "[HOLD]",
+                "disabled": "[ -- ]"}
+    try:
+        accounts = await ck_pool.accounts(redis)
+    except Exception:  # noqa: BLE001
+        accounts = []
+    cookie_rows = [{"name": a["name"],
+                    "meta": " · ".join(x for x in (a.get("platform"), a.get("status")) if x),
+                    "flag": _CK_FLAG.get(a.get("status", ""), "[ ?? ]")}
+                   for a in accounts]
+
+    # نرخِ **امروزِ** هر پلتفرم (پنجرهٔ `dlstat`)، جدا از شمارشِ بازه‌محورِ زیر.
+    rate_today = {h["name"]: h["rate"] for h in health.get("hosts", [])}
+
+    # ── نقشهٔ فعالیتِ ۷×۲۴ ────────────────────────────────────────────
+    # سطل‌بندی در **پایتون** است نه SQL، چون `date_trunc`/`extract` روی ساعت
+    # Postgres-only است و تست‌ها روی SQLite می‌دوند — همان قیدی که `_bucket`
+    # برای سطلِ روزانه دارد.
+    now = datetime.now(timezone.utc)
+    week_start = now - timedelta(days=6)
+    heat = [[0] * 24 for _ in range(7)]
+    async with Sessionmaker() as s:
+        stamps = (await s.execute(
+            select(File.created_at).where(File.created_at >= week_start))).scalars().all()
+    for ts in stamps:
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        d = (ts.date() - week_start.date()).days
+        if 0 <= d < 7:
+            heat[d][ts.hour] += 1
+
+    # ── نودها + آخرین جاب‌ها ─────────────────────────────────────────
+    live = await node_mod.list_live(redis)
+    async with Sessionmaker() as s:
+        node_rows = (await s.execute(select(Node))).scalars().all()
+        # جریانِ جاب از جدولِ `jobs` می‌آید و **دانلودها را نمی‌بیند** —
+        # `tasks_download` عمداً ردیفِ Job نمی‌سازد (§۷). پس این فهرست
+        # صادقانه ولی ناقص است و کارت باید همین را بگوید، نه اینکه وانمود
+        # کند کلِ کار را نشان می‌دهد.
+        recent = (await s.execute(
+            select(Job.id, Job.op, Job.status, Job.error, Job.created_at,
+                   File.name, File.size, File.owner_id)
+            .join(File, File.id == Job.file_id)
+            .order_by(Job.created_at.desc()).limit(9))).all()
+    jobs = [{
+        "id": jid, "op": op, "status": status,
+        "error": " ".join((err or "").split())[:90],
+        "at": created.strftime("%H:%M:%S") if created else "--:--:--",
+        "name": name or "", "size": _human_size(size), "uid": str(owner or ""),
+    } for jid, op, status, err, created, name, size, owner in recent]
+    nodes = []
+    for n in node_rows:
+        hb = live.get(n.id) or {}
+        nodes.append({"name": n.name, "role": n.role, "ip": n.wg_ip,
+                      "up": bool(hb), "done": hb.get("done", 0),
+                      "meta": f"{n.role} · {hb.get('load', 0)} jobs" if hb else "offline",
+                      "flag": "[ UP ]" if hb else "[DOWN]"})
+
+    return web.json_response({
+        "range": rng,
+        "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "gaps": _CONSOLE_GAPS,
+        "kpis": {
+            "users": {"value": stats.get("users_active", 0), "foot": f"{stats.get('users_new', 0)} new"},
+            "files": {"value": stats.get("files", 0), "foot": f"{stats.get('dl_files', 0)} via link"},
+            "success": {"value": stats.get("success_rate"), "foot": f"{stats.get('err', 0)} errors"},
+            "storage": {"value": stats.get("storage_h", "—"), "foot": stats.get("media_h", "—")},
+        },
+        "trend": [{"day": r["day"], "f": r["f"], "o": r["o"], "u": r["u"]} for r in stats.get("ts", [])],
+        # `n` بازه‌محور است ولی `ok` فقط **امروز** را می‌بیند (`dlstat` روزانه
+        # است). دو پنجرهٔ متفاوت در یک جدول همان چیزی است که §۷ برای کارتِ
+        # سلامت ثبت کرده، پس ستون صریحاً «امروز» برچسب می‌خورد نه اینکه یکی
+        # وانمود شود.
+        "platforms": [{"key": p["key"] or "other", "label": p["k"], "n": p["n"],
+                       "pct": p["pct"], "ok": rate_today.get(p["key"] or "other")}
+                      for p in stats.get("by_platform", [])],
+        "queues": queues,
+        "resources": [{"label": "disk /work", "pct": disk_pct, "meta": disk_meta}],
+        "services": services,
+        "cookies": cookie_rows,
+        "nodes": nodes,
+        "jobs": jobs,
+        # ۷ ردیف × ۲۴ ستون، ردیفِ ۰ = قدیمی‌ترین روز. برچسبِ روز سمتِ کلاینت
+        # ساخته می‌شود تا فقط یک شکلِ عدد روی سیم برود.
+        "heat": heat,
+        "heatStart": week_start.strftime("%Y-%m-%d"),
+        "errors": stats.get("errors", []),
+        "hosts": health.get("hosts", []),
+        "engines": health.get("engines", []),
+    })
+
+
 async def _on_startup(app: web.Application) -> None:
     settings_store.init_store(settings.redis_url)
     app["redis"] = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -2435,6 +2610,10 @@ def build_app() -> web.Application:
     # را `<slug>/index.html` می‌دهد و استاتیکِ aiohttp دایرکتوری را باز نمی‌کند،
     # پس با آن هر صفحه‌ای جز خانه ۴۰۴ می‌شد. گِیتِ نشست هم فقط روی HTML است و
     # این تفکیک داخلِ خودِ هندلر زندگی می‌کند، نه در ترتیبِ ثبتِ روت‌ها.
+    # پیش از روتِ عامِ `/console/...` نیست چون مسیرش جداست، ولی ترتیبِ ثبت
+    # همچنان باربر است: هر روتِ تازهٔ زیرِ `/console` باید **قبل** از الگوی
+    # catch-all بیاید وگرنه فایل‌خوان می‌بلعدش.
+    app.router.add_get("/api/console", console_api)
     app.router.add_get("/console", console_page)
     app.router.add_get(r"/console/{tail:.*}", console_page)
     if os.path.isdir(_STATIC_DIR):

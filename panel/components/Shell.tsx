@@ -1,13 +1,15 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { C } from '@/lib/theme'
 import { zoneOf } from '@/lib/zones'
 import { useConsole } from '@/lib/useConsole'
+import { useConsoleData, type ApiState } from '@/lib/api'
 import { Rail } from './Rail'
 import { Header } from './Header'
 import { Footer, Scanlines } from './Chrome'
 import { StatusBits } from './StatusBits'
+import { ApiBanner } from './ApiBanner'
 import type { Range } from '@/lib/types'
 
 /**
@@ -24,6 +26,8 @@ export interface ShellCtx {
   vals: ReturnType<typeof useConsole>['vals']
   setRange: ReturnType<typeof useConsole>['setRange']
   setHover: ReturnType<typeof useConsole>['setHover']
+  /** حالتِ `/api/console` — صفحه باید هر سه حالت را متفاوت رندر کند. */
+  api: ApiState
 }
 
 export function Shell({
@@ -51,7 +55,12 @@ export function Shell({
    */
   children: ReactNode | ((ctx: ShellCtx) => ReactNode)
 }) {
-  const { vals, setRange, setHover } = useConsole()
+  // ترتیب باربر است: اول بازه از حلقه خوانده می‌شود، بعد داده برای همان بازه
+  // گرفته می‌شود، بعد همان داده به حلقه برمی‌گردد. یک `useConsole()`ِ دوم
+  // این‌جا یعنی نوارِ بالا و بدنه دو عدد بدهند.
+  const [range, setRangeLocal] = useState<Range>('7D')
+  const api = useConsoleData(range)
+  const { vals, setRange, setHover } = useConsole({ api: api.data })
   const z = zoneOf(active)
 
   return (
@@ -73,7 +82,7 @@ export function Shell({
         ['--zone-glow' as string]: z.glow,
       }}
     >
-      <Rail rain={vals.rain} active={active} />
+      <Rail rain={vals.rain} active={active} mesh={vals.mesh} generated={vals.generated} />
 
       <main style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <Header
@@ -82,6 +91,7 @@ export function Shell({
           range={vals.range}
           onRange={(r) => {
             setRange(r)
+            setRangeLocal(r)
             onRangeChange?.(r)
           }}
           clock={vals.clock}
@@ -93,7 +103,8 @@ export function Shell({
 
         <div className="mx-pad" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
           {bits && <StatusBits bits={vals.statusBits} />}
-          {typeof children === 'function' ? children({ vals, setRange, setHover }) : children}
+          <ApiBanner state={api} />
+          {typeof children === 'function' ? children({ vals, setRange, setHover, api }) : children}
         </div>
 
         <Footer statusLine={vals.statusLine} />

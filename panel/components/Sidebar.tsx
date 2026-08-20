@@ -1,5 +1,6 @@
 import { C } from '@/lib/theme'
 import { Section } from './Section'
+import { NoSource } from './ApiBanner'
 import type { AuditRow, ErrRow, FlagRow, Gauge } from '@/lib/types'
 
 /** صف‌ها + منابع؛ هر دو با همان نوارِ نویسه‌ای `[███░░]`. */
@@ -160,9 +161,19 @@ export function Errors({ rows }: { rows: ErrRow[] }) {
 }
 
 /** ردِ تغییراتِ ادمین — کادرِ کهربایی. */
-export function Audit({ rows }: { rows: AuditRow[] }) {
+/**
+ * ردِ کنش‌های ادمین.
+ *
+ * **امروز منبعی ندارد** و `gap` همین را می‌گوید: هیچ جدولِ auditی در
+ * `models.py` نیست و هیچ‌جای ریپو کنشی ثبت نمی‌کند. کارت حذف نشد چون جایش
+ * در طرح درست است و روزی که ثبت اضافه شود همین‌جا پر می‌شود؛ ولی تا آن روز
+ * **نباید ردیفِ ساختگی نشان بدهد** — یک ردیفِ «admin set dl_concurrency 3→5»
+ * که هرگز اتفاق نیفتاده، از یک کارتِ خالی بی‌نهایت بدتر است.
+ */
+export function Audit({ rows, gap = '' }: { rows: AuditRow[]; gap?: string }) {
   return (
     <Section label="AUDIT TRAIL" sigil="⎇" labelColor={C.warn} edge={C.auditEdge} bg={C.auditBg} pad="22px 14px 11px">
+      {!rows.length && gap && <NoSource why={gap} />}
       {rows.map((a) => (
         <div
           key={a.t}
