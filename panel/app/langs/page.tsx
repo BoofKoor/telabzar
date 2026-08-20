@@ -81,7 +81,9 @@ export default function Page() {
                 </Btn>
                 {!l.builtin && (
                   <form method="post" action="/langs/delete" style={{ display: 'inline' }}>
-                    <input type="hidden" name="lang" value={l.code} />
+                    {/* هندلر `code` می‌خواند نه `lang` — با ممیزیِ فرم‌به‌هندلر
+                        پیدا شد، نه با بازخوانی. */}
+                    <input type="hidden" name="code" value={l.code} />
                     <Btn type="submit" danger style={{ padding: '3px 9px', fontSize: 9.5 }}>
                       DELETE
                     </Btn>

@@ -52,6 +52,58 @@ async def test_users_reports_the_seeded_rows(seeded):
     assert [r["blocked"] for r in body["rows"] if r["tg"] == "901"] == [True]
 
 
+async def test_the_block_form_built_from_the_payload_actually_blocks(seeded):
+    """کنشِ فرم باید واقعاً حالت را عوض کند، نه فقط ۳۰۲ بدهد.
+
+    **این تست از یک باگِ واقعی آمد که یک پروبِ مرورگر گرفتش، نه بازخوانی:**
+    `users_block` با `db.get(User, int(uid))` **کلیدِ اصلی** را می‌خواهد،
+    ولی نسخهٔ اولِ کنسول `tg_user_id` را می‌فرستاد. فرم پست می‌شد، ۳۰۲
+    می‌گرفت و به صفحهٔ نتیجه می‌رفت — و **هیچ کاربری بلاک نمی‌شد**. همان
+    «بنرِ سبز روی کاری که انجام نشد» که §۷ چهار نمونه‌اش را ثبت کرده.
+
+    پس ادعا روی **اثر** است نه کدِ وضعیت، و مقدارِ فرم از خودِ payload
+    ساخته می‌شود — دقیقاً همان کاری که صفحه می‌کند.
+    """
+    body = await (await _get(seeded, "/api/console/users")).json()
+    target = next(r for r in body["rows"] if not r["blocked"] and not r["admin"])
+
+    ck = {seeded.aw._COOKIE: seeded.aw._make_session(seeded.admin_id)}
+    r = await seeded.client.post(
+        "/users/block",
+        data={"id": str(target["id"]), "action": "block"},
+        cookies=ck,
+        allow_redirects=False,
+    )
+    assert r.status == 302
+
+    after = await (await _get(seeded, "/api/console/users")).json()
+    now = {u["tg"]: u["blocked"] for u in after["rows"]}
+    assert now[target["tg"]] is True, "فرم پست شد ولی کاربر بلاک نشد"
+    assert after["blocked"] == body["blocked"] + 1
+
+
+async def test_sending_the_telegram_id_would_not_have_blocked_anyone(seeded):
+    """کنترلِ معکوس — بدونش تستِ بالا می‌تواند به دلیلِ غلط سبز باشد.
+
+    اگر `tg` و `id` تصادفاً برابر باشند، ادعای بالا هر دو حالت را می‌پذیرد.
+    این تست ثابت می‌کند در fixture آن دو **متفاوت**اند و فرستادنِ `tg` واقعاً
+    بی‌اثر است.
+    """
+    body = await (await _get(seeded, "/api/console/users")).json()
+    target = next(r for r in body["rows"] if not r["blocked"] and not r["admin"])
+    assert str(target["id"]) != target["tg"], "fixture این تفاوت را نشان نمی‌دهد"
+
+    ck = {seeded.aw._COOKIE: seeded.aw._make_session(seeded.admin_id)}
+    await seeded.client.post(
+        "/users/block",
+        data={"id": target["tg"], "action": "block"},
+        cookies=ck,
+        allow_redirects=False,
+    )
+    after = await (await _get(seeded, "/api/console/users")).json()
+    assert after["blocked"] == body["blocked"], "فرستادنِ tg نباید چیزی را عوض کند"
+
+
 async def test_users_search_reaches_the_server(seeded):
     """فیلترِ کلاینتی فقط صفحهٔ جاری را می‌گردد، پس جست‌وجو باید سمتِ سرور
     باشد — وگرنه کاربری که در صفحهٔ دوم است «پیدا نشد» می‌گیرد."""

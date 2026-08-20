@@ -195,7 +195,17 @@ export interface UsersPage {
   page: number
   pages: number
   q: string
-  rows: { tg: string; role: string; files: number; created: string; seen: string; blocked: boolean; admin: boolean }[]
+  rows: {
+    /** کلیدِ اصلیِ ردیف — چیزی که `/users/block` می‌خواهد، نه `tg`. */
+    id: number
+    tg: string
+    role: string
+    files: number
+    created: string
+    seen: string
+    blocked: boolean
+    admin: boolean
+  }[]
 }
 
 export interface CookieAccount {

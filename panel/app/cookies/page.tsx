@@ -168,7 +168,7 @@ export default function Page() {
             </div>
             <textarea
               dir="ltr"
-              name="text"
+              name="content"
               placeholder={'# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t…\tsessionid\t…'}
               style={{
                 width: '100%',

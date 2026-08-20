@@ -1,0 +1,44 @@
+# زمینهٔ build — عمداً کوچک، و **قید دارد**.
+#
+# اندازه‌گیری‌شده (۲۰۲۶-۰۸-۲۰): بدونِ این فایل زمینه **۴۸۵ مگابایت** بود در
+# حالی که کلِ سورسِ tracked ۴٫۹ مگابایت است؛ ۴۶۶ مگابایتش
+# `panel/node_modules` + `panel/.next` بود.
+#
+# ولی مسئلهٔ اصلی حجم نیست، **درستی** است: `docker/admin.Dockerfile` اول
+# `npm ci` می‌زند و بعد `COPY panel ./` می‌کند. بدونِ این فایل، آن COPY
+# همان `node_modules`ی را که تازه از روی lockfile نصب شده با نسخهٔ محلیِ
+# ماشینِ builder **بازنویسی** می‌کند — یعنی تضمینِ lockfile خنثی می‌شود و
+# ایمیج به وضعِ دیسکِ توسعه‌دهنده بند می‌شود. همان ردهٔ «سبزِ محلی، چیزِ
+# دیگری در تولید» که §۶ چند نمونه‌اش را ثبت کرده.
+#
+# **قیدِ سخت:** این فایل روی **همهٔ** buildهای compose اعمال می‌شود، پس
+# چیزی که هر Dockerfileی COPY می‌کند نباید این‌جا بیاید. سرشماری‌شده، تنها
+# مسیرهای لازم اینهاست: `app/`, `node/`, `panel/`, `requirements*.txt`.
+# `tests/test_dockerignore.py` هر دو جهت را می‌بندد.
+
+.git
+.github
+.gitignore
+
+# خروجی و کشِ کنسول — مرحلهٔ Node خودش می‌سازدشان.
+panel/node_modules
+panel/.next
+panel/out
+panel/tsconfig.tsbuildinfo
+panel/next-env.d.ts
+
+# کنسولِ ساخته‌شدهٔ محلی: `COPY --from=console` تأمینش می‌کند، و بیرون
+# گذاشتنش جلوی نشتِ یک buildِ کهنه به ایمیج را می‌گیرد.
+app/static/console
+
+# کشِ پایتون
+__pycache__
+*.pyc
+.pytest_cache
+
+# چیزی که در ایمیج کاری ندارد
+tests
+docs
+cookies
+*.db
+.env

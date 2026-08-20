@@ -92,7 +92,7 @@ export default function Page() {
                       <span style={{ color: C.inkFaint }}>—</span>
                     ) : (
                       <form method="post" action="/users/block" style={{ display: 'inline' }}>
-                        <input type="hidden" name="id" value={u.tg} />
+                        <input type="hidden" name="id" value={u.id} />
                         <input type="hidden" name="action" value={u.blocked ? 'unblock' : 'block'} />
                         <Btn type="submit" danger={!u.blocked} style={{ padding: '3px 9px', fontSize: 9.5 }}>
                           {u.blocked ? 'UNBLOCK' : 'BLOCK'}
