@@ -75,7 +75,12 @@ async def test_the_healthy_badge_stays_green(seeded):
     """کنترلِ معکوس: رفع نباید حالتِ سالم را عوض کند."""
     html = await _fetch(seeded, "/cookies")
     assert _badge_class(html, "سالم") == "ok"
-    assert "#ecfdf5" in _rule_for(html, "ok")
+    # پیش از سامانهٔ توکن این‌جا `#ecfdf5` هاردکد بود. ادعا عوض نشده — «بجِ
+    # سالم رنگِ **وضعیتِ سالم** را می‌گیرد، نه رنگِ دیگری» — ولی آن رنگ حالا
+    # یک توکن است و هاردکدکردنِ hex دقیقاً همان ثابتِ دستی است که کلِ این
+    # بازسازی برای برداشتنش انجام شد. با تمِ روشن/تاریک هم دو مقدارِ متفاوت
+    # می‌شود، پس یک hex نمی‌تواند هر دو را بگوید.
+    assert "var(--ok)" in _rule_for(html, "ok")
 
 
 async def test_a_deliberately_disabled_account_is_grey(seeded):
@@ -133,7 +138,9 @@ async def test_the_status_dot_stayed_red(seeded):
     """
     html = await _fetch(seeded, "/cookies")
     assert "s-invalid" in _dots_rendered(html), "نقطهٔ «باطل» روی هیچ ردیفی نیست"
-    assert "#dc2626" in _rule_for(html, "s-invalid")
+    # همان تعویضِ hex→توکن که در `test_the_healthy_badge_stays_green` توضیح
+    # داده شد: `--bad` تنها منبعِ «قرمزِ خطا» در هر دو تم است.
+    assert "var(--bad)" in _rule_for(html, "s-invalid")
 
 
 async def test_every_seeded_status_paints_a_dot_on_a_real_row(seeded):

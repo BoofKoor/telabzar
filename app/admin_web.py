@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import base64
 import glob
 import hashlib
@@ -51,6 +52,9 @@ from .i18n import (
 )
 from .keyboards import OPS_BY_KIND
 from .models import DownloadCache, File, Job, Node, User
+from .panel_i18n import DIR as _PANEL_DIR_OF
+from .panel_i18n import LANGS as PANEL_LANGS
+from .panel_i18n import normalize_lang, normalize_theme, pt
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
 
 log = logging.getLogger("telabzar.admin")
@@ -78,12 +82,12 @@ _PLATFORM_FA = dict(PLATFORM_LABELS)
 
 # گروه‌بندیِ کلیدها برای فرم: (عنوانِ کارت, [(کلید, برچسب, توضیح)])
 GROUPS = [
-    ("🚦 سقف‌ها و کنترلِ مصرف", [
+    ("سقف‌ها و کنترلِ مصرف", [
         ("rate_per_min", "نرخ در دقیقه", "۰ = نامحدود"),
         ("daily_op_quota", "سقفِ روزانهٔ عملیات", "هر کاربر · ۰ = نامحدود"),
         ("max_file_mb", "حداکثر حجمِ فایل (MB)", ""),
     ]),
-    ("⬇️ دانلودر", [
+    ("دانلودر", [
         ("downloader_enabled", "دانلودر فعال", ""),
         ("dl_allow_unknown", "تلاش برای هر لینک", "هاستِ ناشناخته را هم دانلود کن"),
         ("dl_rich_posts", "پستِ چند‌عکسی به‌شکلِ مقاله", "Rich Message؛ خطا → آلبوم"),
@@ -123,7 +127,7 @@ GROUPS = [
          "فقط عملیاتِ گران روی فایلِ دانلودی · ۰ = نامحدود"),
         ("dl_min_free_gb", "کفِ فضای آزادِ دیسک (GB)", "زیرِ این حد دانلود رد می‌شود · ۰ = بی‌قید"),
     ]),
-    ("🎧 اسپاتیفای و اپل موزیک", [
+    ("اسپاتیفای و اپل موزیک", [
         ("spotify_enabled", "اسپاتیفای فعال", "بدونِ credential هم کار می‌کند"),
         ("spotify_client_id", "Client ID", "اختیاری · پایدارتر/کامل‌تر"),
         ("spotify_client_secret", "Client Secret", ""),
@@ -134,24 +138,24 @@ GROUPS = [
         ("match_min", "حداقلِ امتیازِ تطبیق", "۰..۱۰۰ · بالاتر = سخت‌گیرتر"),
         ("match_yt_fallback", "چاره‌یِ یوتیوب", "اگر تطبیقِ مطمئن نبود: بهترینِ موجود"),
     ]),
-    ("🎬 کاهشِ حجمِ ویدیو", [
+    ("کاهشِ حجمِ ویدیو", [
         ("compress_speed", "سرعت / کیفیت", "کندتر = کوچک‌تر"),
         ("video_encoder", "انکودر", "nvenc فقط با GPU"),
         ("compress_tiny_target_mb", "هدفِ «خیلی کم‌حجم» (MB)", "کلاس/جلسه"),
         ("compress_tiny_height", "کفِ رزولوشنِ خیلی کم‌حجم", "۴۸۰ یا ۳۶۰"),
         ("vjoin_max_mb", "سقفِ حجمِ چسباندنِ ویدیو (MB)", "۰ = مثلِ سقفِ فایل"),
     ]),
-    ("🎙 رونویسی و اکسترا", [
+    ("رونویسی و اکسترا", [
         ("whisper_model", "مدلِ Whisper", ""),
         ("dl_sponsorblock", "SponsorBlock", "حذفِ اسپانسر/اینترو"),
         ("dl_subs", "زیرنویسِ خودکار (en+fa)", ""),
     ]),
-    ("🍪 کوکی‌ها", [
+    ("کوکی‌ها", [
         ("cookie_alert_min", "هشدار وقتی اکانتِ سالم کمتر از", "۰ = خاموش · به تلگرامِ ادمین"),
     ]),
     # سهمیهٔ استخرِ سشن. تحقیق: فشارِ ۲× یعنی سوختنِ ۴× — بالا بردن این اعداد
     # سرعت می‌دهد ولی عمرِ اکانت را کوتاه می‌کند.
-    ("🧬 سهمیهٔ استخرِ سشن", [
+    ("سهمیهٔ استخرِ سشن", [
         ("ck_cap_instagram", "سقفِ ساعتیِ اینستاگرام", "دانلود در ساعت، برای هر اکانت · ۰ = بی‌سقف"),
         ("ck_cap_youtube", "سقفِ ساعتیِ یوتیوب", "ناشناس هم جواب می‌دهد، پس دست‌ودل‌بازتر"),
         ("ck_cap_twitter", "سقفِ ساعتیِ X / توییتر", ""),
@@ -166,7 +170,7 @@ GROUPS = [
     ]),
     # ربات هر فایلی را دوباره آپلود می‌کند، پس خودش توزیع‌کننده است — این فیلتر
     # جلوی همان مسیرِ بن‌شدنِ ربات را می‌گیرد.
-    ("🔞 فیلترِ محتوای بزرگسال", [
+    ("فیلترِ محتوای بزرگسال", [
         ("safety_enabled", "فیلتر فعال", "لینک و فایلِ آپلودی، هر دو"),
         ("safety_scan_pixels", "بررسیِ خودِ تصویر", "خاموش = فقط دامنه و متادیتا"),
         ("safety_threshold", "آستانهٔ اطمینان (درصد)", "بالاتر = سهل‌گیرتر · پیش‌فرض ۵۵"),
@@ -176,7 +180,7 @@ GROUPS = [
         ("safety_notify_admin", "گزارشِ هر مسدودی به ادمین", ""),
         ("safety_strikes", "مسدودیِ خودکارِ کاربر پس از", "این تعداد تخلف · ۰ = خاموش"),
     ]),
-    ("🔗 لینک و استریم", [
+    ("لینک و استریم", [
         ("stream_base", "پایهٔ لینک (نودِ استریم)", "خالی = دامنهٔ مستر · مثل https://cdn.example.com"),
     ]),
 ]
@@ -187,6 +191,23 @@ _AUTO_GROUP = "🧷 بدونِ دسته"
 #: این است که کلید هرگز نامرئی نشود، ولی اگر بی‌صدا جذبش کند هیچ‌کس برچسبِ
 #: درست نمی‌نویسد. این متن خودش نق می‌زند.
 _AUTO_HINT = "هنوز برچسبِ فارسی ندارد — در GROUPS دسته‌بندی‌اش کن"
+
+
+#: آیکونِ هر گروهِ تنظیمات. عمداً **کنارِ** `GROUPS` و نه داخلش:
+#: `tests/test_settings_rename.py` آن لیست را با `literal_eval` از سورس
+#: می‌خواند (بدونِ import، چون ایمیجِ تست jinja2/cryptography ندارد)، پس
+#: باید یک لیترالِ خالص بماند.
+_GROUP_ICON = {
+    "سقف‌ها و کنترلِ مصرف": "shield",
+    "دانلودر": "download",
+    "اسپاتیفای و اپل موزیک": "zap",
+    "کاهشِ حجمِ ویدیو": "file",
+    "رونویسی و اکسترا": "type",
+    "کوکی‌ها": "cookie",
+    "سهمیهٔ استخرِ سشن": "sliders",
+    "فیلترِ محتوای بزرگسال": "shield",
+    "لینک و استریم": "link",
+}
 
 
 def _setting_groups() -> list[tuple[str, list[tuple[str, str, str]]]]:
@@ -321,9 +342,92 @@ ENV = Environment(
 )
 
 
+#: منوی پنل — یک ساختارِ **اعلانی**، نه HTMLِ دست‌نویس در قالب. شماره‌ها بخشی
+#: از زبانِ بصریِ کنسول‌اند (نه تزئین): آدرسِ پایدارِ هر صفحه‌اند و برچسبشان با
+#: عوض‌شدنِ زبانِ پنل تغییر نمی‌کند.
+_NAV = (
+    ("control", (("01", "settings", "/", "sliders"),
+                 ("02", "users", "/users", "users"),
+                 ("03", "cookies", "/cookies", "cookie"))),
+    ("system", (("04", "health", "/health", "pulse"),
+                ("05", "nodes", "/nodes", "server"))),
+    ("content", (("06", "texts", "/texts", "type"),
+                 ("07", "buttons", "/buttons", "palette"),
+                 ("08", "langs", "/langs", "globe"))),
+    ("data", (("09", "stats", "/stats", "chart"),)),
+)
+
+_LANG_COOKIE = "tab_lang"
+_THEME_COOKIE = "tab_theme"
+_NEXT_THEME = {"auto": "dark", "dark": "light", "light": "auto"}
+
+#: ترجیحاتِ رندر (زبانِ پنل، پوسته، مسیرِ جاری) برای همین درخواست.
+#:
+#: **چرا ContextVar و نه یک پارامترِ `_render`:** `_render` سیزده محلِ فراخوانی
+#: دارد و یکی‌شان (`_login_page`) اصلاً `request` در دست ندارد — پس پارامترکردن
+#: یعنی سیزده امضا عوض شود و یک مسیر همچنان بی‌ترجیح بماند. هر هندلرِ aiohttp
+#: در تسکِ خودش می‌دود و contextvar به‌ازای هر تسک کپی می‌شود، پس نشتی بینِ دو
+#: درخواستِ هم‌زمان ممکن نیست؛ میدل‌ور در `finally` هم ریستش می‌کند.
+_PREFS: contextvars.ContextVar[tuple[str, str, str]] = contextvars.ContextVar(
+    "panel_prefs", default=("fa", "auto", "/"))
+
+
+@web.middleware
+async def _panel_prefs(request: web.Request, handler):
+    token = _PREFS.set((normalize_lang(request.cookies.get(_LANG_COOKIE)),
+                        normalize_theme(request.cookies.get(_THEME_COOKIE)),
+                        request.path))
+    try:
+        return await handler(request)
+    finally:
+        _PREFS.reset(token)
+
+
+async def prefs(request: web.Request) -> web.Response:
+    """سوییچِ زبان/پوستهٔ **پنل** — کوکی، بدونِ JS و بدونِ FOUC.
+
+    `<html lang dir data-theme>` سرورساید رندر می‌شود، پس صفحه از همان اولین
+    بایت درست است؛ نسخهٔ JSمحور یک پرشِ دیدنی می‌دهد و با CSPِ فعلی (که
+    `script-src` را باز نگه‌داشتنش هزینه دارد) هم‌خوان نیست.
+    """
+    resp = web.HTTPFound(_safe_back(request.query.get("to", "")))
+    if "lang" in request.query:
+        resp.set_cookie(_LANG_COOKIE, normalize_lang(request.query["lang"]),
+                        max_age=365 * 86400, samesite="Lax")
+    if "theme" in request.query:
+        resp.set_cookie(_THEME_COOKIE, normalize_theme(request.query["theme"]),
+                        max_age=365 * 86400, samesite="Lax")
+    raise resp
+
+
+def _safe_back(value: str) -> str:
+    """مقصدِ بازگشت — فقط مسیرِ نسبیِ همین سایت، وگرنه `/`.
+
+    `//evil.example` یک URLِ **پروتکل‌نسبی** است و مرورگر بیرون می‌بردش، پس
+    شرطِ «با `/` شروع می‌شود» به‌تنهایی open-redirect را نمی‌بندد.
+    """
+    if value.startswith("/") and not value.startswith("//") and "\\" not in value:
+        return value
+    return "/"
+
+
 def _render(name: str, **ctx) -> web.Response:
+    lang, theme, here = _PREFS.get()
     ctx.setdefault("css", Markup(_CSS))
     ctx.setdefault("pfa", _PLATFORM_FA)
+    ctx.setdefault("lang", lang)
+    ctx.setdefault("dir", _PANEL_DIR_OF[lang])
+    ctx.setdefault("theme", theme)
+    ctx.setdefault("next_theme", _NEXT_THEME[theme])
+    ctx.setdefault("panel_langs", PANEL_LANGS)
+    ctx.setdefault("pt", lambda key, **kw: pt(lang, key, **kw))
+    ctx.setdefault("nav", _NAV)
+    ctx.setdefault("mesh", ())
+    ctx.setdefault("here", here)
+    ctx.setdefault("now", datetime.now(timezone.utc).strftime("%H:%M:%S"))
+    ctx.setdefault("active", "")
+    ctx.setdefault("admin_id", "")
+    ctx.setdefault("pill_ok", True)
     html = ENV.get_template(name + ".html").render(**ctx)
     return web.Response(text=html, content_type="text/html")
 
@@ -1144,6 +1248,7 @@ async def dashboard(request: web.Request) -> web.Response:
     return _render("settings", admin_id=_session_admin(request), active="settings",
                    pill_ok=health["all_ok"], groups=_setting_groups(), meta=RUNTIME_KEYS,
                    enums=ENUM_VALUES, labels=ENUM_LABELS, longtext=LONGTEXT_KEYS,
+                   gicon=_GROUP_ICON,
                    v=await _effective(),
                    health=health, saved=request.query.get("ok") == "1",
                    error=request.query.get("err", ""))
@@ -1316,7 +1421,7 @@ async def texts_page(request: web.Request) -> web.Response:
     saved = {"1": "متن ذخیره شد (بی‌ری‌استارت اعمال شد).",
              "r": "به پیش‌فرض برگشت."}.get(request.query.get("ok", ""), "")
     return _render("texts", admin_id=_session_admin(request), active="texts",
-                   pill_ok=await _pill_ok(request.app), lang=lang, langs=langs, q=q,
+                   pill_ok=await _pill_ok(request.app), lang_sel=lang, langs=langs, q=q,
                    groups=groups, total=total, edited=edited, saved=saved,
                    error=request.query.get("err", ""))
 
@@ -1439,7 +1544,7 @@ async def buttons_page(request: web.Request) -> web.Response:
     saved = {"1": "ذخیره شد (بی‌ری‌استارت اعمال شد).",
              "r": "به چیدمانِ پیش‌فرض برگشت."}.get(request.query.get("ok", ""), "")
     return _render("buttons", admin_id=_session_admin(request), active="buttons",
-                   pill_ok=await _pill_ok(request.app), kind=kind, lang=lang, langs=langs,
+                   pill_ok=await _pill_ok(request.app), kind=kind, lang_sel=lang, langs=langs,
                    kinds=_KIND_TABS,
                    kindlabel=_KIND_LABEL[kind], items=items, pv_rows=pv_rows,
                    hidden_items=hidden_items, close_label=_t(lang, "btn_close"),
@@ -2212,12 +2317,13 @@ async def _security_headers(request: web.Request, handler):
 
 
 def build_app() -> web.Application:
-    app = web.Application(middlewares=[_security_headers])
+    app = web.Application(middlewares=[_security_headers, _panel_prefs])
     app.router.add_get("/", dashboard)
     app.router.add_get("/login", login)
     app.router.add_post("/auth/request", auth_request)
     app.router.add_post("/auth/verify", auth_verify)
     app.router.add_get("/logout", logout)
+    app.router.add_get("/prefs", prefs)
     app.router.add_post("/save", save)
     app.router.add_get("/cookies", cookies_page)
     app.router.add_post("/cookies/add", cookies_add)

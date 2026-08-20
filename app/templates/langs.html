@@ -1,46 +1,51 @@
-{% extends "base.html" %}{% block title %}زبان‌ها{% endblock %}{% block heading %}زبان‌ها{% endblock %}
+{% extends "base.html" %}{% import "_icons.html" as I %}
+{% block title %}{{ pt('nav.langs') }}{% endblock %}
+{% block heading %}{{ pt('page.langs') }}{% endblock %}
+{% block tick %}
+  <span><i>&gt;</i> ./ctl i18n --list</span>
+  <span>keys {{total}}</span>
+  <span>langs {{rows|length}}</span>
+{% endblock %}
 {% block body %}
-{% if saved %}<div class=card><div class=pad><div class=saved>✅ {{saved}}</div></div></div>{% endif %}
-{% if error %}<div class=card><div class=pad><div class=errbox>⚠️ {{error}}</div></div></div>{% endif %}
+{% if saved %}<div class=saved>{{ I.ico('check', '13px') }} {{saved}}</div>{% endif %}
+{% if error %}<div class=errbox>{{error}}</div>{% endif %}
 
 {% if rv %}
 <div class=card>
-  <h3>{% if rv.ok %}🧾 گزارشِ بسته{% else %}⛔ بسته رد شد{% endif %}
+  <h3>{{ I.ico('file') }}{% if rv.ok %}گزارشِ بسته{% else %}بسته رد شد{% endif %}
     <span class=tag><bdi>{{rv.name}}</bdi> · <span class=mono>{{rv.lang}}</span></span></h3>
   <div class=pad>
     {% if rv.ok %}
-      <div class=hint>
+      <div class=note>
         <b>{{rv.entries|length}}</b> از <b>{{rv.total}}</b> کلید در این بسته است
         (<span class=num>{{rv.coverage}}٪</span>) ·
         <b>{{rv.changed}}</b> کلید عوض می‌شود ·
         <b>{{rv.same}}</b> کلید همان است که هست ·
         <b>{{rv.untouched}}</b> کلید در بسته نیست
         {% if replace %}و با «جایگزینیِ کامل» <b>پاک</b> می‌شود{% else %}و دست‌نخورده می‌ماند{% endif %}.
-        {% if rv.untranslated %}<br>⚠️ <b>{{rv.untranslated|length}}</b> کلید عیناً همان متنِ مبدأ است
+        {% if rv.untranslated %}<br><b>{{rv.untranslated|length}}</b> کلید عیناً همان متنِ مبدأ است
         (ترجمه‌نشده).{% endif %}
       </div>
       {% if confirm == 'ask' %}
-      <div class=errbox style=margin-top:12px>
-        این زبانِ <b>پیش‌فرضِ</b> ربات است. با تأیید، <b>{{rv.changed}}</b> متنِ زندهٔ
-        ربات عوض می‌شود و <b>{{rv.untouched}}</b> متن دست‌نخورده می‌ماند.
-      </div>
-      <form method=post action=/langs/import style=margin-top:12px>
+      <div class=errbox>این زبانِ <b>پیش‌فرضِ</b> ربات است. با تأیید، <b>{{rv.changed}}</b> متنِ زندهٔ
+        ربات عوض می‌شود و <b>{{rv.untouched}}</b> متن دست‌نخورده می‌ماند.</div>
+      <form method=post action=/langs/import>
         <textarea name=pack hidden>{{raw}}</textarea>
         <input type=hidden name=lang value="{{rv.lang}}">
         <input type=hidden name=name value="{{rv.name}}">
         {% if replace %}<input type=hidden name=replace value=on>{% endif %}
         <input type=hidden name=confirm value=yes>
         <button class=btn-go>بله، اعمال کن</button>
-        <a class=btn-sm href=/langs>انصراف</a>
+        <a class=btn-sm href=/langs>{{ pt('c.cancel') }}</a>
       </form>
       {% endif %}
     {% else %}
-      <div class=hint><b>{{rv.errors|length}}</b> کلید رد شد، پس <b>هیچ‌چیز نوشته نشد</b>.
+      <div class=note><b>{{rv.errors|length}}</b> کلید رد شد، پس <b>هیچ‌چیز نوشته نشد</b>.
         همین فهرست را به همان چت‌بات بده و بستهٔ اصلاح‌شده را دوباره بچسبان.</div>
-      <div class=tbl-wrap style=margin-top:10px>
+      <div class=tbl-wrap>
         <table><thead><tr><th>کلید</th><th>دلیل</th></tr></thead><tbody>
         {% for key, why in rv.errors[:40] %}
-          <tr><td><code class=mono>{{key}}</code></td><td>{{why}}</td></tr>
+          <tr><td><code>{{key}}</code></td><td>{{why}}</td></tr>
         {% endfor %}
         </tbody></table>
       </div>
@@ -52,27 +57,26 @@
 {% endif %}
 
 <div class=card>
-  <h3>🌐 زبان‌های ربات <span class=tag>{{total}} کلیدِ متن</span></h3>
+  <h3>{{ I.ico('globe') }}زبان‌های ربات <span class=tag>{{total}} کلیدِ متن</span></h3>
   <div class=tbl-wrap>
     <table><thead><tr><th>زبان</th><th>کد</th><th>ترجمه‌شده</th><th></th></tr></thead><tbody>
     {% for r in rows %}
       <tr>
-        <td><bdi>{{r.name}}</bdi>
-          {% if r.builtin %}<span class=chip>داخلی</span>{% endif %}</td>
+        <td><bdi>{{r.name}}</bdi>{% if r.builtin %} <span class=chip>داخلی</span>{% endif %}</td>
         <td><span class=mono>{{r.code}}</span></td>
         <td><span class=num>{{r.done}}/{{r.total}}</span>
-          <span class=meter><i style="width:{{r.pct}}%"></i></span>
+          <span class=meter style="display:inline-block;width:110px;vertical-align:middle"><i style="width:{{r.pct}}%"></i></span>
           <span class=num>{{r.pct}}٪</span></td>
         <td>
           {# مبدأ = **خودِ همان زبان**، نه همیشه فارسی: برای زبانی که نیمه‌ترجمه
              است، `effective_texts` مقدارِ ترجمه‌شده را می‌دهد و برای بقیه به
              انگلیسی می‌افتد — یعنی بسته دقیقاً همان چیزی می‌شود که باید کامل
              شود. ساختنِ زبانِ **تازه** فرمِ جداگانهٔ پایین را دارد. #}
-          <a class=btn-sm href="/langs/export?lang={{r.code}}&source={{r.code}}">دریافتِ بسته</a>
+          <a class=btn-sm href="/langs/export?lang={{r.code}}&source={{r.code}}">{{ I.ico('download', '12px') }}دریافتِ بسته</a>
           {% if not r.builtin %}
-          <form method=post action=/langs/delete style=display:inline>
+          <form method=post action=/langs/delete class=inline>
             <input type=hidden name=code value="{{r.code}}">
-            <button class=btn-sm>حذف</button>
+            <button class="btn-sm btn-danger">{{ pt('c.delete') }}</button>
           </form>{% endif %}
         </td>
       </tr>
@@ -82,11 +86,11 @@
 </div>
 
 <div class=card>
-  <h3>⬇️ ساختنِ بستهٔ ترجمه</h3>
+  <h3>{{ I.ico('download') }}ساختنِ بستهٔ ترجمه</h3>
   <div class=pad>
-    <div class=hint>فایل را بگیر، به یک چت‌بات بده و بگو ترجمه‌اش کند، بعد خروجی را
+    <div class=note>فایل را بگیر، به یک چت‌بات بده و بگو ترجمه‌اش کند، بعد خروجی را
       در کادرِ پایین بچسبان. دستورِ کار داخلِ خودِ فایل نوشته شده.</div>
-    <form method=get action=/langs/export style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+    <form method=get action=/langs/export class=ck-form>
       <input class=inp name=lang placeholder="کدِ زبان (es، pt-BR…)" dir=ltr required>
       <input class=inp name=name placeholder="نامِ نمایشی (Español)">
       <select class=sel name=source>
@@ -100,18 +104,18 @@
 </div>
 
 <div class=card>
-  <h3>⬆️ چسباندنِ بستهٔ ترجمه‌شده</h3>
+  <h3>{{ I.ico('upload') }}چسباندنِ بستهٔ ترجمه‌شده</h3>
   <form method=post action=/langs/import>
     <div class=pad>
-      <input class=inp name=lang placeholder="کدِ زبان (es، pt-BR…)" dir=ltr required>
-      <input class=inp name=name placeholder="نامِ نمایشی (Español)">
-      <label class=hint style="display:inline-flex;gap:6px;align-items:center">
-        <input type=checkbox name=replace {% if replace %}checked{% endif %}>
-        جایگزینیِ کامل (کلیدهایی که در بسته نیستند <b>پاک</b> شوند)
-      </label>
+      <div class=ck-form>
+        <input class=inp name=lang placeholder="کدِ زبان (es، pt-BR…)" dir=ltr required>
+        <input class=inp name=name placeholder="نامِ نمایشی (Español)">
+        <label class=ck-hint><input type=checkbox name=replace {% if replace %}checked{% endif %}>
+          جایگزینیِ کامل (کلیدهای غایب <b>پاک</b> شوند)</label>
+      </div>
       <textarea class=ta name=pack rows=8 dir=ltr
         placeholder='{ "telabzar_i18n": 1, "lang": "es", … }'>{{raw}}</textarea>
-      <button class=save>سنجش و import</button>
+      <div class=ck-go><button class=btn-go>سنجش و import</button></div>
     </div>
   </form>
 </div>

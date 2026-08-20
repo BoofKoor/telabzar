@@ -1,16 +1,50 @@
-{% extends "base.html" %}{% block title %}سلامت{% endblock %}{% block heading %}سلامتِ سیستم{% endblock %}
-{% block body %}<div class=grid2>
-<div class=col>{% include "_health_cards.html" %}</div>
+{% extends "base.html" %}{% import "_icons.html" as I %}
+{% block title %}{{ pt('nav.health') }}{% endblock %}
+{% block heading %}{{ pt('page.health') }}{% endblock %}
+{% block tick %}
+  <span><i>&gt;</i> ./ctl health --watch</span>
+  <span>q {{health.q_main}}/{{health.q_proc}}/{{health.q_dl}}</span>
+  <span>dl.active {{health.dl_active}}</span>
+  {% if health.disk_total %}<span>disk {{health.disk_used}}/{{health.disk_total}}G</span>{% endif %}
+  <span>{{ 'ALL NOMINAL' if health.all_ok else 'DEGRADED' }}</span>
+{% endblock %}
+{% block body %}
+{# عددِ کانونیِ این صفحه: نرخِ موفقیتِ **کلِ** دانلودهای امروز. جمع در قالب
+   محاسبه می‌شود نه در هندلر، چون همان `health.hosts`ی است که کارتِ کناری هم
+   می‌خواند — یک منبع، دو نما. #}
+{% set ns = namespace(ok=0, fail=0) %}
+{% for h in health.hosts %}{% set ns.ok = ns.ok + h.ok %}{% set ns.fail = ns.fail + h.fail %}{% endfor %}
+{% set tot = ns.ok + ns.fail %}
+<div class=slab>
+  <div class=sh>DOWNLOAD SUCCESS · TODAY · UTC<span>{{health.hosts|length}} platforms</span></div>
+  <div class=row2>
+    <div><div class=big>{% if tot %}{{ (ns.ok * 100 // tot) }}%{% else %}—{% endif %}</div></div>
+    {# یک میله به‌ازای هر پلتفرم، به ارتفاعِ نرخِ موفقیتش — همان دادهٔ کارتِ
+       کناری، این‌بار به‌شکلی که از دور خوانده می‌شود. #}
+    <div class=strip>{% for h in health.hosts %}
+      <i class="{% if h.rate >= 90 %}pk{% elif h.rate >= 70 %}hi{% endif %}"
+        style="height:{{h.rate}}%" title="{{ pfa.get(h.name, h.name) }} {{h.rate}}%"></i>{% endfor %}</div>
+  </div>
+  <div class=sf><span>{{ns.ok}} موفق · {{ns.fail}} ناموفق</span><b>{{tot}}</b></div>
+</div>
+
+<div class=grid2>
 <div class=col>
-  <div class=card><h3>🍪 وضعیتِ کوکی‌ها</h3><div class=rows>
-    {% if pool %}{% for p in pool %}
-      <div class=svc>{{ pfa.get(p.platform, p.platform) }}
-        <span style="margin-inline-start:auto;color:#64748b;font-size:12.5px"><bdi>{{p.live}}</bdi> سالم{% if p.cd %} · <bdi>{{p.cd}}</bdi> کنارگذاشته{% endif %}{% if p.bad %} · <bdi>{{p.bad}}</bdi> باطل{% endif %}</span></div>
-    {% endfor %}{% else %}<div class=empty>کوکی‌ای ثبت نشده.</div>{% endif %}
+  {% include "_health_dl.html" %}
+  <div class=card><h3>{{ I.ico('shield') }}راهنما</h3><div class=pad>
+    <div class=note>نرخِ موفقیتِ per-host از شمارنده‌های امروز محاسبه می‌شود. افتِ ناگهانیِ
+      یک پلتفرم معمولاً یعنی کوکی بلاک شده یا pot-provider/پروکسی مشکل دارد — قبل از
+      شکایتِ کاربرها این‌جا دیده می‌شود.</div>
   </div></div>
-  <div class=card><h3>ℹ️ راهنما</h3><div class=rows style=font-size:12.5px;color:#64748b;line-height:2>
-    نرخِ موفقیتِ per-host از شمارنده‌های امروز محاسبه می‌شود. افتِ ناگهانیِ یک پلتفرم معمولاً یعنی
-    کوکی بلاک شده یا pot-provider/پروکسی مشکل دارد — قبل از شکایتِ کاربرها این‌جا دیده می‌شود.
+</div>
+<div class=col>
+  {% include "_health_core.html" %}
+  <div class=card><h3>{{ I.ico('cookie') }}وضعیتِ کوکی‌ها</h3><div class=rows>
+    {% if pool %}{% for p in pool %}
+      <div class=svc><span class="lamp {{'ok' if p.live else 'bad'}}"></span>
+        {{ pfa.get(p.platform, p.platform) }}
+        <span style="margin-inline-start:auto;color:var(--ink3);font-size:var(--fs-3xs)"><bdi>{{p.live}}</bdi> {{ pt('h.healthy') }}{% if p.cd %} · <bdi>{{p.cd}}</bdi> کنارگذاشته{% endif %}{% if p.bad %} · <bdi>{{p.bad}}</bdi> باطل{% endif %}</span></div>
+    {% endfor %}{% else %}<div class=empty>{{ pt('h.no_cookies') }}</div>{% endif %}
   </div></div>
 </div>
 </div>{% endblock %}

@@ -1,21 +1,51 @@
-<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1">
-<title>{% block title %}پنلِ مدیریت{% endblock %} · تل‌ابزار</title>
+{% import "_icons.html" as I %}<!doctype html>
+<html lang={{lang}} dir={{dir}}{% if theme != 'auto' %} data-theme={{theme}}{% endif %}><head>
+<meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>{% block title %}{{ pt('page.settings') }}{% endblock %} · {{ pt('brand') }}</title>
 <style>{{css}}{% block style %}{% endblock %}</style></head><body><div class=app>
-<aside class=side><div class=brand>🧰 تل‌ابزار<small>پنلِ مدیریت</small></div>
-<nav class=nav>
-  <a class="{{'on' if active=='settings'}}" href=/>⚙️ تنظیمات</a>
-  <a class="{{'on' if active=='texts'}}" href=/texts>✏️ متن‌ها</a>
-  <a class="{{'on' if active=='buttons'}}" href=/buttons>🎨 کلیدها</a>
-  <a class="{{'on' if active=='langs'}}" href=/langs>🌐 زبان‌ها</a>
-  <a class="{{'on' if active=='cookies'}}" href=/cookies>🍪 کوکی‌ها</a>
-  <a class="{{'on' if active=='health'}}" href=/health>🩺 سلامت</a>
-  <a class="{{'on' if active=='nodes'}}" href=/nodes>🖧 نودها</a>
-  <a class="{{'on' if active=='users'}}" href=/users>👤 کاربران</a>
-  <a class="{{'on' if active=='stats'}}" href=/stats>📊 آمار</a>
-</nav>
-<div class=foot>نسخهٔ ۱.۰ · D3</div></aside>
-<div class=main><div class=top><h1>{% block heading %}{% endblock %}</h1><div class=who>
-<span class="pill {{'' if pill_ok else 'bad'}}"><span class=dot></span> {{'همه سرویس‌ها آنلاین' if pill_ok else 'بررسیِ سرویس‌ها'}}</span>
-<span>ادمین · {{admin_id}}</span><a href=/logout class=lo>خروج ↩</a></div></div>
-<div class=body>{% block body %}{% endblock %}</div></div></div></body></html>
+
+<aside class=side>
+  <div class=brand><b>TELABZAR</b>
+    <small><span>v1.0</span><span>D3</span><span>uid {{admin_id}}</span></small></div>
+  <nav class=nav>
+    {% for grp, items in nav %}
+      <div class=grp>{{ pt('grp.' ~ grp) }}</div>
+      {% for num, key, href, icon in items %}
+        <a class="{{'on' if active==key}}" href="{{href}}"><span class=nn>{{num}}</span>
+          {{ I.ico(icon, '13px') }}<span>{{ pt('nav.' ~ key) }}</span></a>
+      {% endfor %}
+    {% endfor %}
+  </nav>
+  <div class=mesh>
+    <div>{{ pt('chrome.mesh') }}<b>{% if mesh %}{{mesh|length}}{% else %}0{% endif %}</b></div>
+    {% for n in mesh %}<div><span class="lamp {{'ok' if n.online else ''}}"></span>{{n.name}}<b>{{n.role}}</b></div>
+    {% else %}<div><span class=lamp></span>{{ pt('chrome.none') }}<b>master</b></div>{% endfor %}
+  </div>
+  <div class=foot>{{now}} UTC</div>
+</aside>
+
+<div class=main>
+  <header class=top>
+    <span class=path>root@telabzar:~/<b>{{active}}</b></span>
+    <h1>{% block heading %}{{ pt('page.settings') }}{% endblock %}</h1>
+    <div class=who>
+      <span class="pill {{'' if pill_ok else 'bad'}}"><span class=dot></span>
+        {{ pt('chrome.all_ok') if pill_ok else pt('chrome.degraded') }}</span>
+      <a class="tool {{'on' if lang=='en'}}" href="/prefs?to={{here|urlencode}}&amp;lang={{'fa' if lang=='en' else 'en'}}"
+        title="{{ pt('chrome.lang') }}">{{ 'FA' if lang=='en' else 'EN' }}</a>
+      <a class=tool href="/prefs?to={{here|urlencode}}&amp;theme={{next_theme}}" title="{{ pt('chrome.theme') }}">
+        {{ I.ico('moon' if theme=='light' else 'sun', '12px') }}</a>
+      <a class="tool lo" href=/logout title="{{ pt('chrome.logout') }}">{{ I.ico('logout', '12px') }}</a>
+    </div>
+  </header>
+  <div class=tick>{% block tick %}
+    <span><i>&gt;</i> session uid {{admin_id}}</span>
+    <span>panel v1.0 · D3</span>
+    <span>tz UTC</span>
+  {% endblock %}</div>
+  <div class=body>{% block body %}{% endblock %}</div>
+  <div class=statbar>
+    <span>telabzar-admin</span><span>{{active}}</span>
+    <span class=r>{{now}} UTC</span>
+  </div>
+</div></div></body></html>

@@ -1,44 +1,31 @@
-<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>ورود · پنلِ تل‌ابزار</title>
-<style>{{css}}
-body{min-height:100vh;display:flex;align-items:center;justify-content:center;
-background:radial-gradient(120% 120% at 80% 0%,#134e4a,#0f172a 60%);padding:20px}
-.wrap{display:flex;gap:34px;align-items:center;flex-wrap:wrap;justify-content:center}
-.hero{color:#e2e8f0;width:300px}.hero .logo{font-size:28px;font-weight:800;color:#fff;margin-bottom:12px}
-.hero p{font-size:14px;line-height:2;color:#94a3b8}
-.lcard{width:360px;background:#fff;border-radius:20px;padding:28px;box-shadow:0 30px 60px rgba(0,0,0,.35)}
-.lcard h2{font-size:18px}.lcard .sub{font-size:13px;color:#64748b;margin:6px 0 18px;line-height:1.9}
-.err{background:#fef2f2;color:#b91c1c;font-size:13px;padding:10px 12px;border-radius:10px;margin-bottom:14px}
-.sent{background:#ecfdf5;color:#047857;font-size:12.5px;font-weight:600;padding:9px 12px;border-radius:10px;margin-bottom:16px}
-.lbl{font-size:12.5px;color:#475569;margin:0 0 8px;font-weight:600}
-.lcard input{width:100%;height:46px;border:1.5px solid #cbd5e1;border-radius:12px;padding:0 14px;font-size:16px;
-font-family:inherit;margin-bottom:14px;text-align:center;letter-spacing:2px;color:var(--ink);direction:ltr}
-.lcard input:focus{outline:0;border-color:var(--teal2);box-shadow:0 0 0 3px rgba(20,184,166,.18)}
-.btn{width:100%;height:46px;background:linear-gradient(90deg,#0d9488,#14b8a6);color:#fff;border:0;
-border-radius:12px;font-size:15px;font-weight:700;font-family:inherit;box-shadow:0 8px 20px rgba(13,148,136,.3);cursor:pointer}
-.muted{text-align:center;font-size:11.5px;color:#94a3b8;margin-top:14px}
-</style></head><body><div class=wrap>
-<div class=hero><div class=logo>🧰 تل‌ابزار</div>
-<p>ورود با تأییدِ دومرحله‌ایِ تلگرام — بدونِ پسورد. فقط ادمین‌های ثبت‌شده.</p></div>
-<div class=lcard>
+{% import "_icons.html" as I %}<!doctype html>
+<html lang={{lang}} dir={{dir}}{% if theme != 'auto' %} data-theme={{theme}}{% endif %}><head>
+<meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>{{ pt('page.login') }} · {{ pt('brand') }}</title>
+<style>{{css}}</style></head><body><div class=lwrap><div class=lcard>
+<div class=lhead><b>TELABZAR</b><span>{{ pt('brand.sub') }} · v1.0 D3</span></div>
+<div class=lbody>
 {% if step == 2 %}
-  <h2>کدِ تأیید</h2><p class=sub>کدی که ربات به تلگرامت فرستاد را وارد کن.</p>
-  {% if sent %}<div class=sent>✅ کد به تلگرامِ ادمین ارسال شد</div>{% endif %}
-  {% if error %}<div class=err>{{error}}</div>{% endif %}
+  <h2>{{ pt('page.login') }} — کدِ تأیید</h2>
+  <p class=sub>کدی که ربات به تلگرامت فرستاد را وارد کن.</p>
+  {% if sent %}<div class=sent>{{ I.ico('check', '12px') }} کد به تلگرامِ ادمین ارسال شد</div>{% endif %}
+  {% if error %}<div class=errbox>{{error}}</div>{% endif %}
   <form method=post action=/auth/verify>
     <input type=hidden name=admin_id value="{{admin_id}}">
-    <div class=lbl>کدِ ۶ رقمی</div>
-    <input name=code inputmode=numeric maxlength=6 autocomplete=one-time-code placeholder="------" autofocus>
-    <button class=btn>ورود ↩</button>
+    <div class=lbl>6-DIGIT CODE</div>
+    <input class=lin name=code inputmode=numeric maxlength=6 autocomplete=one-time-code placeholder="------" autofocus>
+    <button class=btn>SIGN IN</button>
   </form>
-  <div class=muted>اعتبار تا ۵ دقیقه · تک‌مصرف</div>
+  <div class=muted>valid 5 min · single use</div>
 {% else %}
-  <h2>ورود به پنل</h2><p class=sub>شناسهٔ عددیِ تلگرامِ ادمین را وارد کن؛ یک کد برایت فرستاده می‌شود.</p>
-  {% if error %}<div class=err>{{error}}</div>{% endif %}
+  <h2>{{ pt('page.login') }}</h2>
+  <p class=sub>شناسهٔ عددیِ تلگرامِ ادمین را وارد کن؛ یک کد برایت فرستاده می‌شود.
+    بدونِ پسورد — فقط ادمین‌های ثبت‌شده.</p>
+  {% if error %}<div class=errbox>{{error}}</div>{% endif %}
   <form method=post action=/auth/request>
-    <div class=lbl>شناسهٔ عددیِ ادمین</div>
-    <input name=admin_id inputmode=numeric placeholder="123456789" autofocus style="letter-spacing:1px">
-    <button class=btn>ارسالِ کد</button>
+    <div class=lbl>ADMIN TELEGRAM ID</div>
+    <input class=lin name=admin_id inputmode=numeric placeholder="123456789" autofocus>
+    <button class=btn>SEND CODE</button>
   </form>
 {% endif %}
-</div></div></body></html>
+</div></div></div></body></html>
