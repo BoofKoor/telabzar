@@ -24,7 +24,7 @@ export function JobStream({
   }[]
 }) {
   return (
-    <Section label="JOB STREAM" right="tail -f /var/log/telabzar/jobs.ndjson" pad="22px 0 0">
+    <Section label="JOB STREAM" sigil="⟩" right="tail -f /var/log/telabzar/jobs.ndjson" pad="22px 0 0">
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {rows.map((l) => (
           <div

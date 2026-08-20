@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react'
 import { C } from '@/lib/theme'
+import { zoneOf } from '@/lib/zones'
 import { useConsole } from '@/lib/useConsole'
 import { Rail } from './Rail'
 import { Header } from './Header'
@@ -51,6 +52,7 @@ export function Shell({
   children: ReactNode | ((ctx: ShellCtx) => ReactNode)
 }) {
   const { vals, setRange, setHover } = useConsole()
+  const z = zoneOf(active)
 
   return (
     <div
@@ -65,6 +67,10 @@ export function Shell({
         fontFamily: "'JetBrains Mono',ui-monospace,monospace",
         fontSize: 12,
         position: 'relative',
+        // لهجهٔ ناحیه به‌شکلِ متغیر، تا سکشن‌ها بدونِ propـکشی برش دارند.
+        ['--zone' as string]: z.acc,
+        ['--zone-dim' as string]: z.dim,
+        ['--zone-glow' as string]: z.glow,
       }}
     >
       <Rail rain={vals.rain} active={active} />
@@ -81,6 +87,8 @@ export function Shell({
           clock={vals.clock}
           ticker={vals.ticker}
           extra={headerExtra}
+          accent={z.acc}
+          glow={z.glow}
         />
 
         <div className="mx-pad" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>

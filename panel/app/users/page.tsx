@@ -28,7 +28,7 @@ export default function Page() {
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="tg id…" inputMode="numeric" style={{ width: 190 }} />
         <Btn>SEARCH</Btn>
         {q && <Btn onClick={() => setQ('')}>CLEAR</Btn>}
-        <Chip color={C.acc}>{USERS.length.toLocaleString('en-US')} total</Chip>
+        <Chip color="var(--zone)">{USERS.length.toLocaleString('en-US')} total</Chip>
         <Chip color={C.warn} border="#3A2E14">
           {blocked} blocked
         </Chip>
@@ -37,7 +37,7 @@ export default function Page() {
         </span>
       </div>
 
-      <Section label="USERS" right={`${rows.length} shown`} pad="22px 14px 12px">
+      <Section label="USERS" sigil="⧉" corners right={`${rows.length} shown`} pad="22px 14px 12px">
         <Scroll>
           <div style={{ minWidth: 720 }}>
             <Head

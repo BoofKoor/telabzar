@@ -120,6 +120,9 @@ export function Btn({
   danger = false,
   ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { solid?: boolean; danger?: boolean }) {
+  // `var(--zone)` نه `C.acc`: کنشِ اصلیِ هر صفحه باید هم‌رنگِ همان صفحه
+  // باشد، وگرنه روی صفحهٔ بنفش یک دکمهٔ سبز می‌نشیند که به هیچ‌چیز اشاره
+  // نمی‌کند. متغیر را پوسته می‌گذارد، پس این‌جا فقط خوانده می‌شود.
   const fg = danger ? C.bad : solid ? C.bg : C.ink
   return (
     <button
@@ -128,7 +131,7 @@ export function Btn({
       {...rest}
       style={{
         border: solid ? 0 : `1px solid ${danger ? '#4A2020' : C.edgeBtn}`,
-        background: solid ? C.acc : 'transparent',
+        background: solid ? 'var(--zone)' : 'transparent',
         color: fg,
         fontFamily: 'inherit',
         fontSize: 10,

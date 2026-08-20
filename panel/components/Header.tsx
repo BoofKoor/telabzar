@@ -24,6 +24,8 @@ export function Header({
   clock,
   ticker,
   extra,
+  accent = C.acc,
+  glow = 'rgba(0,229,153,.4)',
 }: {
   cmd: string
   ranges?: Range[]
@@ -32,6 +34,9 @@ export function Header({
   clock: string
   ticker: string
   extra?: ReactNode
+  /** لهجهٔ ناحیهٔ صفحه — پرامپت و مکان‌نما همان رنگ را می‌گیرند. */
+  accent?: string
+  glow?: string
 }) {
   return (
     <header
@@ -46,7 +51,7 @@ export function Header({
     >
       <div style={{ padding: '11px 18px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 0, minWidth: 0, fontSize: 12 }}>
-          <span style={{ color: C.acc, textShadow: '0 0 8px rgba(0,229,153,.4)' }}>root@telabzar</span>
+          <span style={{ color: accent, textShadow: `0 0 8px ${glow}` }}>root@telabzar</span>
           <span style={{ color: C.inkFaint }}>:</span>
           <span style={{ color: C.inkLo }}>/opt/telabzar</span>
           <span style={{ color: C.inkFaint }}>$&nbsp;</span>
@@ -55,10 +60,10 @@ export function Header({
             style={{
               width: 7,
               height: 14,
-              background: C.acc,
+              background: accent,
               display: 'inline-block',
               animation: 'mx-blink 1s step-end infinite',
-              boxShadow: '0 0 8px rgba(0,229,153,.6)',
+              boxShadow: `0 0 8px ${glow}`,
             }}
           />
         </div>
@@ -77,8 +82,8 @@ export function Header({
                     className="range-btn"
                     onClick={() => onRange?.(r)}
                     style={{
-                      border: `1px solid ${on ? C.acc : C.edgeBtn}`,
-                      background: on ? C.acc : 'transparent',
+                      border: `1px solid ${on ? accent : C.edgeBtn}`,
+                      background: on ? accent : 'transparent',
                       color: on ? C.bg : C.ink,
                       fontFamily: 'inherit',
                       fontSize: 10.5,
@@ -102,17 +107,17 @@ export function Header({
               gap: 6,
               fontSize: 10.5,
               letterSpacing: '.14em',
-              color: C.acc,
+              color: accent,
             }}
           >
             <i
               style={{
                 width: 6,
                 height: 6,
-                background: C.acc,
+                background: accent,
                 display: 'inline-block',
                 animation: 'mx-pulse 1.4s infinite',
-                boxShadow: `0 0 7px ${C.acc}`,
+                boxShadow: `0 0 7px ${accent}`,
               }}
             />
             LIVE

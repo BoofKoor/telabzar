@@ -37,7 +37,7 @@ export default function Page() {
           <option value="en">en · English</option>
           <option value="ar">ar · العربية</option>
         </Select>
-        <Chip color={C.acc}>{overridden} overridden</Chip>
+        <Chip color="var(--zone)">{overridden} overridden</Chip>
         <Chip>214 keys</Chip>
         <span style={{ marginLeft: 'auto', fontSize: 9.5, color: C.inkDim, letterSpacing: '.1em' }}>
           in-process dict · reloaded on the redis txtver counter
@@ -45,7 +45,7 @@ export default function Page() {
       </div>
 
       {groups.map((g) => (
-        <Section key={g.title} label={g.title.split('·')[0].trim()} right={`${g.n} keys in group`} pad="22px 14px 12px">
+        <Section key={g.title} label={g.title.split('·')[0].trim()} sigil="⌸" right={`${g.n} keys in group`} pad="22px 14px 12px">
           {g.rows.map((r, i) => (
             <div
               key={r.key}
@@ -58,7 +58,7 @@ export default function Page() {
                 fontSize: 11,
               }}
             >
-              <span style={{ width: 3, alignSelf: 'stretch', background: r.overridden ? C.acc : 'transparent', flexShrink: 0 }} />
+              <span style={{ width: 3, alignSelf: 'stretch', background: r.overridden ? 'var(--zone)' : 'transparent', flexShrink: 0 }} />
               <span style={{ width: 180, color: r.overridden ? C.inkHi : C.inkMid, flexShrink: 0, paddingTop: 5 }}>
                 {r.key}
               </span>
@@ -99,7 +99,7 @@ export default function Page() {
         </Section>
       ))}
 
-      <Section label="PLACEHOLDER CONTRACT" right="validated on write" pad="22px 14px 12px">
+      <Section label="PLACEHOLDER CONTRACT" sigil="⌘" right="validated on write" pad="22px 14px 12px">
         <div style={{ fontSize: 10.5, color: C.ink, lineHeight: 1.9 }}>
           An override keeps the source string&apos;s placeholders. An <b style={{ color: C.warn }}>unknown</b>{' '}
           placeholder is rejected here; a <b style={{ color: C.warn }}>missing</b> one is allowed on this page

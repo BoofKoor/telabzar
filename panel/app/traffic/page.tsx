@@ -10,6 +10,12 @@ import { ActivityMap } from '@/components/ActivityMap'
 import { Kpis } from '@/components/Kpis'
 import { Bar, Head, Row } from '@/components/ui'
 
+/** رنگِ هر پسوند — همان استدلالِ رنگِ پلتفرم: رنگ داده است، نه تزئین. */
+const EXT_HUE: Record<string, string> = {
+  mp4: '#FF5C5C', mp3: '#FF9F1C', jpg: '#4CC9F0',
+  pdf: '#C77DFF', zip: '#8CFFD6', other: '#7C9189',
+}
+
 /**
  * ۰۲ TRAFFIC — پاسخِ «در N روزِ گذشته چه گذشت؟»
  *
@@ -39,7 +45,7 @@ export default function Page() {
           <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
             <PlatformTable rows={vals.platformRows} />
 
-            <Section label="OP PERFORMANCE" right="src: jobs · no downloads" rightColor={C.warn} pad="22px 14px 12px">
+            <Section label="OP PERFORMANCE" sigil="⌾" right="src: jobs · no downloads" rightColor={C.warn} pad="22px 14px 12px">
               <Head
                 cols={[
                   { w: 88, label: 'OP' },
@@ -67,7 +73,7 @@ export default function Page() {
           </div>
 
           <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
-            <Section label="TOP ERRORS" labelColor={C.bad} edge={C.errEdge} bg={C.errBg} right="grouped verbatim" pad="22px 14px 12px">
+            <Section label="TOP ERRORS" sigil="☠" labelColor={C.bad} edge={C.errEdge} bg={C.errBg} right="grouped verbatim" pad="22px 14px 12px">
               {TOP_ERRORS.map((e, i) => (
                 <div
                   key={e.msg}
@@ -90,14 +96,14 @@ export default function Page() {
               </div>
             </Section>
 
-            <Section label="OUTPUT FORMATS" right="src: files" pad="22px 14px 12px">
+            <Section label="OUTPUT FORMATS" sigil="◨" right="src: files" pad="22px 14px 12px">
               {FORMATS.map((f, i) => (
                 <Row key={f.ext} last={i === FORMATS.length - 1}>
-                  <span style={{ width: 62, color: C.inkMid }}>{f.ext}</span>
+                  <span style={{ width: 62, color: EXT_HUE[f.ext] ?? C.inkMid }}>{f.ext}</span>
                   <span style={{ flex: 1 }}>
-                    <Bar pct={f.pct * 2} width={18} color={C.acc} />
+                    <Bar pct={f.pct * 2} width={18} color={EXT_HUE[f.ext] ?? C.acc} />
                   </span>
-                  <span style={{ width: 34, textAlign: 'right', color: C.acc }}>{f.pct}%</span>
+                  <span style={{ width: 34, textAlign: 'right', color: EXT_HUE[f.ext] ?? C.acc }}>{f.pct}%</span>
                   <span style={{ width: 58, textAlign: 'right', color: C.inkLo }}>
                     {f.n.toLocaleString('en-US')}
                   </span>

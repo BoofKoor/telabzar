@@ -37,6 +37,7 @@ export function Radar({
     ry: string
     rs: number
     dotColor: string
+    hue: string
     left: string
     top: string
     fill: string
@@ -51,7 +52,7 @@ export function Radar({
   onHover: (i: number | null) => void
 }) {
   return (
-    <Section label="SOURCE RADAR" pad="22px 14px 12px">
+    <Section label="SOURCE RADAR" sigil="⊚" pad="22px 14px 12px">
       <div style={{ position: 'relative', maxWidth: 400, margin: '0 auto' }}>
         <svg viewBox="0 0 320 268" style={{ width: '100%', height: 'auto', display: 'block' }}>
           <circle cx="160" cy="128" r="86" fill="none" stroke={C.ringSolid} strokeWidth="1" />
@@ -67,8 +68,22 @@ export function Radar({
             <line key={a.name} x1="160" y1="128" x2={a.ax} y2={a.ay} stroke={a.spoke} strokeWidth="1" />
           ))}
 
+          {/*
+            پرکردنِ چندضلعی با گرادیانِ زاویه‌ای، تا سهمِ هر پلتفرم رنگِ
+            خودش را داشته باشد. `gradientUnits="userSpaceOnUse"` لازم است
+            وگرنه مختصاتِ گرادیان به bounding boxِ چندضلعی نسبی می‌شود و با
+            تغییرِ داده جابه‌جا می‌شود.
+          */}
+          <defs>
+            <radialGradient id="radar-fill" gradientUnits="userSpaceOnUse" cx="160" cy="128" r="86">
+              <stop offset="0%" stopColor="rgba(255,255,255,.10)" />
+              <stop offset="55%" stopColor="rgba(0,229,153,.16)" />
+              <stop offset="100%" stopColor="rgba(199,125,255,.10)" />
+            </radialGradient>
+          </defs>
+
           <polygon points={prevPoly} fill="none" stroke={C.accDim} strokeWidth="1" strokeDasharray="4 4" />
-          <polygon points={poly} fill="rgba(0,229,153,.13)" stroke={C.acc} strokeWidth="1.5" />
+          <polygon points={poly} fill="url(#radar-fill)" stroke={C.acc} strokeWidth="1.5" />
 
           {radar.map((a) => (
             <rect

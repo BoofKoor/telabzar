@@ -74,7 +74,7 @@ export default function Page() {
             {k.toUpperCase()}
           </button>
         ))}
-        <Chip color={C.acc} border={C.edgeChip}>
+        <Chip color="var(--zone)" border={C.edgeChip}>
           {items.length - hidden.length} shown
         </Chip>
         {hidden.length > 0 && <Chip color={C.inkFaint}>{hidden.length} hidden</Chip>}
@@ -84,7 +84,7 @@ export default function Page() {
       </div>
 
       <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 340px', gap: 18, alignItems: 'start' }}>
-        <Section label="LAYOUT" right="order · style · width · visibility" pad="22px 14px 12px">
+        <Section label="LAYOUT" sigil="⌘" right="order · style · width · visibility" pad="22px 14px 12px">
           <div
             style={{
               display: 'flex',
@@ -182,7 +182,7 @@ export default function Page() {
           </div>
         </Section>
 
-        <Section label="TELEGRAM PREVIEW" right="as the user sees it" pad="22px 14px 14px">
+        <Section label="TELEGRAM PREVIEW" sigil="◱" corners right="as the user sees it" pad="22px 14px 14px">
           <div style={{ background: '#17212B', padding: 12, border: `1px solid ${C.edgeSoft}` }}>
             <div
               style={{

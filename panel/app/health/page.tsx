@@ -6,6 +6,7 @@ import { Shell } from '@/components/Shell'
 import { Section } from '@/components/Section'
 import { Queue } from '@/components/Sidebar'
 import { Bar, Chip, Flag, Head, Row } from '@/components/ui'
+import { hueOf } from '@/lib/zones'
 
 /**
  * ۰۳ HEALTH — «الان چه چیزی خراب است؟»
@@ -32,7 +33,7 @@ export default function Page() {
       {({ vals }) => (
         <>
           <div className="mx-trio" style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 18 }}>
-            <Section label="SERVICES" right="6 checked" pad="22px 14px 11px">
+            <Section label="SERVICES" sigil="◉" right="6 checked" corners pad="22px 14px 11px">
               {services.map((s, i) => (
                 <Row key={s.name} last={i === services.length - 1}>
                   <Flag text={s.flag} color={s.color} />
@@ -44,7 +45,7 @@ export default function Page() {
 
             <Queue queues={vals.queueRows} resources={vals.resources} />
 
-            <Section label="DISK · /work" right="412/900 GB" pad="22px 14px 12px">
+            <Section label="DISK · /work" sigil="▤" right="412/900 GB" pad="22px 14px 12px">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 9, fontSize: 11 }}>
                 {[
                   { k: 'used', v: '412 GB', pct: 46, c: C.acc },
@@ -77,7 +78,7 @@ export default function Page() {
           </div>
 
           <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
-            <Section label="DOWNLOAD RATE · TODAY (UTC)" right="dlstat:*" pad="22px 14px 12px">
+            <Section label="DOWNLOAD RATE · TODAY (UTC)" sigil="↓" right="dlstat:*" pad="22px 14px 12px">
               <Head cols={[{ w: 92, label: 'PLATFORM' }, { label: 'OK' }, { w: 88, label: 'OK / N', right: true }]} />
               {DL_RATE.map((d, i) => {
                 const n = d.ok + d.fail
@@ -85,7 +86,7 @@ export default function Page() {
                 const col = pct >= 90 ? C.acc : pct >= 75 ? C.warn : C.bad
                 return (
                   <Row key={d.platform} last={i === DL_RATE.length - 1}>
-                    <span style={{ width: 92, color: C.inkMid }}>{d.platform}</span>
+                    <span style={{ width: 92, color: hueOf(d.platform) }}>{d.platform}</span>
                     <span style={{ flex: 1 }}>
                       <Bar pct={pct} width={16} color={col} />
                     </span>
@@ -100,7 +101,7 @@ export default function Page() {
               </div>
             </Section>
 
-            <Section label="ENGINE VERSIONS" right="dlver:*" pad="22px 14px 12px">
+            <Section label="ENGINE VERSIONS" sigil="⚙" right="dlver:*" pad="22px 14px 12px">
               <Head cols={[{ w: 82, label: 'WHO' }, { w: 78, label: 'GALLERY-DL' }, { label: 'YT-DLP' }, { w: 58, label: '', right: true }]} />
               {ENGINES.map((e, i) => (
                 <Row key={e.who} last={i === ENGINES.length - 1}>
@@ -127,7 +128,7 @@ export default function Page() {
           </div>
 
           <Section
-            label="STUCK JOBS"
+            label="STUCK JOBS" sigil="⏳"
             labelColor={C.warn}
             edge={C.auditEdge}
             bg={C.auditBg}

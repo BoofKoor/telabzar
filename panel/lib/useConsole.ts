@@ -11,6 +11,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { C } from './theme'
+import { hueOf } from './zones'
 import {
   AUDIT, DATA, DAYS, ERRORS, JOB_POOL, PLATFORMS, RANGES,
   bigRows, fmt, gauge, hex, noise, pad2, rainColumns, spark,
@@ -139,10 +140,11 @@ export function useConsole(opts: ConsoleOptions = {}) {
         rx: (px - rs / 2).toFixed(1),
         ry: (py - rs / 2).toFixed(1),
         rs,
-        dotColor: on ? C.inkHi : C.acc,
+        hue: hueOf(p.name),
+        dotColor: on ? C.inkHi : hueOf(p.name),
         left: (((160 + 116 * cos) / 320) * 100).toFixed(2),
         top: (((128 + 110 * sin) / 268) * 100).toFixed(2),
-        fill: on ? C.inkHi : i === 0 ? C.acc : C.ink,
+        fill: on ? C.inkHi : hueOf(p.name),
         chipBg: on ? 'rgba(0,229,153,.12)' : 'transparent',
         spoke: on ? 'rgba(0,229,153,.5)' : C.ringDash,
         idx: i,
@@ -168,6 +170,7 @@ export function useConsole(opts: ConsoleOptions = {}) {
       name: p.name,
       n: fmt(p.n),
       spark: spark(pi * 7 + 5, 14, 0.25, 0.7, 0),
+      hue: hueOf(p.name),
       ok: `${p.ok}%`,
       okColor: p.ok >= 90 ? C.acc : p.ok >= 80 ? C.warn : C.bad,
     }))

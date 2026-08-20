@@ -72,9 +72,9 @@ export default function Page() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
               <Queue queues={vals.queueRows} resources={vals.resources} />
-              <FlagList label="SERVICES" rows={vals.services} />
-              <FlagList label="COOKIE POOL" right="2 degraded" rightColor={C.warn} rows={vals.cookies} truncate />
-              <FlagList label="NODES" rows={vals.nodes} footer={<WgFooter />} />
+              <FlagList label="SERVICES" sigil="◉" rows={vals.services} />
+              <FlagList label="COOKIE POOL" sigil="⌬" right="2 degraded" rightColor={C.warn} rows={vals.cookies} truncate />
+              <FlagList label="NODES" sigil="⎔" rows={vals.nodes} footer={<WgFooter />} />
               <Errors rows={vals.errors} />
               <Audit rows={vals.audit} />
             </div>

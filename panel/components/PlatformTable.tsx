@@ -5,10 +5,10 @@ import { Section } from './Section'
 export function PlatformTable({
   rows,
 }: {
-  rows: { name: string; n: string; spark: string; ok: string; okColor: string }[]
+  rows: { name: string; n: string; spark: string; ok: string; okColor: string; hue: string }[]
 }) {
   return (
-    <Section label="PLATFORM TABLE" pad="22px 0 0">
+    <Section label="PLATFORM TABLE" sigil="⌗" pad="22px 0 0">
       <div
         style={{
           display: 'flex',
@@ -39,12 +39,12 @@ export function PlatformTable({
           }}
         >
           <span
-            style={{ width: 74, color: C.inkMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            style={{ width: 74, color: p.hue, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
           >
             {p.name}
           </span>
           <span
-            style={{ flex: 1, color: C.acc, fontSize: 11.5, letterSpacing: '.02em', overflow: 'hidden', whiteSpace: 'nowrap' }}
+            style={{ flex: 1, color: p.hue, fontSize: 11.5, letterSpacing: '.02em', overflow: 'hidden', whiteSpace: 'nowrap' }}
           >
             {p.spark}
           </span>

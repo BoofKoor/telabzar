@@ -33,7 +33,7 @@ export default function Page() {
         </span>
       </div>
 
-      <Section label="NODES" right="heartbeat ttl 45s" pad="22px 14px 12px">
+      <Section label="NODES" sigil="⎔" right="heartbeat ttl 45s" corners pad="22px 14px 12px">
         <Head
           cols={[
             { w: 46, label: '' },
@@ -67,7 +67,7 @@ export default function Page() {
       </Section>
 
       <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
-        <Section label="ADD NODE" right="one-time token · 30 min" pad="22px 14px 12px">
+        <Section label="ADD NODE" sigil="✚" right="one-time token · 30 min" pad="22px 14px 12px">
           <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
             <Input placeholder="name (e.g. dl-ams)" style={{ width: 170 }} />
             <Select defaultValue="download" style={{ width: 140 }}>
@@ -87,7 +87,7 @@ export default function Page() {
           </div>
         </Section>
 
-        <Section label="WG MESH" right="10.51.0.1 · master" pad="22px 14px 12px">
+        <Section label="WG MESH" sigil="⌸" right="10.51.0.1 · master" pad="22px 14px 12px">
           <pre style={{ fontFamily: 'inherit', fontSize: 11, lineHeight: 2, color: C.inkLo }}>
             {`master 10.51.0.1 ─┬─ `}
             <span style={{ color: C.acc }}>dl-fra</span>
@@ -120,7 +120,7 @@ export default function Page() {
       </div>
 
       <Section
-        label="AFTER A CODE CHANGE"
+        label="AFTER A CODE CHANGE" sigil="⚠"
         labelColor={C.warn}
         edge={C.auditEdge}
         bg={C.auditBg}

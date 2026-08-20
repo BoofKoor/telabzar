@@ -38,7 +38,7 @@ export default function Page() {
           placeholder="grep key…"
           style={{ width: 220 }}
         />
-        <Chip color={C.acc} border={C.edgeChip}>
+        <Chip color="var(--zone)" border={C.edgeChip}>
           {changed} changed
         </Chip>
         <Chip>{total} keys</Chip>
@@ -48,7 +48,7 @@ export default function Page() {
       </div>
 
       {groups.map((g) => (
-        <Section key={g.title} label={g.title} right={`${g.rows.length} keys · ${g.tag}_*`} pad="22px 14px 12px">
+        <Section key={g.title} label={g.title} sigil="⛭" right={`${g.rows.length} keys · ${g.tag}_*`} pad="22px 14px 12px">
           {g.rows.map((r, i) => {
             const dirty = r.val !== r.def
             return (
@@ -63,7 +63,7 @@ export default function Page() {
                   fontSize: 11,
                 }}
               >
-                <span style={{ width: 3, alignSelf: 'stretch', background: dirty ? C.acc : 'transparent', flexShrink: 0 }} />
+                <span style={{ width: 3, alignSelf: 'stretch', background: dirty ? 'var(--zone)' : 'transparent', flexShrink: 0 }} />
                 <span style={{ width: 210, color: dirty ? C.inkHi : C.inkMid, flexShrink: 0 }}>{r.key}</span>
 
                 {r.kind === 'enum' ? (

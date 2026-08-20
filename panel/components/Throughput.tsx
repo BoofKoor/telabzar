@@ -27,7 +27,7 @@ export function Throughput({
   latNow: number
 }) {
   return (
-    <Section label={`THROUGHPUT · ${rangeLabel}`} right={`peak ${peak} · avg ${avg}`} pad="24px 14px 12px">
+    <Section label={`THROUGHPUT · ${rangeLabel}`} sigil="▲" right={`peak ${peak} · avg ${avg}`} pad="24px 14px 12px">
       <div style={{ display: 'flex', gap: 10 }}>
         <div
           style={{

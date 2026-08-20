@@ -2,6 +2,7 @@
 
 import { C } from '@/lib/theme'
 import { NAV } from '@/lib/nav'
+import { ZONES, zoneOf } from '@/lib/zones'
 
 /**
  * ریلِ چپ: نامِ بلوکیِ ASCII، ناوبریِ شماره‌دارِ گروه‌بندی‌شده، درختِ WG،
@@ -57,9 +58,18 @@ export function Rail({ rain, active }: { rain: { chars: string; dur: string }[];
       <div className="mx-railnav" style={{ display: 'flex', flexDirection: 'column', gap: 1, padding: 8 }}>
         {NAV.map((g, gi) => (
           <div key={g.group} style={{ display: 'contents' }}>
-            <div style={{ ...groupLabel, padding: gi === 0 ? '6px 7px 5px' : '12px 7px 5px' }}>▚ {g.group}</div>
+            <div
+              style={{
+                ...groupLabel,
+                padding: gi === 0 ? '6px 7px 5px' : '12px 7px 5px',
+                color: ZONES[g.group].dim,
+              }}
+            >
+              ▚ {g.group}
+            </div>
             {g.items.map((it) => {
               const on = it.n === active
+              const z = zoneOf(it.n)
               return (
                 <a
                   key={it.n}
@@ -74,13 +84,14 @@ export function Rail({ rain, active }: { rain: { chars: string; dur: string }[];
                     ...(on
                       ? {
                           color: C.bg,
-                          background: C.acc,
+                          background: z.acc,
                           fontWeight: 700,
-                          boxShadow: '0 0 14px rgba(0,229,153,.28)',
+                          boxShadow: `0 0 14px ${z.glow}`,
                         }
                       : { color: C.ink, borderLeft: '2px solid transparent' }),
                   }}
                 >
+                  <span style={{ color: on ? C.bg : z.acc, width: 11, textAlign: 'center' }}>{it.sig}</span>
                   <span style={on ? undefined : { color: C.inkFaint }}>{it.n}</span>
                   {it.label}
                   {on && <span style={{ marginLeft: 'auto' }}>◂</span>}

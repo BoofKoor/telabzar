@@ -9,7 +9,7 @@ export function Pipeline({
 }) {
   return (
     <Section
-      label="PIPELINE"
+      label="PIPELINE" sigil="⚡"
       right="end-to-end p50 41s"
       pad="24px 14px 16px"
       style={{ background: `linear-gradient(90deg,${C.panel},#06110E,${C.panel})` }}

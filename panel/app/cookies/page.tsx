@@ -29,7 +29,7 @@ export default function Page() {
   return (
     <Shell active="06" cmd="./ctl cookies --pool" bits={false}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <Chip color={C.acc}>{usable} usable</Chip>
+        <Chip color="var(--zone)">{usable} usable</Chip>
         <Chip>{all.length} accounts</Chip>
         <Chip color={C.warn} border="#3A2E14">
           2 degraded
@@ -41,7 +41,7 @@ export default function Page() {
 
       {attention.length > 0 && (
         <Section
-          label="NEEDS A HUMAN"
+          label="NEEDS A HUMAN" sigil="☠"
           labelColor={C.bad}
           edge={C.errEdge}
           bg={C.errBg}
@@ -67,6 +67,7 @@ export default function Page() {
         <Section
           key={p.platform}
           label={p.platform.toUpperCase()}
+          sigil="⌬"
           right={`${p.accounts.length} accounts`}
           pad="22px 14px 12px"
         >
@@ -126,7 +127,7 @@ export default function Page() {
         بازتولید می‌کند که ماه‌ها هر ۶ ساعت DM می‌فرستاد. یک خط کافی است.
       */}
       {empty.length > 0 && (
-        <Section label="UNSTOCKED BUCKETS" right={`${empty.length} · not an alarm`} pad="22px 14px 12px">
+        <Section label="UNSTOCKED BUCKETS" sigil="○" right={`${empty.length} · not an alarm`} pad="22px 14px 12px">
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 9 }}>
             {empty.map((p) => (
               <Chip key={p.platform} color={C.inkFaint}>
@@ -143,7 +144,7 @@ export default function Page() {
       )}
 
       <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
-        <Section label="ADD ACCOUNT" right="paste, not upload" pad="22px 14px 12px">
+        <Section label="ADD ACCOUNT" sigil="✚" right="paste, not upload" pad="22px 14px 12px">
           <div style={{ display: 'flex', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
             <Select defaultValue="instagram" style={{ width: 140 }}>
               {COOKIE_POOL.map((p) => (
@@ -175,7 +176,7 @@ export default function Page() {
           </div>
         </Section>
 
-        <Section label="YOUTUBE EXPORT PROCEDURE" right="matters more than pool logic" rightColor={C.warn} pad="22px 14px 12px">
+        <Section label="YOUTUBE EXPORT PROCEDURE" sigil="⚠" right="matters more than pool logic" rightColor={C.warn} pad="22px 14px 12px">
           <div style={{ fontSize: 10.5, color: C.ink, lineHeight: 2 }}>
             YouTube <b style={{ color: C.warn }}>rotates</b> cookies on a still-open session, so an
             export from a normal window dies within hours.

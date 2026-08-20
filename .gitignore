@@ -51,4 +51,5 @@ panel/node_modules/
 panel/.next/
 panel/out/
 panel/next-env.d.ts
+panel/tsconfig.tsbuildinfo
 app/static/console/

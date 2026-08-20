@@ -12,9 +12,17 @@ import { C } from '@/lib/theme'
  */
 export function Section({
   label,
+  sigil,
   right,
   rightColor = C.inkLo,
-  labelColor = C.acc,
+  /**
+   * پیش‌فرض `var(--zone)` است نه یک hex: پوسته آن متغیر را روی ریشهٔ صفحه
+   * می‌گذارد، پس **یک** خط در `Shell` رنگِ همهٔ سکشن‌های آن صفحه را عوض
+   * می‌کند. جایگزینش پاس‌دادنِ رنگ به ده‌ها فراخوانی بود، یعنی همان
+   * «قاعده‌ای که در N نقطه دست‌نویس شده».
+   */
+  labelColor,
+  corners = false,
   edge = C.edge,
   bg = C.panel,
   pad = '22px 14px 12px',
@@ -22,9 +30,13 @@ export function Section({
   children,
 }: {
   label: string
+  /** نویسهٔ نشانه، پیش از نامِ سکشن. */
+  sigil?: string
   right?: ReactNode
   rightColor?: string
   labelColor?: string
+  /** گوشه‌های براکتیِ `◤◥◣◢` — فقط برای کارتِ کانونیِ هر صفحه. */
+  corners?: boolean
   edge?: string
   bg?: string
   pad?: string
@@ -44,11 +56,22 @@ export function Section({
           padding: '0 8px',
           fontSize: 9.5,
           letterSpacing: '.2em',
-          color: labelColor,
+          color: labelColor ?? 'var(--zone)',
         }}
       >
-        [ {label} ]
+        [{' '}
+        {sigil && (
+          // سیجیل `span`ِ خودش را دارد چون در برچسبِ ۹٫۵پیکسلی با
+          // `letter-spacing: .2em` گم می‌شود: نویسه‌های یونیکد از fallbackِ
+          // سیستم می‌آیند و در آن اندازه ریز و بی‌وزن‌اند. کمی بزرگ‌تر و
+          // بدونِ فاصله‌گذاری، هم دیده می‌شود هم ردیفِ برچسب را به هم نمی‌زند.
+          <span style={{ fontSize: 11.5, letterSpacing: 0, verticalAlign: '-1px', marginInlineEnd: 5 }}>
+            {sigil}
+          </span>
+        )}
+        {label} ]
       </div>
+      {corners && <Corners color={labelColor ?? 'var(--zone)'} />}
       {right !== undefined && (
         <div
           style={{
@@ -66,5 +89,24 @@ export function Section({
       )}
       {children}
     </section>
+  )
+}
+
+/**
+ * گوشه‌های براکتی.
+ *
+ * عمداً فقط روی **کارتِ کانونیِ** هر صفحه: اگر همه بگیرند، دیگر هیچ‌کدام
+ * برجسته نیست و فقط نویز اضافه شده. همان استدلالِ رنگِ ناحیه‌ای — نشانه
+ * وقتی کار می‌کند که کمیاب باشد.
+ */
+function Corners({ color }: { color: string }) {
+  const base = { position: 'absolute' as const, fontSize: 9, lineHeight: 1, color, opacity: 0.75 }
+  return (
+    <>
+      <span style={{ ...base, top: 3, left: 3 }}>◤</span>
+      <span style={{ ...base, top: 3, right: 3 }}>◥</span>
+      <span style={{ ...base, bottom: 3, left: 3 }}>◣</span>
+      <span style={{ ...base, bottom: 3, right: 3 }}>◢</span>
+    </>
   )
 }

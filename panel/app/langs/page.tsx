@@ -24,7 +24,7 @@ export default function Page() {
   return (
     <Shell active="10" cmd="./ctl langs --list" bits={false}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <Chip color={C.acc}>{LANGS.length} languages</Chip>
+        <Chip color="var(--zone)">{LANGS.length} languages</Chip>
         <Chip>2 built-in</Chip>
         <Chip>214 keys each</Chip>
         <span style={{ marginLeft: 'auto', fontSize: 9.5, color: C.inkDim, letterSpacing: '.1em' }}>
@@ -32,7 +32,7 @@ export default function Page() {
         </span>
       </div>
 
-      <Section label="LANGUAGES" right="ordered by name, code" pad="22px 14px 12px">
+      <Section label="LANGUAGES" sigil="⟐" corners right="ordered by name, code" pad="22px 14px 12px">
         <Head
           cols={[
             { w: 70, label: 'CODE' },
@@ -78,7 +78,7 @@ export default function Page() {
       </Section>
 
       <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
-        <Section label="IMPORT A PACK" right="export == import" pad="22px 14px 12px">
+        <Section label="IMPORT A PACK" sigil="⇩" right="export == import" pad="22px 14px 12px">
           <div style={{ display: 'flex', gap: 8, marginBottom: 9, flexWrap: 'wrap', alignItems: 'center' }}>
             <Input placeholder="code (e.g. es, pt-BR)" style={{ width: 170 }} />
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: C.inkLo }}>
@@ -110,7 +110,7 @@ export default function Page() {
           </div>
         </Section>
 
-        <Section label="THE LOOP" right="one file, one chat-bot" pad="22px 14px 12px">
+        <Section label="THE LOOP" sigil="⟳" right="one file, one chat-bot" pad="22px 14px 12px">
           <Cmd>{`1  EXPORT fa      → telabzar-fa.json  (17,691 B)
 2  paste into any LLM with the
    instruction that ships inside

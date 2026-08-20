@@ -10,7 +10,7 @@ import { Section } from './Section'
  */
 export function WireMonitor({ lines }: { lines: { addr: string; hex: string; ascii: string }[] }) {
   return (
-    <Section label="WIRE MONITOR" right="xxd · gateway :2096" pad="22px 14px 14px">
+    <Section label="WIRE MONITOR" sigil="⌇" right="xxd · gateway :2096" pad="22px 14px 14px">
       {lines.map((h) => (
         <div
           key={h.addr}

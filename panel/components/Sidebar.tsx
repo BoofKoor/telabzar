@@ -11,7 +11,7 @@ export function Queue({
   resources: { label: string; meta: string; color: string; bar: Gauge }[]
 }) {
   return (
-    <Section label="QUEUE" pad="22px 14px 13px">
+    <Section label="QUEUE" sigil="≡" pad="22px 14px 13px">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {queues.map((q) => (
           <div key={q.label} style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 11 }}>
@@ -60,6 +60,7 @@ export function Queue({
  */
 export function FlagList({
   label,
+  sigil,
   right,
   rightColor,
   rows,
@@ -67,6 +68,7 @@ export function FlagList({
   footer,
 }: {
   label: string
+  sigil?: string
   right?: string
   rightColor?: string
   rows: FlagRow[]
@@ -74,7 +76,7 @@ export function FlagList({
   footer?: React.ReactNode
 }) {
   return (
-    <Section label={label} right={right} rightColor={rightColor} pad={footer ? '22px 14px 12px' : '22px 14px 11px'}>
+    <Section label={label} sigil={sigil} right={right} rightColor={rightColor} pad={footer ? '22px 14px 12px' : '22px 14px 11px'}>
       {rows.map((s) => (
         <div
           key={s.name}
@@ -133,7 +135,7 @@ export function WgFooter() {
 /** خطاهای ۲۴ ساعت — تنها کارتی که کادر و زمینهٔ قرمز دارد. */
 export function Errors({ rows }: { rows: ErrRow[] }) {
   return (
-    <Section label="ERRORS · 24H" labelColor={C.bad} edge={C.errEdge} bg={C.errBg} pad="22px 14px 11px">
+    <Section label="ERRORS · 24H" sigil="☠" labelColor={C.bad} edge={C.errEdge} bg={C.errBg} pad="22px 14px 11px">
       {rows.map((e) => (
         <div
           key={e.msg}
@@ -160,7 +162,7 @@ export function Errors({ rows }: { rows: ErrRow[] }) {
 /** ردِ تغییراتِ ادمین — کادرِ کهربایی. */
 export function Audit({ rows }: { rows: AuditRow[] }) {
   return (
-    <Section label="AUDIT TRAIL" labelColor={C.warn} edge={C.auditEdge} bg={C.auditBg} pad="22px 14px 11px">
+    <Section label="AUDIT TRAIL" sigil="⎇" labelColor={C.warn} edge={C.auditEdge} bg={C.auditBg} pad="22px 14px 11px">
       {rows.map((a) => (
         <div
           key={a.t}

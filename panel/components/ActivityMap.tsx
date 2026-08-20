@@ -4,7 +4,7 @@ import { Section } from './Section'
 /** نقشهٔ حرارتیِ ۷ روز × ۲۴ ساعت، با راهنمای پنج‌پله‌ای در پاورقی. */
 export function ActivityMap({ heat }: { heat: { day: string; cells: { bg: string; tip: string }[] }[] }) {
   return (
-    <Section label="ACTIVITY MAP · 7D × 24H" pad="24px 14px 14px">
+    <Section label="ACTIVITY MAP · 7D × 24H" sigil="▦" pad="24px 14px 14px">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {heat.map((row) => (
           <div key={row.day} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
