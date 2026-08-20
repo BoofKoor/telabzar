@@ -1,11 +1,19 @@
-{% extends "base.html" %}{% block title %}تنظیمات{% endblock %}{% block heading %}تنظیمات{% endblock %}
+{% extends "base.html" %}{% import "_icons.html" as I %}
+{% block title %}{{ pt('nav.settings') }}{% endblock %}
+{% block heading %}{{ pt('page.settings') }}{% endblock %}
+{% block tick %}
+  <span><i>&gt;</i> ./ctl config --live</span>
+  <span>{{ groups|length }} groups</span>
+  <span>no restart required</span>
+  <span>q {{health.q_main}}/{{health.q_proc}}/{{health.q_dl}}</span>
+{% endblock %}
 {% block body %}<div class=grid2>
 <div class=col>
-  {% if saved %}<div class=saved>✅ تغییرات ذخیره شد (بدونِ ری‌استارت اعمال شد).</div>{% endif %}
-  {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
+  {% if saved %}<div class=saved>{{ I.ico('check', '13px') }} تغییرات ذخیره شد — بدونِ ری‌استارت اعمال شد.</div>{% endif %}
+  {% if error %}<div class=errbox>{{error}}</div>{% endif %}
   <form method=post action=/save>
   {% for title, fields in groups %}
-    <div class=card><h3>{{title}}{% if loop.first %}<span class=tag>بدونِ ری‌استارت</span>{% endif %}</h3><div class=rows>
+    <div class=card><h3>{{ I.ico(gicon.get(title, 'sliders')) }}{{title}}{% if loop.first %}<span class=tag>بدونِ ری‌استارت</span>{% endif %}</h3><div class=rows>
     {% for key, label, hint in fields %}
       <div class=row><label>{{label}}{% if hint %}<small>{{hint}}</small>{% endif %}</label>
       {% set kind = meta[key][0] %}
@@ -15,12 +23,12 @@
       </select>
       {% elif key in longtext %}<textarea class="ta-inline" name="{{key}}" rows=3
         dir=ltr spellcheck=false>{{v[key]}}</textarea>
-      {% else %}<input class=inp name="{{key}}" value="{{v[key]}}">{% endif %}
+      {% else %}<input class="inp num" name="{{key}}" value="{{v[key]}}">{% endif %}
       </div>
     {% endfor %}
     </div></div>
   {% endfor %}
-    <button class=save>ذخیرهٔ تغییرات</button>
+    <div class=card><button class=save>ذخیرهٔ تغییرات</button></div>
   </form>
 </div>
 <div class=col>{% include "_health_cards.html" %}</div>

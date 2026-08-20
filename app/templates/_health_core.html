@@ -1,0 +1,25 @@
+{% import "_icons.html" as I %}
+<div class=card><h3>{{ I.ico('pulse') }}سلامتِ سرویس‌ها</h3><div class=rows>
+  <div class=svc>{{ I.ico('db') }}<span class="mono">Postgres</span>
+    <span class="badge {{'ok' if health.postgres else 'warn'}}">{{ pt('h.online') if health.postgres else pt('h.error') }}</span></div>
+  <div class=svc>{{ I.ico('zap') }}<span class="mono">Redis</span>
+    <span class="badge {{'ok' if health.redis else 'warn'}}">{{ pt('h.online') if health.redis else pt('h.error') }}</span></div>
+  <div class=svc>{{ I.ico('key') }}<span>pot-provider (یوتیوب)</span>
+    {% if health.pot is none %}<span class="badge dim">{{ pt('h.unset') }}</span>
+    {% elif health.pot == "?" %}<span class="badge dim">{{ pt('h.probing') }}</span>
+    {% else %}<span class="badge {{'ok' if health.pot else 'warn'}}">{{ pt('h.online') if health.pot else pt('h.error') }}</span>{% endif %}</div>
+</div></div>
+
+<div class=card><h3>{{ I.ico('inbox') }}صف و دیسک</h3>
+  <div class=mini>
+    <div class=kpi><b>{{health.q_main}}</b><span>صفِ پردازش</span></div>
+    <div class=kpi><b>{{health.q_proc}}</b><span>صفِ نودِ پردازش</span></div>
+    <div class=kpi><b>{{health.q_dl}}</b><span>صفِ دانلود</span></div>
+    <div class=kpi><b>{{health.dl_active}}</b><span>دانلودِ فعال</span></div>
+  </div>
+  {% if health.disk_total %}<div class=rows>
+    <div class=stat><b>/work</b>
+      <div class=meter><i style="width:{{health.disk_pct}}%;background:{{'var(--bad)' if health.disk_pct>85 else 'var(--acc)'}}"></i></div>
+      <span class=num>{{health.disk_used}}/{{health.disk_total}}G</span></div>
+  </div>{% endif %}
+</div>

@@ -1,62 +1,58 @@
-{% extends "base.html" %}{% block title %}کلیدها{% endblock %}{% block heading %}استایل و چیدمانِ کلیدها{% endblock %}
-{% block style %}
-.tgprev{background:linear-gradient(135deg,#dbeafe,#eef4fb);border:1px solid #cddcf0;border-radius:16px;padding:14px}
-.tgmsg{background:#fff;border-radius:12px;padding:8px 12px;font-size:12.5px;color:#334155;margin-bottom:8px;display:inline-block}
-.tgrow{display:flex;gap:6px;margin-bottom:6px}
-.tgb{flex:1;display:flex;align-items:center;justify-content:center;padding:9px 8px;border-radius:8px;font-size:12.5px;font-weight:600;background:#f1f5f9;color:#1e293b;text-align:center}
-.tgb.hid{opacity:.4;border:1px dashed #94a3b8;background:#fff}
-.bt-row{display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px dashed #eef2f7;background:#fff;border-radius:8px}
-.bt-row .grip{color:#94a3b8;font-size:18px;cursor:grab;letter-spacing:-3px;user-select:none}
-.bt-row .op{font-size:10.5px;color:#94a3b8;min-width:70px}
-.bt-row .inp{height:32px}.bt-row .sel{height:32px}
-.bt-row.dragging{opacity:.4;background:#f0fdfa}
-.bt-head{display:flex;gap:8px;color:#94a3b8;font-size:11px;padding:2px 4px 6px;border-bottom:1px solid var(--line)}
+{% extends "base.html" %}{% import "_icons.html" as I %}
+{% block title %}{{ pt('nav.buttons') }}{% endblock %}
+{% block heading %}{{ pt('page.buttons') }}{% endblock %}
+{% block tick %}
+  <span><i>&gt;</i> ./ctl keyboard --kind {{kind}}</span>
+  <span>buttons {{items|length}}</span>
+  <span>lang {{lang_sel}}</span>
+  <span>live, no restart</span>
 {% endblock %}
 {% block body %}
 <div class=card>
-  <h3>📱 پیش‌نمایشِ زنده <span class=tag>همان‌طور که کاربر می‌بیند</span></h3>
+  <h3>{{ I.ico('palette') }}پیش‌نمایشِ زنده <span class=tag>همان‌طور که کاربر می‌بیند</span></h3>
   <div class=tabs>
-    {% for k, label in kinds %}<a class="tab {% if k==kind %}on{% endif %}" href="/buttons?kind={{k}}&lang={{lang}}">{{label}}</a>{% endfor %}
+    {% for k, label in kinds %}<a class="tab {% if k==kind %}on{% endif %}" href="/buttons?kind={{k}}&lang={{lang_sel}}">{{label}}</a>{% endfor %}
   </div>
   <div class=pad>
     <div class=tgprev>
       <div class=tgmsg>{{prev_msg}}</div>
       <div id=prevkeys>
         {% for row in pv_rows %}<div class=tgrow>{% for b in row %}<span class="tgb {{b.cls}}" {% if b.color %}style="background:{{b.color}};color:#fff"{% endif %}>{{b.text}}</span>{% endfor %}</div>{% endfor %}
-        {% if hidden_items %}<div class=tgrow>{% for it in hidden_items %}<span class="tgb hid">👁‍🗨 {{it.text}}</span>{% endfor %}</div>{% endif %}
+        {% if hidden_items %}<div class=tgrow>{% for it in hidden_items %}<span class="tgb hid">{{it.text}}</span>{% endfor %}</div>{% endif %}
         <div class=tgrow><span class="tgb">{{close_label}}</span></div>
       </div>
     </div>
   </div>
 </div>
 <div class=card>
-  <h3>✏️ چیدمان و استایلِ منوی «{{kindlabel}}» <span class=tag>بکش برای جابه‌جایی · بی‌ری‌استارت</span></h3>
-  <div class=hint>متن · رنگ (آبی/سبز/قرمز) · ایموجیِ پرمیوم · عرض (تمام/نصف/یک‌سوم؛ ردیف‌ها را می‌سازد) · نمایش. زبانِ متن:
-    <select class=sel style="height:30px" onchange="location.href='/buttons?kind={{kind}}&lang='+this.value">
+  <h3>{{ I.ico('sliders') }}چیدمان و استایلِ منوی «{{kindlabel}}»
+    <span class=tag>بکش برای جابه‌جایی · بی‌ری‌استارت</span></h3>
+  <div class=hint>متن · رنگ · ایموجیِ پرمیوم · عرض (تمام/نصف/یک‌سوم) · نمایش. زبانِ متن:
+    <select class=sel style="height:26px" onchange="location.href='/buttons?kind={{kind}}&lang='+this.value">
       {% for code, nm in langs.items() %}
-      <option value="{{code}}" {% if lang==code %}selected{% endif %}>{{nm}}</option>
+      <option value="{{code}}" {% if lang_sel==code %}selected{% endif %}>{{nm}}</option>
       {% endfor %}</select></div>
-  {% if saved %}<div class=saved>✅ {{saved}}</div>{% endif %}
-  {% if error %}<div class=errbox>⚠️ {{error}}</div>{% endif %}
+  {% if saved %}<div class=saved>{{ I.ico('check', '13px') }} {{saved}}</div>{% endif %}
+  {% if error %}<div class=errbox>{{error}}</div>{% endif %}
   <form method=post action=/buttons/save id=btnform>
     <input type=hidden name=kind value="{{kind}}">
-    <input type=hidden name=lang value="{{lang}}">
+    <input type=hidden name=lang value="{{lang_sel}}">
     <input type=hidden name=order id=orderfield value="{{ items|map(attribute='op')|join(',') }}">
-    <div class=pad style="padding-top:2px">
-      <div class=bt-head><span style="width:22px"></span><span style="width:70px">op</span><span style="flex:1">متن</span>
+    <div class=pad>
+      <div class=bt-head><span style="width:20px"></span><span style="width:76px">op</span><span style="flex:1">متن</span>
         <span style="width:96px">رنگ</span><span style="width:96px">ایموجی</span><span style="width:104px">عرض</span><span style="width:44px">نمایش</span></div>
       <div id=rowlist>
       {% for it in items %}
         <div class=bt-row data-op="{{it.op}}">
           <span class=grip>⠿</span>
           <span class=op>{{it.op}}</span>
-          <input class=inp name="text_{{it.op}}" value="{{it.text}}" style="flex:1;min-width:90px">
+          <input class=inp name="text_{{it.op}}" value="{{it.text}}" style="flex:1;min-width:90px;text-align:start">
           <select class=sel name="style_{{it.op}}" style="width:96px">
             <option value="" {% if not it.style %}selected{% endif %}>—</option>
             <option value=primary {% if it.style=='primary' %}selected{% endif %}>آبی</option>
             <option value=success {% if it.style=='success' %}selected{% endif %}>سبز</option>
             <option value=danger {% if it.style=='danger' %}selected{% endif %}>قرمز</option></select>
-          <input class=inp name="emoji_{{it.op}}" value="{{it.emoji}}" inputmode=numeric placeholder="—" style="width:96px;text-align:center">
+          <input class="inp num" name="emoji_{{it.op}}" value="{{it.emoji}}" inputmode=numeric placeholder="—" style="width:96px">
           <select class=sel name="width_{{it.op}}" style="width:104px">
             <option value=full {% if it.width=='full' %}selected{% endif %}>تمام‌عرض</option>
             <option value=half {% if it.width=='half' %}selected{% endif %}>نصف</option>
@@ -67,7 +63,7 @@
       </div>
     </div>
     <button class=save>ذخیرهٔ منوی «{{kindlabel}}»</button>
-    <button class=btn-sm formaction=/buttons/reset style="margin:0 18px 18px">بازگشت به چیدمانِ پیش‌فرضِ این منو</button>
+    <div class=pad><button class=btn-sm formaction=/buttons/reset>بازگشت به چیدمانِ پیش‌فرضِ این منو</button></div>
   </form>
 </div>
 <script>

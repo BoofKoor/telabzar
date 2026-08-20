@@ -1,0 +1,28 @@
+{% import "_icons.html" as I %}
+{# پنجره **ثابت و یک‌روزه** است: `_health` کلیدِ `dlstat:{p}:ok:{روزِ جاریِ UTC}` را
+   می‌خواند، در حالی که `_metric` با TTLِ **دو روز** می‌نویسد. پس این کارت با یک
+   `KEYS dlstat:*`ِ دستی مستقیماً قابلِ مقایسه نیست و همین یک بار اپراتور را
+   گمراه کرد («۳۳٪ · ۱ از ۳» این‌جا در برابرِ ۱۱ و ۷ در Redis — دو پنجرهٔ
+   متفاوت، نه دو منبعِ متفاوت). و «امروز» برای کاربرِ ایرانی هم بس نیست: روزِ
+   UTC با روزِ تهران یکی نیست و ساعت‌های اولِ شب از قبل فردای UTCاند. #}
+<div class=card><h3>{{ I.ico('chart') }}نرخِ موفقیتِ دانلود <span class=tag>{{ pt('h.today_utc') }}</span></h3><div class=rows>
+  {% if health.hosts %}{% for h in health.hosts %}
+    <div class=stat><b>{{ pfa.get(h.name, h.name) }}</b>
+      <div class=meter><i style="width:{{h.rate}}%;background:{{'var(--acc)' if h.rate>=70 else 'var(--warn)'}}"></i></div>
+      <span class=num>{{h.rate}}% · {{h.ok}}/{{h.ok+h.fail}}</span></div>
+  {% endfor %}{% else %}<div class=empty>هنوز دانلودی امروز ثبت نشده.</div>{% endif %}
+</div></div>
+
+<div class=card><h3>{{ I.ico('terminal') }}نسخهٔ موتورهای دانلود</h3><div class=rows>
+  {% if health.engines %}{% for e in health.engines %}
+    {# کلِ این سلول یک رشتهٔ لاتینِ خالص است → `.mono` که خودش `direction:ltr`
+       را اجبار می‌کند. با ایزولهٔ تنها، ترتیبِ دو موتور در پاراگرافِ RTL
+       برعکس می‌شد. #}
+    <div class=row><label>{{ e.who }}<small>گزارش‌شده سرِ استارتِ ورکر</small></label>
+      <span class="mono">gallery-dl {{ e['gallery-dl'] or '—' }} · yt-dlp {{ e['yt-dlp'] or '—' }}</span></div>
+  {% endfor %}
+  <div class=hint>{{ I.ico('alert', '12px') }}وقتی یک پلتفرم «پاسخِ نامعتبر» می‌دهد، اول این‌جا را ببین.
+    اگر موتور قدیمی است روی مستر <span class=mono>telabzar update</span> بزن و روی نود
+    <span class=mono>node/update.sh</span> — وگرنه سشن باید عوض شود.</div>
+  {% else %}<div class=empty>{{ pt('h.no_engine') }}</div>{% endif %}
+</div></div>

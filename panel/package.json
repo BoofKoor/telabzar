@@ -1,0 +1,23 @@
+{
+  "name": "telabzar-console",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Telabzar admin console — Next.js front-end, exported statically and served by the aiohttp panel.",
+  "scripts": {
+    "dev": "next dev -p 3010",
+    "build": "next build",
+    "start": "next start -p 3010",
+    "export:panel": "next build && rm -rf ../app/static/console && cp -r out ../app/static/console"
+  },
+  "dependencies": {
+    "next": "^15.5.23",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "typescript": "5.7.2"
+  }
+}

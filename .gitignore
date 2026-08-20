@@ -42,3 +42,14 @@ cookies/*
 
 # pytest
 .pytest_cache/
+
+# ── کنسولِ Next (panel/) ────────────────────────────────────────────────
+# سورس کامیت می‌شود، خروجیِ build نه. باندل‌های هش‌دار با هر تغییرِ طراحی
+# عوض می‌شوند و دیف را بی‌معنا می‌کنند؛ در تولید مرحلهٔ Node در
+# `docker/admin.Dockerfile` می‌سازدشان و در توسعه `npm run export:panel`.
+panel/node_modules/
+panel/.next/
+panel/out/
+panel/next-env.d.ts
+panel/tsconfig.tsbuildinfo
+app/static/console/

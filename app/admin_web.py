@@ -9,12 +9,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import base64
 import glob
 import hashlib
 import hmac
 import json
 import logging
+import mimetypes
 import os
 import pathlib
 import re
@@ -51,6 +53,10 @@ from .i18n import (
 )
 from .keyboards import OPS_BY_KIND
 from .models import DownloadCache, File, Job, Node, User
+from .panel_i18n import DIR as _PANEL_DIR_OF
+from .panel_i18n import LANGS as PANEL_LANGS
+from .panel_glyphs import lcd as _lcd
+from .panel_i18n import normalize_lang, normalize_theme, pt
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
 
 log = logging.getLogger("telabzar.admin")
@@ -62,6 +68,17 @@ _SESSION_TTL = 8 * 3600
 #: کانتینر نه — یعنی سبزیِ CI و ۵۰۰ روی تولید. `COPY app ./app` هر دو را می‌آورد.
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 _TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+#: `mimetypes` پایتون `woff2` را نمی‌شناسد، پس بدونِ این خطْ فونت‌های کنسول
+#: با `application/octet-stream` سرو می‌شوند. مرورگر به‌هرحال از `format()`ِ
+#: خودِ `@font-face` تشخیص می‌دهد، ولی نوعِ درست کشِ میانی و ابزارِ دیباگ را
+#: هم درست می‌کند و هزینه‌اش یک خط است.
+mimetypes.add_type("font/woff2", ".woff2")
+
+#: خروجیِ استاتیکِ `panel/` (Next.js). در تولید `docker/admin.Dockerfile` آن را
+#: از مرحلهٔ Node کپی می‌کند؛ در توسعه با `npm run export:panel` ساخته می‌شود.
+#: نبودنش کشنده **نیست** — `/console` یک ۵۰۳ِ گویا می‌دهد و بقیهٔ پنل دست‌نخورده
+#: می‌ماند، چون یک صفحهٔ ساخته‌نشده نباید کلِ سرویس را از کار بیندازد.
+_CONSOLE_DIR = os.path.join(_STATIC_DIR, "console")
 
 # پلتفرم‌هایی که ممکن است کوکیِ ورود لازم داشته باشند (نامِ فایل باید کلید را داشته باشد
 # تا `_pick_cookies` تطبیقش دهد — مثلِ instagram_1.txt). X همان twitter است.
@@ -78,12 +95,12 @@ _PLATFORM_FA = dict(PLATFORM_LABELS)
 
 # گروه‌بندیِ کلیدها برای فرم: (عنوانِ کارت, [(کلید, برچسب, توضیح)])
 GROUPS = [
-    ("🚦 سقف‌ها و کنترلِ مصرف", [
+    ("سقف‌ها و کنترلِ مصرف", [
         ("rate_per_min", "نرخ در دقیقه", "۰ = نامحدود"),
         ("daily_op_quota", "سقفِ روزانهٔ عملیات", "هر کاربر · ۰ = نامحدود"),
         ("max_file_mb", "حداکثر حجمِ فایل (MB)", ""),
     ]),
-    ("⬇️ دانلودر", [
+    ("دانلودر", [
         ("downloader_enabled", "دانلودر فعال", ""),
         ("dl_allow_unknown", "تلاش برای هر لینک", "هاستِ ناشناخته را هم دانلود کن"),
         ("dl_rich_posts", "پستِ چند‌عکسی به‌شکلِ مقاله", "Rich Message؛ خطا → آلبوم"),
@@ -123,7 +140,7 @@ GROUPS = [
          "فقط عملیاتِ گران روی فایلِ دانلودی · ۰ = نامحدود"),
         ("dl_min_free_gb", "کفِ فضای آزادِ دیسک (GB)", "زیرِ این حد دانلود رد می‌شود · ۰ = بی‌قید"),
     ]),
-    ("🎧 اسپاتیفای و اپل موزیک", [
+    ("اسپاتیفای و اپل موزیک", [
         ("spotify_enabled", "اسپاتیفای فعال", "بدونِ credential هم کار می‌کند"),
         ("spotify_client_id", "Client ID", "اختیاری · پایدارتر/کامل‌تر"),
         ("spotify_client_secret", "Client Secret", ""),
@@ -134,24 +151,24 @@ GROUPS = [
         ("match_min", "حداقلِ امتیازِ تطبیق", "۰..۱۰۰ · بالاتر = سخت‌گیرتر"),
         ("match_yt_fallback", "چاره‌یِ یوتیوب", "اگر تطبیقِ مطمئن نبود: بهترینِ موجود"),
     ]),
-    ("🎬 کاهشِ حجمِ ویدیو", [
+    ("کاهشِ حجمِ ویدیو", [
         ("compress_speed", "سرعت / کیفیت", "کندتر = کوچک‌تر"),
         ("video_encoder", "انکودر", "nvenc فقط با GPU"),
         ("compress_tiny_target_mb", "هدفِ «خیلی کم‌حجم» (MB)", "کلاس/جلسه"),
         ("compress_tiny_height", "کفِ رزولوشنِ خیلی کم‌حجم", "۴۸۰ یا ۳۶۰"),
         ("vjoin_max_mb", "سقفِ حجمِ چسباندنِ ویدیو (MB)", "۰ = مثلِ سقفِ فایل"),
     ]),
-    ("🎙 رونویسی و اکسترا", [
+    ("رونویسی و اکسترا", [
         ("whisper_model", "مدلِ Whisper", ""),
         ("dl_sponsorblock", "SponsorBlock", "حذفِ اسپانسر/اینترو"),
         ("dl_subs", "زیرنویسِ خودکار (en+fa)", ""),
     ]),
-    ("🍪 کوکی‌ها", [
+    ("کوکی‌ها", [
         ("cookie_alert_min", "هشدار وقتی اکانتِ سالم کمتر از", "۰ = خاموش · به تلگرامِ ادمین"),
     ]),
     # سهمیهٔ استخرِ سشن. تحقیق: فشارِ ۲× یعنی سوختنِ ۴× — بالا بردن این اعداد
     # سرعت می‌دهد ولی عمرِ اکانت را کوتاه می‌کند.
-    ("🧬 سهمیهٔ استخرِ سشن", [
+    ("سهمیهٔ استخرِ سشن", [
         ("ck_cap_instagram", "سقفِ ساعتیِ اینستاگرام", "دانلود در ساعت، برای هر اکانت · ۰ = بی‌سقف"),
         ("ck_cap_youtube", "سقفِ ساعتیِ یوتیوب", "ناشناس هم جواب می‌دهد، پس دست‌ودل‌بازتر"),
         ("ck_cap_twitter", "سقفِ ساعتیِ X / توییتر", ""),
@@ -166,7 +183,7 @@ GROUPS = [
     ]),
     # ربات هر فایلی را دوباره آپلود می‌کند، پس خودش توزیع‌کننده است — این فیلتر
     # جلوی همان مسیرِ بن‌شدنِ ربات را می‌گیرد.
-    ("🔞 فیلترِ محتوای بزرگسال", [
+    ("فیلترِ محتوای بزرگسال", [
         ("safety_enabled", "فیلتر فعال", "لینک و فایلِ آپلودی، هر دو"),
         ("safety_scan_pixels", "بررسیِ خودِ تصویر", "خاموش = فقط دامنه و متادیتا"),
         ("safety_threshold", "آستانهٔ اطمینان (درصد)", "بالاتر = سهل‌گیرتر · پیش‌فرض ۵۵"),
@@ -176,7 +193,7 @@ GROUPS = [
         ("safety_notify_admin", "گزارشِ هر مسدودی به ادمین", ""),
         ("safety_strikes", "مسدودیِ خودکارِ کاربر پس از", "این تعداد تخلف · ۰ = خاموش"),
     ]),
-    ("🔗 لینک و استریم", [
+    ("لینک و استریم", [
         ("stream_base", "پایهٔ لینک (نودِ استریم)", "خالی = دامنهٔ مستر · مثل https://cdn.example.com"),
     ]),
 ]
@@ -187,6 +204,23 @@ _AUTO_GROUP = "🧷 بدونِ دسته"
 #: این است که کلید هرگز نامرئی نشود، ولی اگر بی‌صدا جذبش کند هیچ‌کس برچسبِ
 #: درست نمی‌نویسد. این متن خودش نق می‌زند.
 _AUTO_HINT = "هنوز برچسبِ فارسی ندارد — در GROUPS دسته‌بندی‌اش کن"
+
+
+#: آیکونِ هر گروهِ تنظیمات. عمداً **کنارِ** `GROUPS` و نه داخلش:
+#: `tests/test_settings_rename.py` آن لیست را با `literal_eval` از سورس
+#: می‌خواند (بدونِ import، چون ایمیجِ تست jinja2/cryptography ندارد)، پس
+#: باید یک لیترالِ خالص بماند.
+_GROUP_ICON = {
+    "سقف‌ها و کنترلِ مصرف": "shield",
+    "دانلودر": "download",
+    "اسپاتیفای و اپل موزیک": "zap",
+    "کاهشِ حجمِ ویدیو": "file",
+    "رونویسی و اکسترا": "type",
+    "کوکی‌ها": "cookie",
+    "سهمیهٔ استخرِ سشن": "sliders",
+    "فیلترِ محتوای بزرگسال": "shield",
+    "لینک و استریم": "link",
+}
 
 
 def _setting_groups() -> list[tuple[str, list[tuple[str, str, str]]]]:
@@ -319,11 +353,97 @@ ENV = Environment(
     loader=FileSystemLoader(_TEMPLATE_DIR),
     autoescape=select_autoescape(default=True, default_for_string=True),
 )
+#: عددِ کانونی به‌شکلِ شبکهٔ نقطه‌ای. globalِ Jinja است نه متغیرِ context، چون
+#: تابع است نه داده و هر صفحه‌ای ممکن است بخواهدش.
+ENV.globals["lcd"] = _lcd
+
+
+#: منوی پنل — یک ساختارِ **اعلانی**، نه HTMLِ دست‌نویس در قالب. شماره‌ها بخشی
+#: از زبانِ بصریِ کنسول‌اند (نه تزئین): آدرسِ پایدارِ هر صفحه‌اند و برچسبشان با
+#: عوض‌شدنِ زبانِ پنل تغییر نمی‌کند.
+_NAV = (
+    ("control", (("01", "settings", "/", "sliders"),
+                 ("02", "users", "/users", "users"),
+                 ("03", "cookies", "/cookies", "cookie"))),
+    ("system", (("04", "health", "/health", "pulse"),
+                ("05", "nodes", "/nodes", "server"))),
+    ("content", (("06", "texts", "/texts", "type"),
+                 ("07", "buttons", "/buttons", "palette"),
+                 ("08", "langs", "/langs", "globe"))),
+    ("data", (("09", "stats", "/stats", "chart"),)),
+)
+
+_LANG_COOKIE = "tab_lang"
+_THEME_COOKIE = "tab_theme"
+_NEXT_THEME = {"auto": "dark", "dark": "light", "light": "auto"}
+
+#: ترجیحاتِ رندر (زبانِ پنل، پوسته، مسیرِ جاری) برای همین درخواست.
+#:
+#: **چرا ContextVar و نه یک پارامترِ `_render`:** `_render` سیزده محلِ فراخوانی
+#: دارد و یکی‌شان (`_login_page`) اصلاً `request` در دست ندارد — پس پارامترکردن
+#: یعنی سیزده امضا عوض شود و یک مسیر همچنان بی‌ترجیح بماند. هر هندلرِ aiohttp
+#: در تسکِ خودش می‌دود و contextvar به‌ازای هر تسک کپی می‌شود، پس نشتی بینِ دو
+#: درخواستِ هم‌زمان ممکن نیست؛ میدل‌ور در `finally` هم ریستش می‌کند.
+_PREFS: contextvars.ContextVar[tuple[str, str, str]] = contextvars.ContextVar(
+    "panel_prefs", default=("fa", "auto", "/"))
+
+
+@web.middleware
+async def _panel_prefs(request: web.Request, handler):
+    token = _PREFS.set((normalize_lang(request.cookies.get(_LANG_COOKIE)),
+                        normalize_theme(request.cookies.get(_THEME_COOKIE)),
+                        request.path))
+    try:
+        return await handler(request)
+    finally:
+        _PREFS.reset(token)
+
+
+async def prefs(request: web.Request) -> web.Response:
+    """سوییچِ زبان/پوستهٔ **پنل** — کوکی، بدونِ JS و بدونِ FOUC.
+
+    `<html lang dir data-theme>` سرورساید رندر می‌شود، پس صفحه از همان اولین
+    بایت درست است؛ نسخهٔ JSمحور یک پرشِ دیدنی می‌دهد و با CSPِ فعلی (که
+    `script-src` را باز نگه‌داشتنش هزینه دارد) هم‌خوان نیست.
+    """
+    resp = web.HTTPFound(_safe_back(request.query.get("to", "")))
+    if "lang" in request.query:
+        resp.set_cookie(_LANG_COOKIE, normalize_lang(request.query["lang"]),
+                        max_age=365 * 86400, samesite="Lax")
+    if "theme" in request.query:
+        resp.set_cookie(_THEME_COOKIE, normalize_theme(request.query["theme"]),
+                        max_age=365 * 86400, samesite="Lax")
+    raise resp
+
+
+def _safe_back(value: str) -> str:
+    """مقصدِ بازگشت — فقط مسیرِ نسبیِ همین سایت، وگرنه `/`.
+
+    `//evil.example` یک URLِ **پروتکل‌نسبی** است و مرورگر بیرون می‌بردش، پس
+    شرطِ «با `/` شروع می‌شود» به‌تنهایی open-redirect را نمی‌بندد.
+    """
+    if value.startswith("/") and not value.startswith("//") and "\\" not in value:
+        return value
+    return "/"
 
 
 def _render(name: str, **ctx) -> web.Response:
+    lang, theme, here = _PREFS.get()
     ctx.setdefault("css", Markup(_CSS))
     ctx.setdefault("pfa", _PLATFORM_FA)
+    ctx.setdefault("lang", lang)
+    ctx.setdefault("dir", _PANEL_DIR_OF[lang])
+    ctx.setdefault("theme", theme)
+    ctx.setdefault("next_theme", _NEXT_THEME[theme])
+    ctx.setdefault("panel_langs", PANEL_LANGS)
+    ctx.setdefault("pt", lambda key, **kw: pt(lang, key, **kw))
+    ctx.setdefault("nav", _NAV)
+    ctx.setdefault("mesh", ())
+    ctx.setdefault("here", here)
+    ctx.setdefault("now", datetime.now(timezone.utc).strftime("%H:%M:%S"))
+    ctx.setdefault("active", "")
+    ctx.setdefault("admin_id", "")
+    ctx.setdefault("pill_ok", True)
     html = ENV.get_template(name + ".html").render(**ctx)
     return web.Response(text=html, content_type="text/html")
 
@@ -577,10 +697,17 @@ def _fmt_secs(seconds: float | None) -> str:
 
 
 def _bars(rows: list[tuple], labeler=None) -> list[dict]:
-    """(کلید, تعداد) → ردیفِ نوار با درصدِ نسبت به بیشینه."""
+    """(کلید, تعداد) → ردیفِ نوار با درصدِ نسبت به بیشینه.
+
+    `key` **کلیدِ خام** است و `k` برچسبِ فارسیِ نمایشی. قالب‌های Jinja فقط
+    `k` را می‌خوانند، ولی کنسول به خام نیاز دارد: هم برای نگاشتِ رنگِ پلتفرم
+    (`PLATFORM_HUE` روی نامِ انگلیسی کلید می‌خورد) و هم چون کنسول LTR و مونو
+    است و متنِ فارسی آن‌جا باید از `<Fa>` رد شود. برچسب‌زدن در سرور و
+    برچسب‌زدایی در کلاینت، همان دو کپیِ دست‌نویس است که واگرا می‌شود.
+    """
     mx = max((c for _k, c in rows), default=1) or 1
-    return [{"k": (labeler(k) if labeler else k), "n": c, "pct": round(c / mx * 100)}
-            for k, c in rows]
+    return [{"key": k, "k": (labeler(k) if labeler else k), "n": c,
+             "pct": round(c / mx * 100)} for k, c in rows]
 
 
 _TS_H = 96   # بلندیِ نمودارِ روند (px)
@@ -1144,6 +1271,7 @@ async def dashboard(request: web.Request) -> web.Response:
     return _render("settings", admin_id=_session_admin(request), active="settings",
                    pill_ok=health["all_ok"], groups=_setting_groups(), meta=RUNTIME_KEYS,
                    enums=ENUM_VALUES, labels=ENUM_LABELS, longtext=LONGTEXT_KEYS,
+                   gicon=_GROUP_ICON,
                    v=await _effective(),
                    health=health, saved=request.query.get("ok") == "1",
                    error=request.query.get("err", ""))
@@ -1316,7 +1444,7 @@ async def texts_page(request: web.Request) -> web.Response:
     saved = {"1": "متن ذخیره شد (بی‌ری‌استارت اعمال شد).",
              "r": "به پیش‌فرض برگشت."}.get(request.query.get("ok", ""), "")
     return _render("texts", admin_id=_session_admin(request), active="texts",
-                   pill_ok=await _pill_ok(request.app), lang=lang, langs=langs, q=q,
+                   pill_ok=await _pill_ok(request.app), lang_sel=lang, langs=langs, q=q,
                    groups=groups, total=total, edited=edited, saved=saved,
                    error=request.query.get("err", ""))
 
@@ -1439,7 +1567,7 @@ async def buttons_page(request: web.Request) -> web.Response:
     saved = {"1": "ذخیره شد (بی‌ری‌استارت اعمال شد).",
              "r": "به چیدمانِ پیش‌فرض برگشت."}.get(request.query.get("ok", ""), "")
     return _render("buttons", admin_id=_session_admin(request), active="buttons",
-                   pill_ok=await _pill_ok(request.app), kind=kind, lang=lang, langs=langs,
+                   pill_ok=await _pill_ok(request.app), kind=kind, lang_sel=lang, langs=langs,
                    kinds=_KIND_TABS,
                    kindlabel=_KIND_LABEL[kind], items=items, pv_rows=pv_rows,
                    hidden_items=hidden_items, close_label=_t(lang, "btn_close"),
@@ -2127,6 +2255,531 @@ async def healthz(_: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+#: پیامِ «کنسول ساخته نشده» — یک رشته، تا هم هندلر و هم تست یک منبع داشته باشند.
+_CONSOLE_MISSING = (
+    "کنسول ساخته نشده است. روی همین ماشین: cd panel && npm ci && npm run export:panel\n"
+    "در تولید، مرحلهٔ Node در docker/admin.Dockerfile این کار را می‌کند."
+)
+
+
+def _console_target(tail: str) -> tuple[pathlib.Path, bool] | None:
+    """`(مسیر, HTMLاست؟)` برای یک زیرمسیرِ کنسول، یا `None` اگر نبود.
+
+    خروجیِ Next با `trailingSlash` هر صفحه را به‌شکلِ `<slug>/index.html`
+    می‌دهد، پس بدونِ این تبدیل، `/console/health/` به یک **دایرکتوری** می‌رسد
+    و aiohttp برایش ۴۰۳/۴۰۴ می‌دهد — یعنی هر صفحه‌ای جز خانه ۴۰۴ می‌شد.
+
+    گاردِ پیمایش با `resolve()` + `is_relative_to` است نه با فیلترِ `..`:
+    فیلترِ رشته‌ای فرم‌های encode‌شده و symlink را نمی‌گیرد، و این هندلر
+    مسیرِ کنترل‌شدهٔ کاربر را مستقیم به فایل‌سیستم می‌دهد.
+    """
+    root = pathlib.Path(_CONSOLE_DIR).resolve()
+    try:
+        p = (root / tail.strip("/")).resolve()
+    except OSError:
+        return None
+    if p != root and not p.is_relative_to(root):
+        return None
+    if p.is_file():
+        return p, p.suffix.lower() in (".html", ".htm")
+    idx = p / "index.html"
+    if idx.is_file():
+        return idx, True
+    return None
+
+
+async def console_page(request: web.Request) -> web.Response:
+    """`/console/...` — کنسولِ Next، پشتِ همان نشستِ Fernetِ بقیهٔ پنل.
+
+    **فقط HTML گِیت دارد، نه دارایی‌ها.** فایل‌های `_next/`/فونت JS/CSSِ
+    ایستا هستند و هیچ دادهٔ کاربری‌ای حمل نمی‌کنند، پس گیت‌زدنشان امنیتی
+    نمی‌خرد و در عوض کشِ مرورگر را می‌شکند — همان تفکیکی که `/static` از قبل
+    دارد. مرز روی **نوعِ فایل** است نه روی مسیر، چون صفحهٔ تازه فردا زیرِ هر
+    مسیری می‌تواند اضافه شود.
+
+    نبودِ build ۵۰۳ می‌دهد نه ۵۰۰: «هنوز ساخته نشده» یک حالتِ **پیش‌بینی‌شده**
+    است (توسعهٔ محلی، یا ایمیجی که مرحلهٔ Node را رد کرده)، و پیامش باید
+    دستورِ رفع را بگوید نه یک traceback.
+    """
+    if not pathlib.Path(_CONSOLE_DIR, "index.html").is_file():
+        if not _session_admin(request):
+            raise web.HTTPFound("/login")
+        return web.Response(status=503, text=_CONSOLE_MISSING,
+                            content_type="text/plain", charset="utf-8")
+
+    target = _console_target(request.match_info.get("tail", ""))
+    if target is None:
+        raise web.HTTPNotFound()
+    path, is_html = target
+    if is_html and not _session_admin(request):
+        raise web.HTTPFound("/login")
+    return web.FileResponse(path)
+
+
+#: بازهٔ کنسول → بازهٔ `_stats`. کنسول سه دکمه دارد و `_stats` چهار کلید،
+#: پس نگاشت صریح است نه هم‌نامی — و «TODAY» در `_stats` نامش `24h` است.
+_CONSOLE_RANGES = {"TODAY": "24h", "7D": "7d", "30D": "30d"}
+
+#: پنل‌هایی که **هیچ منبعِ واقعی ندارند** و کنسول باید به‌جای عدد، همین را بگوید.
+#:
+#: این فهرست عمداً در payload می‌رود نه در کامنت. §۷ بارها ثبت کرده که
+#: «fallbackی که بی‌صدا به دادهٔ بی‌مصرف تنزل کند از خطا بدتر است»؛ در یک
+#: کنسولِ عملیاتی، عددِ ساختگی که واقعی به‌نظر برسد بدترین شکلِ همان است —
+#: اپراتور رویش تصمیم می‌گیرد. پس هرچه منبع ندارد این‌جا **نام‌برده** می‌شود
+#: و صفحه به‌جای رندرِ عدد، «منبعی ندارد» نشان می‌دهد.
+_CONSOLE_GAPS = {
+    # جدولِ `jobs` هیچ ردیفِ audit ندارد و هیچ‌جای ریپو هم نمی‌سازد.
+    "audit": "no audit table exists — nothing records admin actions today",
+    # درصدِ پیشرفتِ جابِ در حالِ اجرا فقط در ورکر زندگی می‌کند، نه در DB.
+    "job_progress": "live progress is worker-local; the DB has status, not percent",
+    # cpu/mem/net نیازِ psutil دارند که در هیچ requirements‌ی نیست.
+    "host_cpu": "no psutil in any requirements file — only disk is real",
+}
+
+
+def _console_flag(ok: bool, warn: bool = False) -> str:
+    return "[ OK ]" if ok else ("[WARN]" if warn else "[FAIL]")
+
+
+async def console_api(request: web.Request) -> web.Response:
+    """`/api/console` — دادهٔ **واقعیِ** کنسول.
+
+    ۴۰۱ می‌دهد نه ریدایرکت: یک `fetch` نمی‌تواند ریدایرکت به صفحهٔ HTMLِ ورود
+    را به چیزِ مفیدی تبدیل کند — بدنهٔ HTML با ۲۰۰ برمی‌گردد و کنسول موقعِ
+    `JSON.parse` با پیامی می‌شکند که هیچ ربطی به «نشستت تمام شده» ندارد.
+
+    محاسبه **قرض گرفته می‌شود نه تکرار**: `_stats_cached` و `_health` همان
+    توابعی‌اند که صفحاتِ Jinja می‌خوانند، پس کنسول و پنلِ فارسی نمی‌توانند دو
+    عددِ متفاوت بدهند. کپیِ دومِ دست‌نویس دقیقاً همان واگرایی است که §۷ برای
+    `remove_cookie_file` ثبت کرده.
+    """
+    if not _session_admin(request):
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    rng = request.query.get("range", "7D").upper()
+    stats = await _stats_cached(request.app, _CONSOLE_RANGES.get(rng, "7d"))
+    health = await _health(request.app)
+    redis = request.app["redis"]
+
+    # ── صف و منابع ───────────────────────────────────────────────────
+    queues = {
+        "main": health.get("q_main", 0),
+        "proc": health.get("q_proc", 0),
+        "dl": health.get("q_dl", 0),
+        "active": health.get("dl_active", 0),
+    }
+    disk_pct = health.get("disk_pct", 0)
+    disk_meta = (f"{health.get('disk_used', 0)}/{health.get('disk_total', 0)}G"
+                 if health.get("disk_total") else "—")
+
+    # ── سرویس‌ها ─────────────────────────────────────────────────────
+    pot = health.get("pot")
+    services = [
+        {"name": "postgres", "meta": "reachable" if health["postgres"] else "unreachable",
+         "flag": _console_flag(health["postgres"])},
+        {"name": "redis", "meta": "reachable" if health["redis"] else "unreachable",
+         "flag": _console_flag(health["redis"])},
+    ]
+    if pot is not None:
+        # «تنظیم‌شده ولی نسنجیده» با «پیکربندی‌نشده» یکی نیست — §۷.
+        services.append({"name": "pot-provider",
+                         "meta": "unprobed" if isinstance(pot, str) else
+                                 ("bgutil" if pot else "not answering"),
+                         "flag": _console_flag(bool(pot) and not isinstance(pot, str),
+                                               warn=isinstance(pot, str))})
+
+    # ── استخرِ سشن ───────────────────────────────────────────────────
+    _CK_FLAG = {"healthy": "[ OK ]", "unproven": "[ ? ]", "suspect": "[WARN]",
+                "cooldown": "[COOL]", "invalid": "[FAIL]", "frozen": "[HOLD]",
+                "disabled": "[ -- ]"}
+    try:
+        accounts = await ck_pool.accounts(redis)
+    except Exception:  # noqa: BLE001
+        accounts = []
+    cookie_rows = [{"name": a["name"],
+                    "meta": " · ".join(x for x in (a.get("platform"), a.get("status")) if x),
+                    "flag": _CK_FLAG.get(a.get("status", ""), "[ ?? ]")}
+                   for a in accounts]
+
+    # نرخِ **امروزِ** هر پلتفرم (پنجرهٔ `dlstat`)، جدا از شمارشِ بازه‌محورِ زیر.
+    rate_today = {h["name"]: h["rate"] for h in health.get("hosts", [])}
+
+    # ── نقشهٔ فعالیتِ ۷×۲۴ ────────────────────────────────────────────
+    # سطل‌بندی در **پایتون** است نه SQL، چون `date_trunc`/`extract` روی ساعت
+    # Postgres-only است و تست‌ها روی SQLite می‌دوند — همان قیدی که `_bucket`
+    # برای سطلِ روزانه دارد.
+    now = datetime.now(timezone.utc)
+    week_start = now - timedelta(days=6)
+    heat = [[0] * 24 for _ in range(7)]
+    async with Sessionmaker() as s:
+        stamps = (await s.execute(
+            select(File.created_at).where(File.created_at >= week_start))).scalars().all()
+    for ts in stamps:
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        d = (ts.date() - week_start.date()).days
+        if 0 <= d < 7:
+            heat[d][ts.hour] += 1
+
+    # ── نودها + آخرین جاب‌ها ─────────────────────────────────────────
+    live = await node_mod.list_live(redis)
+    async with Sessionmaker() as s:
+        node_rows = (await s.execute(select(Node))).scalars().all()
+        # جریانِ جاب از جدولِ `jobs` می‌آید و **دانلودها را نمی‌بیند** —
+        # `tasks_download` عمداً ردیفِ Job نمی‌سازد (§۷). پس این فهرست
+        # صادقانه ولی ناقص است و کارت باید همین را بگوید، نه اینکه وانمود
+        # کند کلِ کار را نشان می‌دهد.
+        recent = (await s.execute(
+            select(Job.id, Job.op, Job.status, Job.error, Job.created_at,
+                   File.name, File.size, File.owner_id)
+            .join(File, File.id == Job.file_id)
+            .order_by(Job.created_at.desc()).limit(9))).all()
+    jobs = [{
+        "id": jid, "op": op, "status": status,
+        "error": " ".join((err or "").split())[:90],
+        "at": created.strftime("%H:%M:%S") if created else "--:--:--",
+        "name": name or "", "size": _human_size(size), "uid": str(owner or ""),
+    } for jid, op, status, err, created, name, size, owner in recent]
+    nodes = []
+    for n in node_rows:
+        hb = live.get(n.id) or {}
+        nodes.append({"name": n.name, "role": n.role, "ip": n.wg_ip,
+                      "up": bool(hb), "done": hb.get("done", 0),
+                      "meta": f"{n.role} · {hb.get('load', 0)} jobs" if hb else "offline",
+                      "flag": "[ UP ]" if hb else "[DOWN]"})
+
+    return web.json_response({
+        "range": rng,
+        "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "gaps": _CONSOLE_GAPS,
+        "kpis": {
+            "users": {"value": stats.get("users_active", 0), "foot": f"{stats.get('users_new', 0)} new"},
+            "files": {"value": stats.get("files", 0), "foot": f"{stats.get('dl_files', 0)} via link"},
+            "success": {"value": stats.get("success_rate"), "foot": f"{stats.get('err', 0)} errors"},
+            "storage": {"value": stats.get("storage_h", "—"), "foot": stats.get("media_h", "—")},
+        },
+        "trend": [{"day": r["day"], "f": r["f"], "o": r["o"], "u": r["u"]} for r in stats.get("ts", [])],
+        # `n` بازه‌محور است ولی `ok` فقط **امروز** را می‌بیند (`dlstat` روزانه
+        # است). دو پنجرهٔ متفاوت در یک جدول همان چیزی است که §۷ برای کارتِ
+        # سلامت ثبت کرده، پس ستون صریحاً «امروز» برچسب می‌خورد نه اینکه یکی
+        # وانمود شود.
+        "platforms": [{"key": p["key"] or "other", "label": p["k"], "n": p["n"],
+                       "pct": p["pct"], "ok": rate_today.get(p["key"] or "other")}
+                      for p in stats.get("by_platform", [])],
+        "queues": queues,
+        "resources": [{"label": "disk /work", "pct": disk_pct, "meta": disk_meta}],
+        "services": services,
+        "cookies": cookie_rows,
+        "nodes": nodes,
+        "jobs": jobs,
+        # ۷ ردیف × ۲۴ ستون، ردیفِ ۰ = قدیمی‌ترین روز. برچسبِ روز سمتِ کلاینت
+        # ساخته می‌شود تا فقط یک شکلِ عدد روی سیم برود.
+        "heat": heat,
+        "heatStart": week_start.strftime("%Y-%m-%d"),
+        "errors": stats.get("errors", []),
+        "hosts": health.get("hosts", []),
+        "engines": health.get("engines", []),
+    })
+
+
+async def _page_users(request: web.Request) -> dict:
+    """‏۰۵ USERS — همان دادهٔ `users_page`، از همان کشِ نسخه‌دار."""
+    try:
+        page = max(0, int(request.query.get("page", "0")))
+    except ValueError:
+        page = 0
+    data = await _users_cached(request.app, page, request.query.get("q", ""))
+    return {
+        "total": data.get("total", 0),
+        "blocked": data.get("blocked", 0),
+        "page": page,
+        "pages": data.get("pages", 1),
+        "q": data.get("q", ""),
+        "rows": [{
+            # `id` کلیدِ اصلیِ ردیف است و `tg` شناسهٔ تلگرام. `users_block`
+            # با `db.get(User, int(uid))` **کلیدِ اصلی** را می‌خواهد، پس فرم
+            # باید `id` بفرستد نه `tg`. نسخهٔ اولِ کنسول `tg` می‌فرستاد و
+            # بلاک بی‌صدا هیچ کاری نمی‌کرد — همان «بنرِ سبز روی کاری که
+            # انجام نشد» که §۷ چهار نمونه‌اش را ثبت کرده. با یک پروبِ
+            # مرورگرِ واقعی پیدا شد، نه با بازخوانی.
+            "id": u["id"],
+            "tg": str(u["tg"]),
+            "role": u["role"] or "user",
+            "files": u["files"],
+            "created": u["created"] or "—",
+            "seen": u["seen"] or "—",
+            "blocked": u["blocked"],
+            # ادمین ردیفِ کنش ندارد و این باگ نیست: `middlewares` هرگز ادمین
+            # را بلاک نمی‌کند، پس دکمه‌ای که کاری نمی‌کند دروغ است.
+            "admin": u["is_admin"],
+        } for u in data.get("users", [])],
+    }
+
+
+async def _page_cookies(request: web.Request) -> dict:
+    """‏۰۶ COOKIES — استخرِ سشن، گروه‌بندی‌شده مثلِ صفحهٔ فارسی."""
+    redis = request.app["redis"]
+    lim = await ck_pool.load_limits()
+    accounts = await ck_pool.accounts(redis, lim=lim)
+    groups: dict[str, list] = {}
+    for a in accounts:
+        groups.setdefault(a.get("platform") or "other", []).append({
+            "file": a["name"],
+            "label": a.get("label") or "",
+            "status": a["status"],
+            "used": await ck_pool.usage(redis, a["name"]),
+            "cap": ck_pool.budget_of(a, None, lim),
+            "lastOk": _ago_fa(a.get("last_ok") or 0),
+            "err": (a.get("last_error") or "")[:150],
+            "warming": ck_pool.warmup_factor(int(a.get("added") or 0), None, lim) < 1.0,
+            "cooldown": a.get("cooldown", 0),
+        })
+    # سطلی که هرگز پر نشده «سوخته» نیست — §۷. تفکیکش این‌جا هم لازم است،
+    # وگرنه کنسول همان زنگِ خطای کاذبی را بازتولید می‌کند که ماه‌ها هر ۶
+    # ساعت DM می‌فرستاد.
+    known = [p for p, _fa in COOKIE_PLATFORMS]
+    unstocked = [p for p in known if p not in groups]
+    return {
+        "groups": [{"platform": p, "accounts": groups[p]}
+                   for p in known if p in groups]
+                  + [{"platform": p, "accounts": v}
+                     for p, v in groups.items() if p not in known],
+        # سطل‌هایی که فرمِ افزودن می‌تواند بسازد — همان `COOKIE_PLATFORMS`،
+        # نه فهرستِ گروه‌های پرشده، وگرنه اولین اکانتِ یک سطلِ خالی از پنل
+        # اضافه‌شدنی نیست.
+        "platforms": known,
+        "unstocked": unstocked,
+        "attention": [a["name"] for a in accounts
+                      if a["status"] in (ck_pool.FROZEN, ck_pool.INVALID)],
+    }
+
+
+async def _page_nodes(request: web.Request) -> dict:
+    """‏۰۴ NODES — ردیف‌های `Node` + heartbeatِ زنده."""
+    redis = request.app["redis"]
+    live = await node_mod.list_live(redis)
+    async with Sessionmaker() as s:
+        rows = (await s.execute(select(Node))).scalars().all()
+    return {
+        "rows": [{
+            "id": n.id, "name": n.name, "role": n.role, "ip": n.wg_ip,
+            "up": bool(live.get(n.id)),
+            "jobs": (live.get(n.id) or {}).get("load", 0),
+            "done": (live.get(n.id) or {}).get("done", 0),
+            "ver": (live.get(n.id) or {}).get("ver", "—"),
+        } for n in rows],
+        "roles": sorted(node_mod.ROLES),
+        "reaped": await node_mod.reaped_count(redis),
+        "master_ready": bool(settings.wg_master_pubkey and settings.wg_endpoint
+                             and (settings.admin_base or settings.public_base)),
+        "wg": {"subnet": settings.wg_subnet, "master": settings.wg_master_ip},
+    }
+
+
+#: کهنه‌ترین `job_timeout`ِ ریپو (دانلود، ۵۴۰۰ ثانیه) به‌علاوهٔ حاشیه. جابی که
+#: از این پیرتر است و هنوز تمام نشده، دیگر «در حالِ اجرا» نیست.
+_STUCK_AFTER = timedelta(seconds=5400 + 600)
+
+
+async def _page_health(request: web.Request) -> dict:
+    """‏۰۳ HEALTH — همان `_health` به‌علاوهٔ خلاصهٔ استخر و جاب‌های گیرکرده."""
+    health = await _health(request.app)
+    summary = await ck_pool.pool_summary(request.app["redis"])
+    # جابِ گیرکرده: `finally` روی SIGKILL اجرا نمی‌شود، پس ورکری که بینِ
+    # `status="running"` و کامیتش کشته شود ردیف را برای همیشه جا می‌گذارد و
+    # هیچ‌چیز جمعش نمی‌کند. تا امروز فقط در «در صف» جمع می‌شد و از یک صفِ
+    # واقعی تفکیک‌ناپذیر بود — Open Questions همین کارت را می‌خواست.
+    cutoff = datetime.now(timezone.utc) - _STUCK_AFTER
+    async with Sessionmaker() as s:
+        stuck = (await s.execute(
+            select(Job.id, Job.op, Job.status, Job.created_at, File.name)
+            .join(File, File.id == Job.file_id)
+            .where(Job.status.in_(("queued", "running")), Job.created_at < cutoff)
+            .order_by(Job.created_at).limit(20))).all()
+    now = datetime.now(timezone.utc)
+    rows = []
+    for jid, op, status, created, name in stuck:
+        if created is not None and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age = (now - created).total_seconds() if created else 0
+        rows.append({"id": jid, "op": _OP_FA.get(op, op), "status": status,
+                     "age": _fmt_hours(age), "file": name or ""})
+    return {
+        "health": {k: v for k, v in health.items() if k != "hosts"},
+        "hosts": health.get("hosts", []),
+        "pool": [{"platform": p, "live": d["healthy"] + d["suspect"],
+                  "cd": d["cooldown"], "bad": d["invalid"], "total": d["total"]}
+                 for p, d in sorted(summary.items())],
+        "stuck": rows,
+        "stuckAfter": int(_STUCK_AFTER.total_seconds()),
+    }
+
+
+async def _page_settings(_request: web.Request) -> dict:
+    """‏۰۷ SETTINGS — گروه‌ها از **همان** `_setting_groups` که فرمِ Jinja دارد.
+
+    اگر کنسول فهرستِ خودش را می‌ساخت، کلیدِ تازه در یکی ظاهر می‌شد و در
+    دیگری نه — همان یک‌طرفه‌بودنی که شش کلید را ماه‌ها نامرئی نگه داشت.
+    """
+    eff = await _effective()
+    groups = []
+    for title, rows in _setting_groups():
+        out = []
+        for key, _label, note in rows:
+            kind, default = RUNTIME_KEYS[key]
+            out.append({
+                "key": key,
+                "val": str(eff.get(key, "")),
+                "def": str(default),
+                "kind": "enum" if key in ENUM_VALUES else kind,
+                "enum": list(ENUM_VALUES.get(key, ())) or None,
+                "note": note,
+                "long": key in LONGTEXT_KEYS,
+            })
+        groups.append({"title": title, "rows": out})
+    return {"groups": groups, "total": len(RUNTIME_KEYS)}
+
+
+async def _page_strings(request: web.Request) -> dict:
+    """‏۰۸ STRINGS — گروه‌های متن برای زبانِ انتخابی."""
+    await textstore.refresh_if_stale()
+    lang, langs = await _pick_lang(request.query.get("lang"))
+    q = request.query.get("q", "")
+    groups = _texts_groups(lang, q)
+    return {
+        "lang": lang,
+        "langs": [{"code": c, "name": n} for c, n in langs.items()],
+        "q": q,
+        "total": len(_TEXT_KEYS),
+        "edited": sum(g["edited"] for g in groups),
+        # `open` از **همان** `_texts_groups` می‌آید که صفحهٔ فارسی می‌خواند:
+        # هنگام جست‌وجو همه باز، وگرنه فقط اولی. بدونِ آن، ۲۱۹ کلید یک صفحهٔ
+        # ۱۸ هزار پیکسلی می‌سازد — اندازه‌گیری‌شده، نه حدس.
+        "groups": [{"title": g["title"], "n": g["n"], "edited": g["edited"],
+                    "open": g["open"], "rows": [{
+                        "key": i["key"], "val": i["current"], "def": i["default"],
+                        "overridden": i["overridden"],
+                    } for i in g["items"]]} for g in groups],
+    }
+
+
+async def _page_keyboard(request: web.Request) -> dict:
+    """‏۰۹ KEYBOARD — چیدمانِ منوی کارت برای یک نوعِ فایل."""
+    await textstore.refresh_if_stale()
+    kind = request.query.get("kind", "video")
+    if kind not in _KIND_LABEL:
+        kind = "video"
+    lang, langs = await _pick_lang(request.query.get("lang"))
+    # **قاعده از `keyboards` می‌آید، نه از یک بازنویسی.** ترتیب/مخفی/عرض و
+    # قاعدهٔ «opِ تازه ته می‌رود» همگی در `_resolved_menu` زندگی می‌کنند و
+    # همان چیزی است که ربات واقعاً رندر می‌کند؛ و بسته‌بندیِ ردیف در
+    # `_rows_from_widths`. CLAUDE.md ثبت کرده که این قرارداد از قبل **هشت**
+    # کپیِ دست‌نویس بینِ JS و پایتون دارد — کپیِ نهم این‌جا ساخته نمی‌شود.
+    from .keyboards import _WIDTH_CAP, _resolved_menu, _rows_from_widths
+
+    resolved = _resolved_menu(kind)
+    layout = textstore.get_menu_layout(kind) or []
+    hidden = {e["op"] for e in layout if e.get("hidden")}
+    shown = []
+    for op, label_key, width in resolved:
+        style, icon = textstore.get_button_style(op)
+        shown.append({
+            "op": op,
+            "text": _t(lang, label_key),
+            "style": style or "",
+            "icon": icon or "",
+            "width": width,
+        })
+    return {
+        "kind": kind,
+        "kinds": [{"key": k, "label": lbl} for k, lbl in _KIND_TABS],
+        "lang": lang,
+        "langs": [{"code": c, "name": n} for c, n in langs.items()],
+        "items": shown,
+        # بسته‌بندیِ ردیف از **همان** تابعی که ربات استفاده می‌کند، پس
+        # پیش‌نمایشِ کنسول نمی‌تواند با کیبوردِ واقعی واگرا شود.
+        "rows": _rows_from_widths([i["width"] for i in shown]),
+        "hidden": [{"op": op, "text": _t(lang, key)}
+                   for op, key in OPS_BY_KIND.get(kind, ()) if op in hidden],
+        "closeLabel": _t(lang, "btn_close"),
+        "styleHex": _STYLE_HEX,
+        # نگاشتِ عرض→ظرفیت از **خودِ `keyboards`** می‌آید. پیش‌نمایشِ زنده
+        # ناچار است سمتِ کلاینت دوباره بسته‌بندی کند (کاربر پیش از ذخیره
+        # جابه‌جا می‌کند)، ولی دستِ‌کم جدول را از سرور می‌گیرد نه اینکه
+        # بازنویسی‌اش کند — یکی کمتر از هشت کپیِ دست‌نویسی که Open Questions
+        # ثبت کرده.
+        "widthCap": dict(_WIDTH_CAP),
+        "widths": list(textstore.BUTTON_WIDTHS),
+        "styles": list(textstore._BUTTON_STYLES),
+    }
+
+
+async def _page_langs(_request: web.Request) -> dict:
+    """‏۱۰ LANGS — پوششِ هر زبان روی همان `TEXT_KEYS`ی که export می‌کند."""
+    await textstore.refresh_if_stale()
+    langs = await _languages(refresh=True)
+    total = len(_TEXT_KEYS)
+    async with Sessionmaker() as s:
+        counts = dict((await s.execute(
+            select(User.lang, func.count(User.id)).group_by(User.lang))).all())
+    rows = []
+    for code, name in langs.items():
+        builtin = code in BUILTIN_NAMES
+        # زبانِ داخلی کاتالوگِ کد دارد، پس پوششش کامل است؛ زبانِ افزوده فقط
+        # از `text_overrides` می‌آید و همان شمارش پوششِ واقعی‌اش است.
+        have = total if builtin else len(textstore.lang_texts(code))
+        rows.append({"code": code, "name": name, "builtin": builtin,
+                     "keys": have, "total": total,
+                     "users": counts.get(code, 0)})
+    return {"rows": rows, "total": total}
+
+
+async def _page_traffic(request: web.Request) -> dict:
+    """‏۰۲ TRAFFIC — بازتابِ `/stats`، بدونِ محاسبهٔ دوم."""
+    rng = request.query.get("range", "7D").upper()
+    s = await _stats_cached(request.app, _CONSOLE_RANGES.get(rng, "7d"))
+    keep = ("files", "files_all", "dl_files", "users", "users_new", "users_active",
+            "users_blocked", "ops", "done", "err", "queued", "cancelled",
+            "success_rate", "storage_h", "media_h", "avg_op_h", "src_up_pct",
+            "cache_rows", "cache_hits", "cache_saved_h", "by_kind", "by_op",
+            "by_ext", "by_size", "by_res", "by_lang", "by_platform",
+            "op_perf", "errors", "top_users", "ts", "ts_max")
+    return {"range": rng, **{k: s.get(k) for k in keep}}
+
+
+#: صفحه → سازندهٔ داده. فهرست **صریح** است نه `getattr` روی نامِ صفحه، وگرنه
+#: یک مسیرِ کاربر می‌تواند هر تابعی را در این ماژول صدا بزند.
+_CONSOLE_PAGES = {
+    "traffic": _page_traffic,
+    "health": _page_health,
+    "nodes": _page_nodes,
+    "users": _page_users,
+    "cookies": _page_cookies,
+    "settings": _page_settings,
+    "strings": _page_strings,
+    "keyboard": _page_keyboard,
+    "langs": _page_langs,
+}
+
+
+async def console_page_api(request: web.Request) -> web.Response:
+    """`/api/console/<page>` — دادهٔ اختصاصیِ هر صفحه.
+
+    جدا از `/api/console` است نه داخلش: پوسته روی **هر** صفحه پیلود مشترک را
+    می‌خواهد (نوارِ اعداد، مشِ ریل)، ولی دادهٔ صفحهٔ STRINGS را فقط STRINGS
+    لازم دارد — ریختنشان در یک پاسخ یعنی هر صفحه هزینهٔ همهٔ صفحه‌ها را
+    بدهد.
+    """
+    if not _session_admin(request):
+        return web.json_response({"error": "unauthorized"}, status=401)
+    builder = _CONSOLE_PAGES.get(request.match_info.get("page", ""))
+    if builder is None:
+        return web.json_response({"error": "unknown page"}, status=404)
+    return web.json_response(await builder(request))
+
+
 async def _on_startup(app: web.Application) -> None:
     settings_store.init_store(settings.redis_url)
     app["redis"] = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -2212,12 +2865,13 @@ async def _security_headers(request: web.Request, handler):
 
 
 def build_app() -> web.Application:
-    app = web.Application(middlewares=[_security_headers])
+    app = web.Application(middlewares=[_security_headers, _panel_prefs])
     app.router.add_get("/", dashboard)
     app.router.add_get("/login", login)
     app.router.add_post("/auth/request", auth_request)
     app.router.add_post("/auth/verify", auth_verify)
     app.router.add_get("/logout", logout)
+    app.router.add_get("/prefs", prefs)
     app.router.add_post("/save", save)
     app.router.add_get("/cookies", cookies_page)
     app.router.add_post("/cookies/add", cookies_add)
@@ -2248,6 +2902,17 @@ def build_app() -> web.Application:
     app.router.add_get("/node/install.sh", node_install)  # عمومی
     app.router.add_get("/node/peers", node_peers)         # گِیت با NODE_SECRET (wg-sync)
     app.router.add_get("/healthz", healthz)
+    # یک هندلر برای کلِ زیردرختِ کنسول، نه `add_static`: خروجیِ Next هر صفحه
+    # را `<slug>/index.html` می‌دهد و استاتیکِ aiohttp دایرکتوری را باز نمی‌کند،
+    # پس با آن هر صفحه‌ای جز خانه ۴۰۴ می‌شد. گِیتِ نشست هم فقط روی HTML است و
+    # این تفکیک داخلِ خودِ هندلر زندگی می‌کند، نه در ترتیبِ ثبتِ روت‌ها.
+    # پیش از روتِ عامِ `/console/...` نیست چون مسیرش جداست، ولی ترتیبِ ثبت
+    # همچنان باربر است: هر روتِ تازهٔ زیرِ `/console` باید **قبل** از الگوی
+    # catch-all بیاید وگرنه فایل‌خوان می‌بلعدش.
+    app.router.add_get("/api/console", console_api)
+    app.router.add_get(r"/api/console/{page}", console_page_api)
+    app.router.add_get("/console", console_page)
+    app.router.add_get(r"/console/{tail:.*}", console_page)
     if os.path.isdir(_STATIC_DIR):
         app.router.add_static("/static", _STATIC_DIR)
     app.on_startup.append(_on_startup)
