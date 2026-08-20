@@ -1,11 +1,21 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { C } from '@/lib/theme'
-import { KEYBOARD, KINDS, STYLE_HEX, WIDTH_CAP, type KbButton } from '@/lib/pages'
+import { usePageData, type KeyboardPage } from '@/lib/api'
 import { Shell } from '@/components/Shell'
 import { Section } from '@/components/Section'
+import { PageState } from '@/components/ApiBanner'
 import { Btn, Chip, Fa, Input, Select } from '@/components/ui'
+
+interface KbButton {
+  op: string
+  text: string
+  style: string
+  icon: string
+  width: string
+  hidden: boolean
+}
 
 /**
  * ۰۹ KEYBOARD — چیدمانِ منوی کارتِ فایل.
@@ -19,14 +29,14 @@ import { Btn, Chip, Fa, Input, Select } from '@/components/ui'
  * ترتیب پر می‌شوند و ردیف وقتی می‌شکند که ظرفیتِ عرض پر شود **یا** عرضِ
  * دکمهٔ بعدی فرق کند.
  */
-function pack(items: KbButton[]): KbButton[][] {
+function pack(items: KbButton[], cap: Record<string, number>): KbButton[][] {
   const vis = items.filter((b) => !b.hidden)
   const out: KbButton[][] = []
   let i = 0
   while (i < vis.length) {
-    const cap = WIDTH_CAP[vis[i].width] ?? 3
+    const w = cap[vis[i].width] ?? 3
     let j = i
-    while (j < vis.length && j - i < cap && vis[j].width === vis[i].width) j++
+    while (j < vis.length && j - i < w && vis[j].width === vis[i].width) j++
     out.push(vis.slice(i, j))
     i = j
   }
@@ -34,8 +44,20 @@ function pack(items: KbButton[]): KbButton[][] {
 }
 
 export default function Page() {
-  const [kind, setKind] = useState<(typeof KINDS)[number]>('video')
-  const [items, setItems] = useState<KbButton[]>(KEYBOARD)
+  const [kind, setKind] = useState('video')
+  const state = usePageData<KeyboardPage>('keyboard', `kind=${encodeURIComponent(kind)}`)
+  const [items, setItems] = useState<KbButton[]>([])
+
+  // ویرایشِ محلی روی **کپیِ** دادهٔ سرور کار می‌کند تا پیش‌نمایش پیش از ذخیره
+  // زنده باشد؛ با هر بار رسیدنِ داده دوباره از سرور بذرگذاری می‌شود.
+  useEffect(() => {
+    if (state.data) {
+      setItems([
+        ...state.data.items.map((b) => ({ ...b, hidden: false })),
+        ...state.data.hidden.map((h) => ({ op: h.op, text: h.text, style: '', icon: '', width: 'third', hidden: true })),
+      ])
+    }
+  }, [state.data])
 
   const set = (op: string, patch: Partial<KbButton>) =>
     setItems((xs) => xs.map((b) => (b.op === op ? { ...b, ...patch } : b)))
@@ -49,13 +71,14 @@ export default function Page() {
       return c
     })
 
-  const rows = pack(items)
+  const rows = pack(items, state.data?.widthCap ?? { full: 1, half: 2, third: 3 })
   const hidden = items.filter((b) => b.hidden)
+  const styleHex = state.data?.styleHex ?? {}
 
   return (
     <Shell active="09" cmd={`./ctl keyboard --kind ${kind}`} bits={false}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-        {KINDS.map((k) => (
+        {(state.data?.kinds ?? []).map(({ key: k }) => (
           <button
             key={k}
             type="button"
@@ -83,8 +106,14 @@ export default function Page() {
         </span>
       </div>
 
+      <PageState state={state}>
       <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 340px', gap: 18, alignItems: 'start' }}>
         <Section label="LAYOUT" sigil="⌘" right="order · style · width · visibility" pad="22px 14px 12px">
+          <form method="post" action="/buttons/save" id="kb-form">
+          <input type="hidden" name="kind" value={kind} />
+          <input type="hidden" name="lang" value={state.data?.lang ?? ''} />
+          {/* ترتیب یک فیلدِ واحد است، همان قراردادی که `buttons_save` دارد. */}
+          <input type="hidden" name="order" value={items.map((b) => b.op).join(',')} />
           <div
             style={{
               display: 'flex',
@@ -137,6 +166,7 @@ export default function Page() {
               <span style={{ width: 92, color: C.accHi }}>{b.op}</span>
               <span style={{ flex: 1, minWidth: 0 }}>
                 <input
+                  name={`text_${b.op}`}
                   value={b.text}
                   onChange={(e) => set(b.op, { text: e.target.value })}
                   dir="rtl"
@@ -152,34 +182,64 @@ export default function Page() {
                   }}
                 />
               </span>
-              <Select value={b.style} onChange={(e) => set(b.op, { style: e.target.value as KbButton['style'] })} style={{ width: 96 }}>
+              <Select
+                name={`style_${b.op}`}
+                value={b.style}
+                onChange={(e) => set(b.op, { style: e.target.value })}
+                style={{ width: 96 }}
+              >
                 <option value="">—</option>
-                <option value="primary">primary</option>
-                <option value="success">success</option>
-                <option value="danger">danger</option>
+                {(state.data?.styles ?? []).map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
               </Select>
-              <Select value={b.width} onChange={(e) => set(b.op, { width: e.target.value as KbButton['width'] })} style={{ width: 92 }}>
-                <option value="full">full</option>
-                <option value="half">half</option>
-                <option value="third">third</option>
+              <Select
+                name={`width_${b.op}`}
+                value={b.width}
+                onChange={(e) => set(b.op, { width: e.target.value })}
+                style={{ width: 92 }}
+              >
+                {(state.data?.widths ?? []).map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
               </Select>
               <Input
-                value={b.emoji}
-                onChange={(e) => set(b.op, { emoji: e.target.value })}
+                name={`emoji_${b.op}`}
+                value={b.icon}
+                onChange={(e) => set(b.op, { icon: e.target.value })}
                 placeholder="—"
                 inputMode="numeric"
                 style={{ width: 130, fontSize: 10 }}
               />
               <span style={{ width: 44 }}>
-                <input type="checkbox" checked={!b.hidden} onChange={(e) => set(b.op, { hidden: !e.target.checked })} />
+                <input
+                  type="checkbox"
+                  name={`show_${b.op}`}
+                  checked={!b.hidden}
+                  onChange={(e) => set(b.op, { hidden: !e.target.checked })}
+                />
               </span>
             </div>
           ))}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <Btn solid>SAVE LAYOUT</Btn>
-            <Btn>RESET TO DEFAULT</Btn>
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
+            <Btn type="submit" solid>
+              SAVE LAYOUT
+            </Btn>
+            <span style={{ fontSize: 9.5, color: C.inkFaint, letterSpacing: '.06em' }}>
+              atomic — the whole menu is validated before anything is written
+            </span>
           </div>
+          </form>
+          <form method="post" action="/buttons/reset" style={{ marginTop: 8 }}>
+            <input type="hidden" name="kind" value={kind} />
+            <input type="hidden" name="lang" value={state.data?.lang ?? ''} />
+            <Btn type="submit">RESET TO DEFAULT</Btn>
+          </form>
         </Section>
 
         <Section label="TELEGRAM PREVIEW" sigil="◱" corners right="as the user sees it" pad="22px 14px 14px">
@@ -215,7 +275,7 @@ export default function Page() {
                       style={{
                         flex: 1,
                         textAlign: 'center',
-                        background: STYLE_HEX[b.style] || '#2B5278',
+                        background: styleHex[b.style] || '#2B5278',
                         color: '#fff',
                         fontFamily: "'Vazirmatn','Segoe UI',Tahoma,sans-serif",
                         fontSize: 12,
@@ -245,7 +305,7 @@ export default function Page() {
                     borderRadius: 4,
                   }}
                 >
-                  بستن
+                  {state.data?.closeLabel ?? '—'}
                 </span>
               </div>
             </div>
@@ -277,6 +337,7 @@ export default function Page() {
           </div>
         </Section>
       </div>
+      </PageState>
     </Shell>
   )
 }

@@ -52,6 +52,37 @@ export function ApiBanner({ state }: { state: ApiState }) {
 }
 
 /**
+ * سه حالتِ دادهٔ یک **صفحه**، در یک جا.
+ *
+ * همان قاعدهٔ بنر، یک پله پایین‌تر: تا داده نرسیده چیزی رندر نمی‌شود و روی
+ * شکست، علت نوشته می‌شود — نه اینکه جدول با ردیف‌های نمایشی پر شود.
+ */
+export function PageState<T>({
+  state,
+  children,
+}: {
+  state: { status: string; data: T | null; error: string | null }
+  children: React.ReactNode
+}) {
+  if (state.status === 'loading') {
+    return (
+      <div style={{ padding: '20px 0', textAlign: 'center', color: C.inkDim, fontSize: 10.5, letterSpacing: '.14em' }}>
+        [ ···· ] LOADING
+      </div>
+    )
+  }
+  if (state.status === 'error') {
+    return (
+      <div style={{ padding: '18px 0', textAlign: 'center', color: C.bad, fontSize: 10.5, lineHeight: 1.9 }}>
+        <div style={{ letterSpacing: '.14em', fontWeight: 700 }}>[ FAIL ] COULD NOT LOAD</div>
+        <div style={{ color: C.inkDim, fontSize: 10 }}>{state.error}</div>
+      </div>
+    )
+  }
+  return <>{children}</>
+}
+
+/**
  * نشانگرِ «این کارت منبعِ واقعی ندارد».
  *
  * برای پنلی است که در `gaps` نام برده شده — یعنی چیزی برای نشان‌دادن نیست و

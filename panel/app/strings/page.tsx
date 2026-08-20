@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import { C } from '@/lib/theme'
-import { STRING_GROUPS } from '@/lib/pages'
+import { usePageData, type StringsPage } from '@/lib/api'
 import { Shell } from '@/components/Shell'
 import { Section } from '@/components/Section'
+import { PageState } from '@/components/ApiBanner'
 import { Btn, Chip, Fa, Input, Select } from '@/components/ui'
 
 /**
@@ -20,33 +21,79 @@ import { Btn, Chip, Fa, Input, Select } from '@/components/ui'
  */
 export default function Page() {
   const [q, setQ] = useState('')
+  const [applied, setApplied] = useState('')
   const [lang, setLang] = useState('fa')
-  const groups = STRING_GROUPS.map((g) => ({
-    ...g,
-    rows: g.rows.filter((r) => !q || r.key.includes(q) || r.fa.includes(q) || r.en.toLowerCase().includes(q.toLowerCase())),
-  })).filter((g) => g.rows.length)
-
-  const overridden = STRING_GROUPS.flatMap((g) => g.rows).filter((r) => r.overridden).length
+  // جست‌وجو **سمتِ سرور** است، مثلِ صفحهٔ فارسی: `_texts_groups` روی کلید،
+  // پیش‌فرض و مقدارِ جاری می‌گردد؛ فیلترِ کلاینتی فقط گروه‌های بارگذاری‌شده
+  // را می‌بیند و همان تفاوت است که «پیدا نشد»ِ غلط می‌سازد.
+  const state = usePageData<StringsPage>(
+    'strings',
+    [`lang=${encodeURIComponent(lang)}`, applied && `q=${encodeURIComponent(applied)}`]
+      .filter(Boolean)
+      .join('&'),
+  )
+  const groups = state.data?.groups ?? []
+  const overridden = state.data?.edited ?? 0
+  // حالتِ باز فقط **انحراف** از تصمیمِ سرور را نگه می‌دارد، نه کلِ وضعیت:
+  // با عوض‌شدنِ جست‌وجو سرور دوباره تصمیم می‌گیرد کدام باز باشد، و یک
+  // حالتِ کاملِ کلاینتی آن تصمیم را خنثی می‌کرد.
+  const [flipped, setFlipped] = useState<Record<string, boolean>>({})
+  const isOpen = (g: { title: string; open: boolean }) =>
+    flipped[g.title] === undefined ? g.open : flipped[g.title]
+  const toggle = (title: string) =>
+    setFlipped((f) => ({ ...f, [title]: !(f[title] ?? groups.find((g) => g.title === title)?.open ?? false) }))
 
   return (
     <Shell active="08" cmd="./ctl strings --edit" bits={false}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="grep key or text…" style={{ width: 240 }} />
-        <Select value={lang} onChange={(e) => setLang(e.target.value)} style={{ width: 120 }}>
-          <option value="fa">fa · فارسی</option>
-          <option value="en">en · English</option>
-          <option value="ar">ar · العربية</option>
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && setApplied(q)}
+          placeholder="grep key or text…"
+          style={{ width: 240 }}
+        />
+        <Btn onClick={() => setApplied(q)}>SEARCH</Btn>
+        <Select value={lang} onChange={(e) => setLang(e.target.value)} style={{ width: 150 }}>
+          {(state.data?.langs ?? []).map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.code} · {l.name}
+            </option>
+          ))}
         </Select>
         <Chip color="var(--zone)">{overridden} overridden</Chip>
-        <Chip>214 keys</Chip>
+        <Chip>{state.data?.total ?? 0} keys</Chip>
         <span style={{ marginLeft: 'auto', fontSize: 9.5, color: C.inkDim, letterSpacing: '.1em' }}>
           in-process dict · reloaded on the redis txtver counter
         </span>
       </div>
 
+      <PageState state={state}>
       {groups.map((g) => (
-        <Section key={g.title} label={g.title.split('·')[0].trim()} sigil="⌸" right={`${g.n} keys in group`} pad="22px 14px 12px">
-          {g.rows.map((r, i) => (
+        <Section
+          key={g.title}
+          label={<Fa>{g.title}</Fa>}
+          sigil="⌸"
+          right={
+            <button
+              type="button"
+              onClick={() => toggle(g.title)}
+              style={{
+                border: 0,
+                background: 'transparent',
+                color: 'inherit',
+                font: 'inherit',
+                cursor: 'pointer',
+                padding: 0,
+              }}
+            >
+              {g.n} keys · {g.edited} edited · {isOpen(g) ? '▾ close' : '▸ open'}
+            </button>
+          }
+          pad="22px 14px 12px"
+        >
+        {isOpen(g) &&
+          g.rows.map((r, i) => (
             <div
               key={r.key}
               style={{
@@ -63,41 +110,60 @@ export default function Page() {
                 {r.key}
               </span>
 
-              <div style={{ flex: 1, minWidth: 0, maxWidth: 620, display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <div
+              <form
+                method="post"
+                action="/texts/save"
+                style={{ flex: 1, minWidth: 0, maxWidth: 620, display: 'flex', flexDirection: 'column', gap: 5 }}
+              >
+                <input type="hidden" name="lang" value={lang} />
+                <input type="hidden" name="key" value={r.key} />
+                <input type="hidden" name="q" value={applied} />
+                <textarea
+                  name="value"
+                  defaultValue={r.val}
+                  dir="auto"
+                  rows={r.val.length > 90 ? 3 : 1}
                   style={{
                     border: `1px solid ${C.edgeSoft}`,
                     background: C.panelDeep,
+                    color: C.inkHi,
+                    // فارسی داخلِ مونو حروفش نمی‌چسبد — همان قاعدهٔ `<Fa>`،
+                    // این‌بار روی یک فیلدِ ورودی که نمی‌تواند داخلش بنشیند.
+                    fontFamily: "'Vazirmatn','Segoe UI',Tahoma,sans-serif",
+                    fontSize: 12.5,
+                    lineHeight: 1.7,
                     padding: '6px 9px',
-                    minHeight: 30,
+                    outline: 'none',
+                    resize: 'vertical',
+                    width: '100%',
                   }}
-                >
-                  {lang === 'en' ? (
-                    <span style={{ color: C.inkHi, fontSize: 11 }}>{r.en}</span>
-                  ) : (
-                    <Fa style={{ color: C.inkHi, fontSize: 12.5, lineHeight: 1.7 }}>{r.fa}</Fa>
-                  )}
-                </div>
+                />
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 9.5, color: C.inkFaint }}>
+                  <Btn type="submit" solid style={{ padding: '3px 10px', fontSize: 9.5 }}>
+                    SAVE
+                  </Btn>
                   <span>default:</span>
-                  {lang === 'en' ? (
-                    <span>{r.en}</span>
-                  ) : (
-                    <Fa style={{ fontSize: 11 }}>{r.fa}</Fa>
-                  )}
+                  <Fa style={{ fontSize: 11, flex: 1, minWidth: 0 }}>{r.def}</Fa>
                 </div>
-              </div>
+              </form>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flexShrink: 0 }}>
-                <Btn solid style={{ padding: '4px 10px', fontSize: 9.5 }}>
-                  SAVE
-                </Btn>
-                {r.overridden && <Btn style={{ padding: '4px 10px', fontSize: 9.5 }}>RESET</Btn>}
+                {r.overridden && (
+                  <form method="post" action="/texts/reset">
+                    <input type="hidden" name="lang" value={lang} />
+                    <input type="hidden" name="key" value={r.key} />
+                    <input type="hidden" name="q" value={applied} />
+                    <Btn type="submit" style={{ padding: '4px 10px', fontSize: 9.5 }}>
+                      RESET
+                    </Btn>
+                  </form>
+                )}
               </div>
             </div>
           ))}
         </Section>
       ))}
+      </PageState>
 
       <Section label="PLACEHOLDER CONTRACT" sigil="⌘" right="validated on write" pad="22px 14px 12px">
         <div style={{ fontSize: 10.5, color: C.ink, lineHeight: 1.9 }}>

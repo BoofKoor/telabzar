@@ -1,9 +1,10 @@
 'use client'
 
 import { C } from '@/lib/theme'
-import { NODE_ROWS } from '@/lib/pages'
+import { usePageData, type NodesPage } from '@/lib/api'
 import { Shell } from '@/components/Shell'
 import { Section } from '@/components/Section'
+import { PageState } from '@/components/ApiBanner'
 import { Btn, Chip, Cmd, Flag, Head, Input, Row, Select } from '@/components/ui'
 
 /**
@@ -18,48 +19,61 @@ import { Btn, Chip, Cmd, Flag, Head, Input, Row, Select } from '@/components/ui'
  * نیست؛ به‌همین دلیل جعبه‌اش کنارِ خودِ فرم است نه پشتِ یک ریدایرکت.
  */
 export default function Page() {
-  const up = NODE_ROWS.filter((n) => n.up).length
+  const state = usePageData<NodesPage>('nodes')
+  const rows = state.data?.rows ?? []
+  const up = rows.filter((n) => n.up).length
 
   return (
     <Shell active="04" cmd="./ctl nodes --status" bits={false}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <Chip color={up === NODE_ROWS.length ? C.acc : C.bad}>
-          {up}/{NODE_ROWS.length} up
+        <Chip color={rows.length && up === rows.length ? C.acc : C.bad}>
+          {up}/{rows.length} up
         </Chip>
-        <Chip>wg0 10.51.0.0/24</Chip>
-        <Chip>mtu 1420</Chip>
+        <Chip>wg0 {state.data?.wg.subnet ?? '—'}</Chip>
+        <Chip>master {state.data?.wg.master ?? '—'}</Chip>
         <span style={{ marginLeft: 'auto', fontSize: 9.5, color: C.inkDim, letterSpacing: '.1em' }}>
           peers are declarative · host wg-sync reconciles from the Node table
         </span>
       </div>
 
       <Section label="NODES" sigil="⎔" right="heartbeat ttl 45s" corners pad="22px 14px 12px">
-        <Head
-          cols={[
-            { w: 46, label: '' },
-            { w: 96, label: 'NAME' },
-            { w: 96, label: 'ROLE' },
-            { w: 96, label: 'WG IP' },
-            { w: 60, label: 'RTT', right: true },
-            { w: 56, label: 'JOBS', right: true },
-            { w: 70, label: 'DONE', right: true },
-            { label: 'SEEN', right: true },
-          ]}
-        />
-        {NODE_ROWS.map((n, i) => (
-          <Row key={n.id} last={i === NODE_ROWS.length - 1}>
-            <Flag text={n.up ? '[ UP ]' : '[DOWN]'} color={n.up ? C.acc : C.bad} />
-            <span style={{ width: 96, color: C.inkHi }}>{n.name}</span>
-            <span style={{ width: 96 }}>
-              <Chip color={n.role === 'gateway' ? C.violet : C.info}>{n.role}</Chip>
-            </span>
-            <span style={{ width: 96, color: C.inkLo }}>{n.ip}</span>
-            <span style={{ width: 60, textAlign: 'right', color: C.inkLo }}>{n.rtt}</span>
-            <span style={{ width: 56, textAlign: 'right', color: n.jobs ? C.acc : C.inkFaint }}>{n.jobs}</span>
-            <span style={{ width: 70, textAlign: 'right', color: C.inkLo }}>{n.done.toLocaleString('en-US')}</span>
-            <span style={{ flex: 1, textAlign: 'right', color: n.up ? C.inkDim : C.bad }}>{n.seen}</span>
-          </Row>
-        ))}
+        <PageState state={state}>
+          <Head
+            cols={[
+              { w: 46, label: '' },
+              { w: 108, label: 'NAME' },
+              { w: 100, label: 'ROLE' },
+              { w: 100, label: 'WG IP' },
+              { w: 56, label: 'JOBS', right: true },
+              { w: 78, label: 'DONE', right: true },
+              { label: 'VERSION', right: true },
+            ]}
+          />
+          {rows.map((n, i) => (
+            <Row key={n.id} last={i === rows.length - 1}>
+              <Flag text={n.up ? '[ UP ]' : '[DOWN]'} color={n.up ? C.acc : C.bad} />
+              <span style={{ width: 108, color: C.inkHi }}>{n.name}</span>
+              <span style={{ width: 100 }}>
+                <Chip color={n.role === 'gateway' ? C.violet : C.info}>{n.role}</Chip>
+              </span>
+              <span style={{ width: 100, color: C.inkLo }}>{n.ip}</span>
+              <span style={{ width: 56, textAlign: 'right', color: n.jobs ? C.acc : C.inkFaint }}>{n.jobs}</span>
+              <span style={{ width: 78, textAlign: 'right', color: C.inkLo }}>
+                {n.done.toLocaleString('en-US')}
+              </span>
+              <span style={{ flex: 1, textAlign: 'right', color: n.up ? C.inkDim : C.bad }}>
+                {n.up ? n.ver : 'offline'}
+              </span>
+            </Row>
+          ))}
+          {!rows.length && (
+            <div style={{ padding: '18px 0', textAlign: 'center', color: C.inkFaint, fontSize: 10.5, lineHeight: 1.9 }}>
+              NO NODES — standalone master
+              <br />
+              <span style={{ fontSize: 9.5 }}>every path runs here; nothing is degraded by this</span>
+            </div>
+          )}
+        </PageState>
         <div style={{ marginTop: 10, fontSize: 9.5, color: C.inkDim, lineHeight: 1.8 }}>
           a dead node is never a broken path: downloads fall back to arq:queue:dl:master, heavy ops
           stay on the master queue, and links revert to public_base.
@@ -67,37 +81,49 @@ export default function Page() {
       </Section>
 
       <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
+        {/* فرم مستقیم به هندلرِ موجودِ Jinja POST می‌کند و همان ریدایرکت را
+            می‌گیرد. توکنِ **یک‌بارمصرف** بعد از join مصرف می‌شود و دوباره
+            نمایش‌دادنی نیست، پس صفحهٔ نتیجه جای نمایشش است نه این‌جا. */}
         <Section label="ADD NODE" sigil="✚" right="one-time token · 30 min" pad="22px 14px 12px">
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-            <Input placeholder="name (e.g. dl-ams)" style={{ width: 170 }} />
-            <Select defaultValue="download" style={{ width: 140 }}>
-              <option value="download">download</option>
-              <option value="processing">processing</option>
-              <option value="gateway">gateway</option>
-            </Select>
-            <Btn solid>ISSUE</Btn>
-          </div>
-          <div style={{ fontSize: 10, color: C.inkDim, marginBottom: 7, letterSpacing: '.06em' }}>
-            run this on the new host, as root:
-          </div>
-          <Cmd>{`curl -fsSL https://panel.example/node/install.sh \\
-  | sudo bash -s -- --token 8f3c…a91b`}</Cmd>
-          <div style={{ marginTop: 9, fontSize: 9.5, color: C.warn, lineHeight: 1.8 }}>
-            shown once — the token is consumed on join (redis GETDEL) and cannot be re-displayed.
+          <form method="post" action="/nodes/add">
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+              <Input name="name" placeholder="name (e.g. dl-ams)" style={{ width: 170 }} />
+              <Select name="role" defaultValue={state.data?.roles[0] ?? 'download'} style={{ width: 140 }}>
+                {(state.data?.roles ?? []).map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </Select>
+              <Btn type="submit" solid>
+                ISSUE
+              </Btn>
+            </div>
+          </form>
+          {state.data && !state.data.master_ready && (
+            <div style={{ fontSize: 10, color: C.warn, lineHeight: 1.9 }}>
+              master WG is not provisioned yet — run{' '}
+              <span style={{ color: C.accHi }}>telabzar nodes-enable</span> on the host first, or the
+              token will have nothing to join.
+            </div>
+          )}
+          <div style={{ marginTop: 9, fontSize: 9.5, color: C.inkDim, lineHeight: 1.8 }}>
+            the install command is shown once, on the page that follows — the token is consumed on
+            join (redis GETDEL) and cannot be re-displayed.
           </div>
         </Section>
 
-        <Section label="WG MESH" sigil="⌸" right="10.51.0.1 · master" pad="22px 14px 12px">
+        <Section label="WG MESH" sigil="⌸" right={`${state.data?.wg.master ?? '—'} · master`} pad="22px 14px 12px">
           <pre style={{ fontFamily: 'inherit', fontSize: 11, lineHeight: 2, color: C.inkLo }}>
-            {`master 10.51.0.1 ─┬─ `}
-            <span style={{ color: C.acc }}>dl-fra</span>
-            {`    10.51.0.2  42ms
-                  ├─ `}
-            <span style={{ color: C.acc }}>proc-hel</span>
-            {`  10.51.0.3  31ms
-                  └─ `}
-            <span style={{ color: C.bad }}>edge-thr</span>
-            {`  10.51.0.4  down`}
+            {`master ${state.data?.wg.master ?? '—'}`}
+            {rows.map((n, i) => (
+              <span key={n.id}>
+                {`\n       ${i === rows.length - 1 ? '└─' : '├─'} `}
+                <span style={{ color: n.up ? C.acc : C.bad }}>{n.name.padEnd(10)}</span>
+                {`${n.ip}  ${n.up ? 'up' : 'down'}`}
+              </span>
+            ))}
+            {!rows.length && '\n       (no peers)'}
           </pre>
           <div
             style={{
@@ -109,12 +135,11 @@ export default function Page() {
               lineHeight: 1.9,
             }}
           >
-            rx <span style={{ color: C.acc }}>4.81 GB</span> · tx{' '}
-            <span style={{ color: C.acc }}>17.2 GB</span>
+            {rows.length} peer{rows.length === 1 ? '' : 's'} configured · subnet{' '}
+            <span style={{ color: C.inkMid }}>{state.data?.wg.subnet ?? '—'}</span>
             <br />
-            last handshake <span style={{ color: C.inkMid }}>00:00:41</span> ago · 3 peers configured
-            <br />
-            telabzar-wg-sync.timer <span style={{ color: C.acc }}>active</span>
+            orphan jobs reaped back to master:{' '}
+            <span style={{ color: state.data?.reaped ? C.warn : C.acc }}>{state.data?.reaped ?? 0}</span>
           </div>
         </Section>
       </div>

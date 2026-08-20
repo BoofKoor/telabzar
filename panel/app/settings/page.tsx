@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import { C } from '@/lib/theme'
-import { SETTINGS } from '@/lib/pages'
+import { usePageData, type SettingsPage } from '@/lib/api'
 import { Shell } from '@/components/Shell'
 import { Section } from '@/components/Section'
+import { PageState } from '@/components/ApiBanner'
 import { Btn, Chip, Fa, Input, Select } from '@/components/ui'
 
 /**
@@ -21,13 +22,14 @@ import { Btn, Chip, Fa, Input, Select } from '@/components/ui'
  */
 export default function Page() {
   const [q, setQ] = useState('')
-  const groups = SETTINGS.map((g) => ({
-    ...g,
-    rows: g.rows.filter((r) => !q || r.key.includes(q.toLowerCase())),
-  })).filter((g) => g.rows.length)
+  const state = usePageData<SettingsPage>('settings')
+  const all = state.data?.groups ?? []
+  const groups = all
+    .map((g) => ({ ...g, rows: g.rows.filter((r) => !q || r.key.includes(q.toLowerCase())) }))
+    .filter((g) => g.rows.length)
 
-  const changed = SETTINGS.flatMap((g) => g.rows).filter((r) => r.val !== r.def).length
-  const total = SETTINGS.flatMap((g) => g.rows).length
+  const changed = all.flatMap((g) => g.rows).filter((r) => r.val !== r.def).length
+  const total = state.data?.total ?? 0
 
   return (
     <Shell active="07" cmd="./ctl config --edit" bits={false}>
@@ -47,8 +49,10 @@ export default function Page() {
         </span>
       </div>
 
+      <PageState state={state}>
+      <form method="post" action="/save" style={{ display: 'contents' }}>
       {groups.map((g) => (
-        <Section key={g.title} label={g.title} sigil="⛭" right={`${g.rows.length} keys · ${g.tag}_*`} pad="22px 14px 12px">
+        <Section key={g.title} label={<Fa>{g.title}</Fa>} sigil="⛭" right={`${g.rows.length} keys`} pad="22px 14px 12px">
           {g.rows.map((r, i) => {
             const dirty = r.val !== r.def
             return (
@@ -67,52 +71,39 @@ export default function Page() {
                 <span style={{ width: 210, color: dirty ? C.inkHi : C.inkMid, flexShrink: 0 }}>{r.key}</span>
 
                 {r.kind === 'enum' ? (
-                  <Select defaultValue={r.val} style={{ width: 130 }}>
-                    {r.enum!.map((o) => (
+                  <Select name={r.key} defaultValue={r.val} style={{ width: 150 }}>
+                    {/* مقدارِ خالی یک گزینهٔ **واقعی** است (یعنی «تنظیم
+                        نشده، از پیش‌فرض پیروی کن») ولی بدونِ برچسب، دراپ‌داون
+                        خالی و شکسته به‌نظر می‌رسد. */}
+                    {(r.enum ?? []).map((o) => (
                       <option key={o} value={o}>
-                        {o}
+                        {o === '' ? '— unset' : o}
                       </option>
                     ))}
                   </Select>
                 ) : r.kind === 'bool' ? (
-                  <Select defaultValue={r.val} style={{ width: 130 }}>
+                  <Select name={r.key} defaultValue={r.val} style={{ width: 150 }}>
                     <option value="on">on</option>
                     <option value="off">off</option>
                   </Select>
                 ) : (
                   <Input
+                    name={r.key}
                     defaultValue={r.val}
                     placeholder={r.kind === 'str' ? '(empty)' : ''}
-                    style={{ width: 130, textAlign: r.kind === 'int' ? 'right' : 'left' }}
+                    style={{ width: 150, textAlign: r.kind === 'int' ? 'right' : 'left' }}
                   />
                 )}
 
-                <span style={{ width: 34, color: C.inkFaint, fontSize: 10 }}>{r.unit ?? ''}</span>
-
-                <span style={{ width: 96, color: C.inkFaint, fontSize: 10, flexShrink: 0 }}>
+                <span style={{ width: 110, color: C.inkFaint, fontSize: 10, flexShrink: 0 }}>
                   def {r.def === '' ? '—' : r.def}
                 </span>
 
                 <Fa style={{ flex: 1, minWidth: 0, color: C.inkDim, fontSize: 10.5 }}>{r.note}</Fa>
 
-                {dirty && (
-                  <button
-                    type="button"
-                    className="ghost-btn"
-                    style={{
-                      border: `1px solid ${C.edgeBtn}`,
-                      background: 'transparent',
-                      color: C.inkDim,
-                      fontFamily: 'inherit',
-                      fontSize: 9.5,
-                      padding: '3px 7px',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                    }}
-                  >
-                    RESET
-                  </button>
-                )}
+                {/* «برگرداندن به پیش‌فرض» یعنی خالی‌کردنِ فیلد و ذخیره؛
+                    هندلرِ `save` مقدارِ برابرِ پیش‌فرض را reset می‌کند. */}
+                {dirty && <span style={{ color: 'var(--zone)', fontSize: 9.5, flexShrink: 0 }}>◂ changed</span>}
               </div>
             )
           })}
@@ -120,12 +111,15 @@ export default function Page() {
       ))}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <Btn solid>APPLY</Btn>
-        <Btn>REVERT</Btn>
+        <Btn type="submit" solid>
+          APPLY
+        </Btn>
         <span style={{ marginLeft: 'auto', fontSize: 9.5, color: C.inkFaint, letterSpacing: '.1em' }}>
-          bounds enforced in settings_store, not here
+          bounds enforced in settings_store · the form is atomic — one bad value rejects the save
         </span>
       </div>
+      </form>
+      </PageState>
     </Shell>
   )
 }

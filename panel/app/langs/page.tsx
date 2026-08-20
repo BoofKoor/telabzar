@@ -1,9 +1,10 @@
 'use client'
 
 import { C } from '@/lib/theme'
-import { LANGS } from '@/lib/pages'
+import { usePageData, type LangsPage } from '@/lib/api'
 import { Shell } from '@/components/Shell'
 import { Section } from '@/components/Section'
+import { PageState } from '@/components/ApiBanner'
 import { Bar, Btn, Chip, Cmd, Fa, Head, Input, Row } from '@/components/ui'
 
 /**
@@ -21,18 +22,22 @@ import { Bar, Btn, Chip, Cmd, Fa, Head, Input, Row } from '@/components/ui'
  *   می‌گیرد، نه یک دکمهٔ ساده.
  */
 export default function Page() {
+  const state = usePageData<LangsPage>('langs')
+  const rows = state.data?.rows ?? []
+  const builtin = rows.filter((l) => l.builtin).length
   return (
     <Shell active="10" cmd="./ctl langs --list" bits={false}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <Chip color="var(--zone)">{LANGS.length} languages</Chip>
-        <Chip>2 built-in</Chip>
-        <Chip>214 keys each</Chip>
+        <Chip color="var(--zone)">{rows.length} languages</Chip>
+        <Chip>{builtin} built-in</Chip>
+        <Chip>{state.data?.total ?? 0} keys each</Chip>
         <span style={{ marginLeft: 'auto', fontSize: 9.5, color: C.inkDim, letterSpacing: '.1em' }}>
           adding a language is data — zero lines of code
         </span>
       </div>
 
       <Section label="LANGUAGES" sigil="⟐" corners right="ordered by name, code" pad="22px 14px 12px">
+        <PageState state={state}>
         <Head
           cols={[
             { w: 70, label: 'CODE' },
@@ -44,11 +49,11 @@ export default function Page() {
             { w: 148, label: '', right: true },
           ]}
         />
-        {LANGS.map((l, i) => {
-          const pct = Math.round((l.keys / l.total) * 100)
+        {rows.map((l, i) => {
+          const pct = l.total ? Math.round((l.keys / l.total) * 100) : 0
           const col = pct === 100 ? C.acc : pct >= 90 ? C.warn : C.bad
           return (
-            <Row key={l.code} last={i === LANGS.length - 1}>
+            <Row key={l.code} last={i === rows.length - 1}>
               <span style={{ width: 70, color: C.inkHi }}>{l.code}</span>
               <span style={{ width: 150 }}>
                 <Fa style={{ color: C.inkMid, fontSize: 12.5 }}>{l.name}</Fa>
@@ -65,49 +70,66 @@ export default function Page() {
               </span>
               <span style={{ width: 62, textAlign: 'right', color: C.inkLo }}>{l.users.toLocaleString('en-US')}</span>
               <span style={{ width: 148, textAlign: 'right', display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                <Btn style={{ padding: '3px 9px', fontSize: 9.5 }}>EXPORT</Btn>
+                <Btn
+                  type="button"
+                  onClick={() => {
+                    window.location.href = `/langs/export?lang=${encodeURIComponent(l.code)}`
+                  }}
+                  style={{ padding: '3px 9px', fontSize: 9.5 }}
+                >
+                  EXPORT
+                </Btn>
                 {!l.builtin && (
-                  <Btn danger style={{ padding: '3px 9px', fontSize: 9.5 }}>
-                    DELETE
-                  </Btn>
+                  <form method="post" action="/langs/delete" style={{ display: 'inline' }}>
+                    <input type="hidden" name="lang" value={l.code} />
+                    <Btn type="submit" danger style={{ padding: '3px 9px', fontSize: 9.5 }}>
+                      DELETE
+                    </Btn>
+                  </form>
                 )}
               </span>
             </Row>
           )
         })}
+        </PageState>
       </Section>
 
       <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
         <Section label="IMPORT A PACK" sigil="⇩" right="export == import" pad="22px 14px 12px">
-          <div style={{ display: 'flex', gap: 8, marginBottom: 9, flexWrap: 'wrap', alignItems: 'center' }}>
-            <Input placeholder="code (e.g. es, pt-BR)" style={{ width: 170 }} />
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: C.inkLo }}>
-              <input type="checkbox" /> replace instead of merge
-            </label>
-          </div>
-          <textarea
-            dir="ltr"
-            placeholder={'{\n  "lang": "es",\n  "name": "Español",\n  "texts": { "btn_compress": "Comprimir", … }\n}'}
-            style={{
-              width: '100%',
-              height: 148,
-              border: `1px solid ${C.edgeSoft}`,
-              background: C.panelDeep,
-              color: C.inkHi,
-              fontFamily: 'inherit',
-              fontSize: 10.5,
-              lineHeight: 1.7,
-              padding: '8px 10px',
-              outline: 'none',
-              resize: 'vertical',
-            }}
-          />
-          <div style={{ display: 'flex', gap: 8, marginTop: 9, alignItems: 'center' }}>
-            <Btn solid>REVIEW</Btn>
-            <span style={{ fontSize: 9.5, color: C.inkDim }}>
-              nothing is written before you confirm the diff
-            </span>
-          </div>
+          <form method="post" action="/langs/import">
+            <div style={{ display: 'flex', gap: 8, marginBottom: 9, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Input name="lang" placeholder="code (e.g. es, pt-BR)" style={{ width: 170 }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: C.inkLo }}>
+                <input type="checkbox" name="replace" /> replace instead of merge
+              </label>
+            </div>
+            <textarea
+              dir="ltr"
+              name="pack"
+              placeholder={'{\n  "lang": "es",\n  "name": "Español",\n  "texts": { "btn_compress": "Comprimir", … }\n}'}
+              style={{
+                width: '100%',
+                height: 148,
+                border: `1px solid ${C.edgeSoft}`,
+                background: C.panelDeep,
+                color: C.inkHi,
+                fontFamily: 'inherit',
+                fontSize: 10.5,
+                lineHeight: 1.7,
+                padding: '8px 10px',
+                outline: 'none',
+                resize: 'vertical',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 9, alignItems: 'center' }}>
+              <Btn type="submit" solid>
+                REVIEW
+              </Btn>
+              <span style={{ fontSize: 9.5, color: C.inkDim }}>
+                nothing is written before you confirm the diff
+              </span>
+            </div>
+          </form>
         </Section>
 
         <Section label="THE LOOP" sigil="⟳" right="one file, one chat-bot" pad="22px 14px 12px">

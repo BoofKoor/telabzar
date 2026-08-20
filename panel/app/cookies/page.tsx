@@ -1,10 +1,16 @@
 'use client'
 
 import { C } from '@/lib/theme'
-import { COOKIE_POOL, COOKIE_STATUS } from '@/lib/pages'
+import { COOKIE_STATUS } from '@/lib/pages'
+import { usePageData, type CookieAccount, type CookiesPage } from '@/lib/api'
 import { Shell } from '@/components/Shell'
 import { Section } from '@/components/Section'
+import { PageState } from '@/components/ApiBanner'
 import { Bar, Btn, Chip, Cmd, Flag, Head, Input, Row, Select } from '@/components/ui'
+
+/** پرچمِ وضعیت؛ وضعیتِ ناشناخته بنفش می‌گیرد، نه رنگِ «عادی» — §۷. */
+const flagOf = (s: string) =>
+  COOKIE_STATUS[s as keyof typeof COOKIE_STATUS] ?? { flag: '[ ?? ]', color: C.violet }
 
 /**
  * ۰۶ COOKIES — استخرِ سشن.
@@ -20,19 +26,21 @@ import { Bar, Btn, Chip, Cmd, Flag, Head, Input, Row, Select } from '@/component
  *   «چرا این اکانت انتخاب نشد؟» است و جوابش معمولاً سقف است نه سلامت.
  */
 export default function Page() {
-  const all = COOKIE_POOL.flatMap((p) => p.accounts)
+  const state = usePageData<CookiesPage>('cookies')
+  const stocked = state.data?.groups ?? []
+  const all: CookieAccount[] = stocked.flatMap((p) => p.accounts)
   const usable = all.filter((a) => ['healthy', 'unproven'].includes(a.status)).length
+  const degraded = all.length - usable
   const attention = all.filter((a) => ['frozen', 'invalid'].includes(a.status))
-  const stocked = COOKIE_POOL.filter((p) => p.accounts.length)
-  const empty = COOKIE_POOL.filter((p) => !p.accounts.length)
+  const empty = state.data?.unstocked ?? []
 
   return (
     <Shell active="06" cmd="./ctl cookies --pool" bits={false}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <Chip color="var(--zone)">{usable} usable</Chip>
         <Chip>{all.length} accounts</Chip>
-        <Chip color={C.warn} border="#3A2E14">
-          2 degraded
+        <Chip color={degraded ? C.warn : C.inkLo} border={degraded ? '#3A2E14' : C.edgeChip}>
+          {degraded} degraded
         </Chip>
         <span style={{ marginLeft: 'auto', fontSize: 9.5, color: C.inkDim, letterSpacing: '.1em' }}>
           mirrored to redis for the download node · ckfiles
@@ -51,13 +59,17 @@ export default function Page() {
         >
           {attention.map((a, i) => (
             <Row key={a.file} last={i === attention.length - 1}>
-              <Flag text={COOKIE_STATUS[a.status].flag} color={COOKIE_STATUS[a.status].color} />
+              <Flag text={flagOf(a.status).flag} color={flagOf(a.status).color} />
               <span style={{ color: C.inkMid, width: 210, overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.file}</span>
               <span style={{ flex: 1, color: C.errInk, fontSize: 10.5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {a.err}
               </span>
-              <Btn style={{ padding: '3px 9px', fontSize: 9.5 }}>PASTE FRESH</Btn>
-              <Btn style={{ padding: '3px 9px', fontSize: 9.5 }}>HANDLED</Btn>
+              <form method="post" action="/cookies/unfreeze" style={{ display: 'inline' }}>
+                <input type="hidden" name="name" value={a.file} />
+                <Btn type="submit" style={{ padding: '3px 9px', fontSize: 9.5 }}>
+                  HANDLED
+                </Btn>
+              </form>
             </Row>
           ))}
         </Section>
@@ -84,7 +96,7 @@ export default function Page() {
                 ]}
               />
               {p.accounts.map((a, i) => {
-                const st = COOKIE_STATUS[a.status]
+                const st = flagOf(a.status)
                 const pct = a.cap ? (a.used / a.cap) * 100 : 0
                 return (
                   <Row key={a.file} last={i === p.accounts.length - 1}>
@@ -110,7 +122,7 @@ export default function Page() {
                         textOverflow: 'ellipsis',
                       }}
                     >
-                      {a.warm ? <span style={{ color: C.info }}>warming · {a.warm}</span> : a.err || '—'}
+                      {a.warming ? <span style={{ color: C.info }}>warming up</span> : a.err || '—'}
                     </span>
                   </Row>
                 )
@@ -130,8 +142,8 @@ export default function Page() {
         <Section label="UNSTOCKED BUCKETS" sigil="○" right={`${empty.length} · not an alarm`} pad="22px 14px 12px">
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 9 }}>
             {empty.map((p) => (
-              <Chip key={p.platform} color={C.inkFaint}>
-                {p.platform}
+              <Chip key={p} color={C.inkFaint}>
+                {p}
               </Chip>
             ))}
           </div>
@@ -145,35 +157,40 @@ export default function Page() {
 
       <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
         <Section label="ADD ACCOUNT" sigil="✚" right="paste, not upload" pad="22px 14px 12px">
-          <div style={{ display: 'flex', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
-            <Select defaultValue="instagram" style={{ width: 140 }}>
-              {COOKIE_POOL.map((p) => (
-                <option key={p.platform}>{p.platform}</option>
-              ))}
-            </Select>
-            <Input placeholder="label (e.g. main)" style={{ width: 150 }} />
-          </div>
-          <textarea
-            dir="ltr"
-            placeholder={'# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t…\tsessionid\t…'}
-            style={{
-              width: '100%',
-              height: 132,
-              border: `1px solid ${C.edgeSoft}`,
-              background: C.panelDeep,
-              color: C.inkHi,
-              fontFamily: 'inherit',
-              fontSize: 10.5,
-              lineHeight: 1.7,
-              padding: '8px 10px',
-              outline: 'none',
-              resize: 'vertical',
-            }}
-          />
-          <div style={{ display: 'flex', gap: 8, marginTop: 9, alignItems: 'center' }}>
-            <Btn solid>ADD</Btn>
-            <span style={{ fontSize: 9.5, color: C.inkDim }}>Netscape or Cookie-Editor JSON</span>
-          </div>
+          <form method="post" action="/cookies/add">
+            <div style={{ display: 'flex', gap: 8, marginBottom: 9, flexWrap: 'wrap' }}>
+              <Select name="platform" defaultValue="instagram" style={{ width: 140 }}>
+                {(state.data?.platforms ?? []).map((p) => (
+                  <option key={p}>{p}</option>
+                ))}
+              </Select>
+              <Input name="label" placeholder="label (e.g. main)" style={{ width: 150 }} />
+            </div>
+            <textarea
+              dir="ltr"
+              name="text"
+              placeholder={'# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t…\tsessionid\t…'}
+              style={{
+                width: '100%',
+                height: 132,
+                border: `1px solid ${C.edgeSoft}`,
+                background: C.panelDeep,
+                color: C.inkHi,
+                fontFamily: 'inherit',
+                fontSize: 10.5,
+                lineHeight: 1.7,
+                padding: '8px 10px',
+                outline: 'none',
+                resize: 'vertical',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 9, alignItems: 'center' }}>
+              <Btn type="submit" solid>
+                ADD
+              </Btn>
+              <span style={{ fontSize: 9.5, color: C.inkDim }}>Netscape or Cookie-Editor JSON</span>
+            </div>
+          </form>
         </Section>
 
         <Section label="YOUTUBE EXPORT PROCEDURE" sigil="⚠" right="matters more than pool logic" rightColor={C.warn} pad="22px 14px 12px">

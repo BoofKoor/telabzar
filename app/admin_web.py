@@ -2484,6 +2484,295 @@ async def console_api(request: web.Request) -> web.Response:
     })
 
 
+async def _page_users(request: web.Request) -> dict:
+    """‏۰۵ USERS — همان دادهٔ `users_page`، از همان کشِ نسخه‌دار."""
+    try:
+        page = max(0, int(request.query.get("page", "0")))
+    except ValueError:
+        page = 0
+    data = await _users_cached(request.app, page, request.query.get("q", ""))
+    return {
+        "total": data.get("total", 0),
+        "blocked": data.get("blocked", 0),
+        "page": page,
+        "pages": data.get("pages", 1),
+        "q": data.get("q", ""),
+        "rows": [{
+            "tg": str(u["tg"]),
+            "role": u["role"] or "user",
+            "files": u["files"],
+            "created": u["created"] or "—",
+            "seen": u["seen"] or "—",
+            "blocked": u["blocked"],
+            # ادمین ردیفِ کنش ندارد و این باگ نیست: `middlewares` هرگز ادمین
+            # را بلاک نمی‌کند، پس دکمه‌ای که کاری نمی‌کند دروغ است.
+            "admin": u["is_admin"],
+        } for u in data.get("users", [])],
+    }
+
+
+async def _page_cookies(request: web.Request) -> dict:
+    """‏۰۶ COOKIES — استخرِ سشن، گروه‌بندی‌شده مثلِ صفحهٔ فارسی."""
+    redis = request.app["redis"]
+    lim = await ck_pool.load_limits()
+    accounts = await ck_pool.accounts(redis, lim=lim)
+    groups: dict[str, list] = {}
+    for a in accounts:
+        groups.setdefault(a.get("platform") or "other", []).append({
+            "file": a["name"],
+            "label": a.get("label") or "",
+            "status": a["status"],
+            "used": await ck_pool.usage(redis, a["name"]),
+            "cap": ck_pool.budget_of(a, None, lim),
+            "lastOk": _ago_fa(a.get("last_ok") or 0),
+            "err": (a.get("last_error") or "")[:150],
+            "warming": ck_pool.warmup_factor(int(a.get("added") or 0), None, lim) < 1.0,
+            "cooldown": a.get("cooldown", 0),
+        })
+    # سطلی که هرگز پر نشده «سوخته» نیست — §۷. تفکیکش این‌جا هم لازم است،
+    # وگرنه کنسول همان زنگِ خطای کاذبی را بازتولید می‌کند که ماه‌ها هر ۶
+    # ساعت DM می‌فرستاد.
+    known = [p for p, _fa in COOKIE_PLATFORMS]
+    unstocked = [p for p in known if p not in groups]
+    return {
+        "groups": [{"platform": p, "accounts": groups[p]}
+                   for p in known if p in groups]
+                  + [{"platform": p, "accounts": v}
+                     for p, v in groups.items() if p not in known],
+        # سطل‌هایی که فرمِ افزودن می‌تواند بسازد — همان `COOKIE_PLATFORMS`،
+        # نه فهرستِ گروه‌های پرشده، وگرنه اولین اکانتِ یک سطلِ خالی از پنل
+        # اضافه‌شدنی نیست.
+        "platforms": known,
+        "unstocked": unstocked,
+        "attention": [a["name"] for a in accounts
+                      if a["status"] in (ck_pool.FROZEN, ck_pool.INVALID)],
+    }
+
+
+async def _page_nodes(request: web.Request) -> dict:
+    """‏۰۴ NODES — ردیف‌های `Node` + heartbeatِ زنده."""
+    redis = request.app["redis"]
+    live = await node_mod.list_live(redis)
+    async with Sessionmaker() as s:
+        rows = (await s.execute(select(Node))).scalars().all()
+    return {
+        "rows": [{
+            "id": n.id, "name": n.name, "role": n.role, "ip": n.wg_ip,
+            "up": bool(live.get(n.id)),
+            "jobs": (live.get(n.id) or {}).get("load", 0),
+            "done": (live.get(n.id) or {}).get("done", 0),
+            "ver": (live.get(n.id) or {}).get("ver", "—"),
+        } for n in rows],
+        "roles": sorted(node_mod.ROLES),
+        "reaped": await node_mod.reaped_count(redis),
+        "master_ready": bool(settings.wg_master_pubkey and settings.wg_endpoint
+                             and (settings.admin_base or settings.public_base)),
+        "wg": {"subnet": settings.wg_subnet, "master": settings.wg_master_ip},
+    }
+
+
+#: کهنه‌ترین `job_timeout`ِ ریپو (دانلود، ۵۴۰۰ ثانیه) به‌علاوهٔ حاشیه. جابی که
+#: از این پیرتر است و هنوز تمام نشده، دیگر «در حالِ اجرا» نیست.
+_STUCK_AFTER = timedelta(seconds=5400 + 600)
+
+
+async def _page_health(request: web.Request) -> dict:
+    """‏۰۳ HEALTH — همان `_health` به‌علاوهٔ خلاصهٔ استخر و جاب‌های گیرکرده."""
+    health = await _health(request.app)
+    summary = await ck_pool.pool_summary(request.app["redis"])
+    # جابِ گیرکرده: `finally` روی SIGKILL اجرا نمی‌شود، پس ورکری که بینِ
+    # `status="running"` و کامیتش کشته شود ردیف را برای همیشه جا می‌گذارد و
+    # هیچ‌چیز جمعش نمی‌کند. تا امروز فقط در «در صف» جمع می‌شد و از یک صفِ
+    # واقعی تفکیک‌ناپذیر بود — Open Questions همین کارت را می‌خواست.
+    cutoff = datetime.now(timezone.utc) - _STUCK_AFTER
+    async with Sessionmaker() as s:
+        stuck = (await s.execute(
+            select(Job.id, Job.op, Job.status, Job.created_at, File.name)
+            .join(File, File.id == Job.file_id)
+            .where(Job.status.in_(("queued", "running")), Job.created_at < cutoff)
+            .order_by(Job.created_at).limit(20))).all()
+    now = datetime.now(timezone.utc)
+    rows = []
+    for jid, op, status, created, name in stuck:
+        if created is not None and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age = (now - created).total_seconds() if created else 0
+        rows.append({"id": jid, "op": _OP_FA.get(op, op), "status": status,
+                     "age": _fmt_hours(age), "file": name or ""})
+    return {
+        "health": {k: v for k, v in health.items() if k != "hosts"},
+        "hosts": health.get("hosts", []),
+        "pool": [{"platform": p, "live": d["healthy"] + d["suspect"],
+                  "cd": d["cooldown"], "bad": d["invalid"], "total": d["total"]}
+                 for p, d in sorted(summary.items())],
+        "stuck": rows,
+        "stuckAfter": int(_STUCK_AFTER.total_seconds()),
+    }
+
+
+async def _page_settings(_request: web.Request) -> dict:
+    """‏۰۷ SETTINGS — گروه‌ها از **همان** `_setting_groups` که فرمِ Jinja دارد.
+
+    اگر کنسول فهرستِ خودش را می‌ساخت، کلیدِ تازه در یکی ظاهر می‌شد و در
+    دیگری نه — همان یک‌طرفه‌بودنی که شش کلید را ماه‌ها نامرئی نگه داشت.
+    """
+    eff = await _effective()
+    groups = []
+    for title, rows in _setting_groups():
+        out = []
+        for key, _label, note in rows:
+            kind, default = RUNTIME_KEYS[key]
+            out.append({
+                "key": key,
+                "val": str(eff.get(key, "")),
+                "def": str(default),
+                "kind": "enum" if key in ENUM_VALUES else kind,
+                "enum": list(ENUM_VALUES.get(key, ())) or None,
+                "note": note,
+                "long": key in LONGTEXT_KEYS,
+            })
+        groups.append({"title": title, "rows": out})
+    return {"groups": groups, "total": len(RUNTIME_KEYS)}
+
+
+async def _page_strings(request: web.Request) -> dict:
+    """‏۰۸ STRINGS — گروه‌های متن برای زبانِ انتخابی."""
+    await textstore.refresh_if_stale()
+    lang, langs = await _pick_lang(request.query.get("lang"))
+    q = request.query.get("q", "")
+    groups = _texts_groups(lang, q)
+    return {
+        "lang": lang,
+        "langs": [{"code": c, "name": n} for c, n in langs.items()],
+        "q": q,
+        "total": len(_TEXT_KEYS),
+        "edited": sum(g["edited"] for g in groups),
+        # `open` از **همان** `_texts_groups` می‌آید که صفحهٔ فارسی می‌خواند:
+        # هنگام جست‌وجو همه باز، وگرنه فقط اولی. بدونِ آن، ۲۱۹ کلید یک صفحهٔ
+        # ۱۸ هزار پیکسلی می‌سازد — اندازه‌گیری‌شده، نه حدس.
+        "groups": [{"title": g["title"], "n": g["n"], "edited": g["edited"],
+                    "open": g["open"], "rows": [{
+                        "key": i["key"], "val": i["current"], "def": i["default"],
+                        "overridden": i["overridden"],
+                    } for i in g["items"]]} for g in groups],
+    }
+
+
+async def _page_keyboard(request: web.Request) -> dict:
+    """‏۰۹ KEYBOARD — چیدمانِ منوی کارت برای یک نوعِ فایل."""
+    await textstore.refresh_if_stale()
+    kind = request.query.get("kind", "video")
+    if kind not in _KIND_LABEL:
+        kind = "video"
+    lang, langs = await _pick_lang(request.query.get("lang"))
+    # **قاعده از `keyboards` می‌آید، نه از یک بازنویسی.** ترتیب/مخفی/عرض و
+    # قاعدهٔ «opِ تازه ته می‌رود» همگی در `_resolved_menu` زندگی می‌کنند و
+    # همان چیزی است که ربات واقعاً رندر می‌کند؛ و بسته‌بندیِ ردیف در
+    # `_rows_from_widths`. CLAUDE.md ثبت کرده که این قرارداد از قبل **هشت**
+    # کپیِ دست‌نویس بینِ JS و پایتون دارد — کپیِ نهم این‌جا ساخته نمی‌شود.
+    from .keyboards import _WIDTH_CAP, _resolved_menu, _rows_from_widths
+
+    resolved = _resolved_menu(kind)
+    layout = textstore.get_menu_layout(kind) or []
+    hidden = {e["op"] for e in layout if e.get("hidden")}
+    shown = []
+    for op, label_key, width in resolved:
+        style, icon = textstore.get_button_style(op)
+        shown.append({
+            "op": op,
+            "text": _t(lang, label_key),
+            "style": style or "",
+            "icon": icon or "",
+            "width": width,
+        })
+    return {
+        "kind": kind,
+        "kinds": [{"key": k, "label": lbl} for k, lbl in _KIND_TABS],
+        "lang": lang,
+        "langs": [{"code": c, "name": n} for c, n in langs.items()],
+        "items": shown,
+        # بسته‌بندیِ ردیف از **همان** تابعی که ربات استفاده می‌کند، پس
+        # پیش‌نمایشِ کنسول نمی‌تواند با کیبوردِ واقعی واگرا شود.
+        "rows": _rows_from_widths([i["width"] for i in shown]),
+        "hidden": [{"op": op, "text": _t(lang, key)}
+                   for op, key in OPS_BY_KIND.get(kind, ()) if op in hidden],
+        "closeLabel": _t(lang, "btn_close"),
+        "styleHex": _STYLE_HEX,
+        # نگاشتِ عرض→ظرفیت از **خودِ `keyboards`** می‌آید. پیش‌نمایشِ زنده
+        # ناچار است سمتِ کلاینت دوباره بسته‌بندی کند (کاربر پیش از ذخیره
+        # جابه‌جا می‌کند)، ولی دستِ‌کم جدول را از سرور می‌گیرد نه اینکه
+        # بازنویسی‌اش کند — یکی کمتر از هشت کپیِ دست‌نویسی که Open Questions
+        # ثبت کرده.
+        "widthCap": dict(_WIDTH_CAP),
+        "widths": list(textstore.BUTTON_WIDTHS),
+        "styles": list(textstore._BUTTON_STYLES),
+    }
+
+
+async def _page_langs(_request: web.Request) -> dict:
+    """‏۱۰ LANGS — پوششِ هر زبان روی همان `TEXT_KEYS`ی که export می‌کند."""
+    await textstore.refresh_if_stale()
+    langs = await _languages(refresh=True)
+    total = len(_TEXT_KEYS)
+    async with Sessionmaker() as s:
+        counts = dict((await s.execute(
+            select(User.lang, func.count(User.id)).group_by(User.lang))).all())
+    rows = []
+    for code, name in langs.items():
+        builtin = code in BUILTIN_NAMES
+        # زبانِ داخلی کاتالوگِ کد دارد، پس پوششش کامل است؛ زبانِ افزوده فقط
+        # از `text_overrides` می‌آید و همان شمارش پوششِ واقعی‌اش است.
+        have = total if builtin else len(textstore.lang_texts(code))
+        rows.append({"code": code, "name": name, "builtin": builtin,
+                     "keys": have, "total": total,
+                     "users": counts.get(code, 0)})
+    return {"rows": rows, "total": total}
+
+
+async def _page_traffic(request: web.Request) -> dict:
+    """‏۰۲ TRAFFIC — بازتابِ `/stats`، بدونِ محاسبهٔ دوم."""
+    rng = request.query.get("range", "7D").upper()
+    s = await _stats_cached(request.app, _CONSOLE_RANGES.get(rng, "7d"))
+    keep = ("files", "files_all", "dl_files", "users", "users_new", "users_active",
+            "users_blocked", "ops", "done", "err", "queued", "cancelled",
+            "success_rate", "storage_h", "media_h", "avg_op_h", "src_up_pct",
+            "cache_rows", "cache_hits", "cache_saved_h", "by_kind", "by_op",
+            "by_ext", "by_size", "by_res", "by_lang", "by_platform",
+            "op_perf", "errors", "top_users", "ts", "ts_max")
+    return {"range": rng, **{k: s.get(k) for k in keep}}
+
+
+#: صفحه → سازندهٔ داده. فهرست **صریح** است نه `getattr` روی نامِ صفحه، وگرنه
+#: یک مسیرِ کاربر می‌تواند هر تابعی را در این ماژول صدا بزند.
+_CONSOLE_PAGES = {
+    "traffic": _page_traffic,
+    "health": _page_health,
+    "nodes": _page_nodes,
+    "users": _page_users,
+    "cookies": _page_cookies,
+    "settings": _page_settings,
+    "strings": _page_strings,
+    "keyboard": _page_keyboard,
+    "langs": _page_langs,
+}
+
+
+async def console_page_api(request: web.Request) -> web.Response:
+    """`/api/console/<page>` — دادهٔ اختصاصیِ هر صفحه.
+
+    جدا از `/api/console` است نه داخلش: پوسته روی **هر** صفحه پیلود مشترک را
+    می‌خواهد (نوارِ اعداد، مشِ ریل)، ولی دادهٔ صفحهٔ STRINGS را فقط STRINGS
+    لازم دارد — ریختنشان در یک پاسخ یعنی هر صفحه هزینهٔ همهٔ صفحه‌ها را
+    بدهد.
+    """
+    if not _session_admin(request):
+        return web.json_response({"error": "unauthorized"}, status=401)
+    builder = _CONSOLE_PAGES.get(request.match_info.get("page", ""))
+    if builder is None:
+        return web.json_response({"error": "unknown page"}, status=404)
+    return web.json_response(await builder(request))
+
+
 async def _on_startup(app: web.Application) -> None:
     settings_store.init_store(settings.redis_url)
     app["redis"] = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -2614,6 +2903,7 @@ def build_app() -> web.Application:
     # همچنان باربر است: هر روتِ تازهٔ زیرِ `/console` باید **قبل** از الگوی
     # catch-all بیاید وگرنه فایل‌خوان می‌بلعدش.
     app.router.add_get("/api/console", console_api)
+    app.router.add_get(r"/api/console/{page}", console_page_api)
     app.router.add_get("/console", console_page)
     app.router.add_get(r"/console/{tail:.*}", console_page)
     if os.path.isdir(_STATIC_DIR):

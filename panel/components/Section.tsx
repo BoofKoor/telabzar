@@ -29,7 +29,8 @@ export function Section({
   style,
   children,
 }: {
-  label: string
+  /** رشته یا گره — عنوانِ فارسی باید از `<Fa>` رد شود. */
+  label: ReactNode
   /** نویسهٔ نشانه، پیش از نامِ سکشن. */
   sigil?: string
   right?: ReactNode
