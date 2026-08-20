@@ -1,6 +1,7 @@
 'use client'
 
 import { C } from '@/lib/theme'
+import { NAV } from '@/lib/nav'
 
 /**
  * ریلِ چپ: نامِ بلوکیِ ASCII، ناوبریِ شماره‌دارِ گروه‌بندی‌شده، درختِ WG،
@@ -11,34 +12,6 @@ import { C } from '@/lib/theme'
  * جایگزینی‌اش با متنِ ساده دقیقاً همان چیزی است که صفحه را از طرح دور کرد.
  */
 
-const NAV: { group: string; items: { n: string; label: string; badge?: string; badgeColor?: string; href: string }[] }[] = [
-  {
-    group: 'SYSTEM',
-    items: [
-      { n: '01', label: 'OVERVIEW', href: '/console/' },
-      { n: '02', label: 'TRAFFIC', href: '/stats' },
-      { n: '03', label: 'HEALTH', badge: '5/5', badgeColor: C.acc, href: '/health' },
-      { n: '04', label: 'NODES', badge: '1↓', badgeColor: C.bad, href: '/nodes' },
-    ],
-  },
-  {
-    group: 'CONTROL',
-    items: [
-      { n: '05', label: 'USERS', href: '/users' },
-      { n: '06', label: 'COOKIES', badge: '2!', badgeColor: C.warn, href: '/cookies' },
-      { n: '07', label: 'SETTINGS', href: '/settings' },
-      { n: '08', label: 'STRINGS', href: '/texts' },
-    ],
-  },
-  {
-    group: 'PIPE',
-    items: [
-      { n: '09', label: 'QUEUE', href: '/health' },
-      { n: '10', label: 'CACHE', badge: '91%', badgeColor: C.info, href: '/stats' },
-    ],
-  },
-]
-
 const MESH = [
   { tree: 'master ─┬─', name: 'dl-fra', color: C.acc, meta: '42ms' },
   { tree: '├─', name: 'proc-hel', color: C.acc, meta: '31ms' },
@@ -47,7 +20,7 @@ const MESH = [
 
 const groupLabel = { color: C.inkFaint, fontSize: 9, letterSpacing: '.22em' } as const
 
-export function Rail({ rain, active = '01' }: { rain: { chars: string; dur: string }[]; active?: string }) {
+export function Rail({ rain, active }: { rain: { chars: string; dur: string }[]; active: string }) {
   return (
     <aside
       className="mx-rail"

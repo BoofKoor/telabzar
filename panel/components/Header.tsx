@@ -1,29 +1,37 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import { C } from '@/lib/theme'
 import type { Range } from '@/lib/types'
 
 /**
- * سربرگِ چسبان: خطِ فرمان با مکان‌نمای چشمک‌زن، انتخابگرِ بازه، نشانگرِ
+ * سربرگِ چسبان: خطِ فرمان با مکان‌نمای چشمک‌زن، کنترل‌های صفحه، نشانگرِ
  * LIVE، ساعت، و نوارِ متحرکِ رویدادها.
  *
  * مکان‌نما یک `<span>`ِ رنگی با `mx-blink` است، نه یک نویسه — چون نویسهٔ
  * `_` در فونتِ مونو ارتفاعِ ثابت ندارد و درخششِ `box-shadow` هم نمی‌گیرد.
  * نوارِ متحرک متن را **دو بار** رندر می‌کند و ۵۰٪ جابه‌جا می‌شود، وگرنه سرِ
  * حلقه یک پرشِ دیدنی می‌دهد.
+ *
+ * `cmd` خطِ فرمانِ هر صفحه است — همان چیزی که به کنسول حسِ «یک ابزار، چند
+ * زیرفرمان» می‌دهد به‌جای «چند صفحهٔ بی‌ربط».
  */
 export function Header({
+  cmd,
   ranges,
   range,
   onRange,
   clock,
   ticker,
+  extra,
 }: {
-  ranges: Range[]
-  range: Range
-  onRange: (r: Range) => void
+  cmd: string
+  ranges?: Range[]
+  range?: Range
+  onRange?: (r: Range) => void
   clock: string
   ticker: string
+  extra?: ReactNode
 }) {
   return (
     <header
@@ -42,7 +50,7 @@ export function Header({
           <span style={{ color: C.inkFaint }}>:</span>
           <span style={{ color: C.inkLo }}>/opt/telabzar</span>
           <span style={{ color: C.inkFaint }}>$&nbsp;</span>
-          <span style={{ color: C.inkHi }}>./ctl watch --all --interval=3&nbsp;</span>
+          <span style={{ color: C.inkHi }}>{cmd}&nbsp;</span>
           <span
             style={{
               width: 7,
@@ -56,31 +64,35 @@ export function Header({
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 2 }}>
-            {ranges.map((r) => {
-              const on = r === range
-              return (
-                <button
-                  key={r}
-                  type="button"
-                  className="range-btn"
-                  onClick={() => onRange(r)}
-                  style={{
-                    border: `1px solid ${on ? C.acc : C.edgeBtn}`,
-                    background: on ? C.acc : 'transparent',
-                    color: on ? C.bg : C.ink,
-                    fontFamily: 'inherit',
-                    fontSize: 10.5,
-                    letterSpacing: '.12em',
-                    padding: '5px 10px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {r}
-                </button>
-              )
-            })}
-          </div>
+          {extra}
+
+          {ranges && (
+            <div style={{ display: 'flex', gap: 2 }}>
+              {ranges.map((r) => {
+                const on = r === range
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    className="range-btn"
+                    onClick={() => onRange?.(r)}
+                    style={{
+                      border: `1px solid ${on ? C.acc : C.edgeBtn}`,
+                      background: on ? C.acc : 'transparent',
+                      color: on ? C.bg : C.ink,
+                      fontFamily: 'inherit',
+                      fontSize: 10.5,
+                      letterSpacing: '.12em',
+                      padding: '5px 10px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {r}
+                  </button>
+                )
+              })}
+            </div>
+          )}
 
           <span
             className="mx-hide-s"
@@ -107,12 +119,13 @@ export function Header({
           </span>
 
           <span style={{ fontSize: 12, color: C.inkHi, letterSpacing: '.05em' }}>{clock}</span>
-          <span
+          <a
+            href="/logout"
             className="mx-hide-s"
             style={{ fontSize: 10.5, color: C.inkLo, border: `1px solid ${C.edgeChip}`, padding: '3px 7px' }}
           >
             uid:10345298
-          </span>
+          </a>
         </div>
       </div>
 

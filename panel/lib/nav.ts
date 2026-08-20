@@ -1,0 +1,57 @@
+import { C } from './theme'
+
+/**
+ * ناوبریِ ریل — **اعلانی**، تنها منبعِ ترتیب و شماره‌ها.
+ *
+ * ده آیتم، و این عدد تصادفی نیست: پنل دقیقاً ده صفحهٔ واقعی دارد
+ * (داشبورد + ۹ تا)، پس ریلِ ده‌تاییِ طرح بدونِ اختراعِ صفحه یا پنهان‌کردنِ
+ * یکی، مو‌به‌مو رویشان می‌نشیند. `QUEUE`/`CACHE`ِ ماکت صفحهٔ مستقل نبودند —
+ * محتوایشان داخلِ HEALTH و TRAFFIC زندگی می‌کند و همان‌جا هم ماند.
+ *
+ * `href` به مسیرِ **کنسول** اشاره می‌کند نه صفحهٔ Jinja؛ `legacy` صفحهٔ
+ * فارسیِ متناظر است تا تا وقتی فرم‌ها منتقل نشده‌اند راهِ برگشت باز بماند.
+ */
+export interface NavItem {
+  n: string
+  label: string
+  href: string
+  legacy: string
+  badge?: string
+  badgeColor?: string
+}
+
+export interface NavGroup {
+  group: string
+  items: NavItem[]
+}
+
+export const NAV: NavGroup[] = [
+  {
+    group: 'SYSTEM',
+    items: [
+      { n: '01', label: 'OVERVIEW', href: '/console/', legacy: '/' },
+      { n: '02', label: 'TRAFFIC', href: '/console/traffic/', legacy: '/stats' },
+      { n: '03', label: 'HEALTH', href: '/console/health/', legacy: '/health', badge: '5/6', badgeColor: C.warn },
+      { n: '04', label: 'NODES', href: '/console/nodes/', legacy: '/nodes', badge: '1↓', badgeColor: C.bad },
+    ],
+  },
+  {
+    group: 'CONTROL',
+    items: [
+      { n: '05', label: 'USERS', href: '/console/users/', legacy: '/users' },
+      { n: '06', label: 'COOKIES', href: '/console/cookies/', legacy: '/cookies', badge: '2!', badgeColor: C.warn },
+      // پنلِ Jinja فرمِ تنظیمات را روی **خودِ `/`** رندر می‌کند (کارت‌های سلامت
+      // بالای همان صفحه)، پس `legacy` این ردیف `/` است نه `/settings`. اولین
+      // نسخهٔ همین فایل `/settings` نوشته بود و گاردِ ناوبری گرفتش.
+      { n: '07', label: 'SETTINGS', href: '/console/settings/', legacy: '/' },
+      { n: '08', label: 'STRINGS', href: '/console/strings/', legacy: '/texts' },
+    ],
+  },
+  {
+    group: 'PIPE',
+    items: [
+      { n: '09', label: 'KEYBOARD', href: '/console/keyboard/', legacy: '/buttons' },
+      { n: '10', label: 'LANGS', href: '/console/langs/', legacy: '/langs', badge: '3', badgeColor: C.info },
+    ],
+  },
+]

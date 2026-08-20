@@ -1,10 +1,7 @@
 'use client'
 
 import { C } from '@/lib/theme'
-import { useConsole } from '@/lib/useConsole'
-import { Rail } from '@/components/Rail'
-import { Header } from '@/components/Header'
-import { StatusBits } from '@/components/StatusBits'
+import { Shell } from '@/components/Shell'
 import { Hero, Posture } from '@/components/Hero'
 import { Kpis } from '@/components/Kpis'
 import { Pipeline } from '@/components/Pipeline'
@@ -15,7 +12,6 @@ import { PlatformTable } from '@/components/PlatformTable'
 import { WireMonitor } from '@/components/WireMonitor'
 import { ActivityMap } from '@/components/ActivityMap'
 import { Audit, Errors, FlagList, Queue, WgFooter } from '@/components/Sidebar'
-import { Footer, Scanlines } from '@/components/Chrome'
 
 /**
  * صفحهٔ OVERVIEW.
@@ -25,44 +21,16 @@ import { Footer, Scanlines } from '@/components/Chrome'
  * ستونِ کناریِ ۳۴۰ پیکسلی) که هر کدام سکشن‌های خودشان را دارند.
  */
 export default function Page() {
-  const { vals, setRange, setHover } = useConsole()
-
   return (
-    <div
-      dir="ltr"
-      className="mx-shell"
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '226px minmax(0,1fr)',
-        minHeight: '100vh',
-        background: C.bg,
-        color: C.ink,
-        fontFamily: "'JetBrains Mono',ui-monospace,monospace",
-        fontSize: 12,
-        position: 'relative',
-      }}
-    >
-      <Rail rain={vals.rain} />
-
-      <main style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <Header
-          ranges={vals.ranges}
-          range={vals.range}
-          onRange={setRange}
-          clock={vals.clock}
-          ticker={vals.ticker}
-        />
-
-        <div className="mx-pad" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 18 }}>
-          <StatusBits bits={vals.statusBits} />
-
+    <Shell active="01" cmd="./ctl watch --all --interval=3" ranges>
+      {({ vals, setHover }) => (
+        <>
           <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 300px', gap: 18 }}>
             <Hero rangeLabel={vals.range} rows={vals.heroRows} sub={vals.heroSub} value={vals.heroValue} />
             <Posture />
           </div>
 
           <Kpis kpis={vals.kpis} />
-
           <Pipeline steps={vals.pipeline} />
 
           <div
@@ -111,12 +79,8 @@ export default function Page() {
               <Audit rows={vals.audit} />
             </div>
           </div>
-        </div>
-
-        <Footer statusLine={vals.statusLine} />
-      </main>
-
-      {vals.scanlines && <Scanlines />}
-    </div>
+        </>
+      )}
+    </Shell>
   )
 }

@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import mimetypes
 import os
 import pathlib
 import re
@@ -67,6 +68,12 @@ _SESSION_TTL = 8 * 3600
 #: کانتینر نه — یعنی سبزیِ CI و ۵۰۰ روی تولید. `COPY app ./app` هر دو را می‌آورد.
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 _TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+#: `mimetypes` پایتون `woff2` را نمی‌شناسد، پس بدونِ این خطْ فونت‌های کنسول
+#: با `application/octet-stream` سرو می‌شوند. مرورگر به‌هرحال از `format()`ِ
+#: خودِ `@font-face` تشخیص می‌دهد، ولی نوعِ درست کشِ میانی و ابزارِ دیباگ را
+#: هم درست می‌کند و هزینه‌اش یک خط است.
+mimetypes.add_type("font/woff2", ".woff2")
+
 #: خروجیِ استاتیکِ `panel/` (Next.js). در تولید `docker/admin.Dockerfile` آن را
 #: از مرحلهٔ Node کپی می‌کند؛ در توسعه با `npm run export:panel` ساخته می‌شود.
 #: نبودنش کشنده **نیست** — `/console` یک ۵۰۳ِ گویا می‌دهد و بقیهٔ پنل دست‌نخورده
@@ -2248,24 +2255,58 @@ _CONSOLE_MISSING = (
 )
 
 
-async def console_page(request: web.Request) -> web.Response:
-    """`/console` — داشبوردِ Next، پشتِ همان نشستِ Fernetِ بقیهٔ پنل.
+def _console_target(tail: str) -> tuple[pathlib.Path, bool] | None:
+    """`(مسیر, HTMLاست؟)` برای یک زیرمسیرِ کنسول، یا `None` اگر نبود.
 
-    **فقط همین HTML گِیت دارد، نه دارایی‌های `_next/`.** آن‌ها JS/CSS/فونتِ
+    خروجیِ Next با `trailingSlash` هر صفحه را به‌شکلِ `<slug>/index.html`
+    می‌دهد، پس بدونِ این تبدیل، `/console/health/` به یک **دایرکتوری** می‌رسد
+    و aiohttp برایش ۴۰۳/۴۰۴ می‌دهد — یعنی هر صفحه‌ای جز خانه ۴۰۴ می‌شد.
+
+    گاردِ پیمایش با `resolve()` + `is_relative_to` است نه با فیلترِ `..`:
+    فیلترِ رشته‌ای فرم‌های encode‌شده و symlink را نمی‌گیرد، و این هندلر
+    مسیرِ کنترل‌شدهٔ کاربر را مستقیم به فایل‌سیستم می‌دهد.
+    """
+    root = pathlib.Path(_CONSOLE_DIR).resolve()
+    try:
+        p = (root / tail.strip("/")).resolve()
+    except OSError:
+        return None
+    if p != root and not p.is_relative_to(root):
+        return None
+    if p.is_file():
+        return p, p.suffix.lower() in (".html", ".htm")
+    idx = p / "index.html"
+    if idx.is_file():
+        return idx, True
+    return None
+
+
+async def console_page(request: web.Request) -> web.Response:
+    """`/console/...` — کنسولِ Next، پشتِ همان نشستِ Fernetِ بقیهٔ پنل.
+
+    **فقط HTML گِیت دارد، نه دارایی‌ها.** فایل‌های `_next/`/فونت JS/CSSِ
     ایستا هستند و هیچ دادهٔ کاربری‌ای حمل نمی‌کنند، پس گیت‌زدنشان امنیتی
     نمی‌خرد و در عوض کشِ مرورگر را می‌شکند — همان تفکیکی که `/static` از قبل
-    دارد.
+    دارد. مرز روی **نوعِ فایل** است نه روی مسیر، چون صفحهٔ تازه فردا زیرِ هر
+    مسیری می‌تواند اضافه شود.
 
-    نبودِ فایل ۵۰۳ می‌دهد نه ۵۰۰: «هنوز build نشده» یک حالتِ **پیش‌بینی‌شده**
+    نبودِ build ۵۰۳ می‌دهد نه ۵۰۰: «هنوز ساخته نشده» یک حالتِ **پیش‌بینی‌شده**
     است (توسعهٔ محلی، یا ایمیجی که مرحلهٔ Node را رد کرده)، و پیامش باید
     دستورِ رفع را بگوید نه یک traceback.
     """
-    if not _session_admin(request):
+    if not pathlib.Path(_CONSOLE_DIR, "index.html").is_file():
+        if not _session_admin(request):
+            raise web.HTTPFound("/login")
+        return web.Response(status=503, text=_CONSOLE_MISSING,
+                            content_type="text/plain", charset="utf-8")
+
+    target = _console_target(request.match_info.get("tail", ""))
+    if target is None:
+        raise web.HTTPNotFound()
+    path, is_html = target
+    if is_html and not _session_admin(request):
         raise web.HTTPFound("/login")
-    index = pathlib.Path(_CONSOLE_DIR, "index.html")
-    if not index.is_file():
-        return web.Response(status=503, text=_CONSOLE_MISSING, content_type="text/plain", charset="utf-8")
-    return web.Response(body=index.read_bytes(), content_type="text/html", charset="utf-8")
+    return web.FileResponse(path)
 
 
 async def _on_startup(app: web.Application) -> None:
@@ -2390,13 +2431,12 @@ def build_app() -> web.Application:
     app.router.add_get("/node/install.sh", node_install)  # عمومی
     app.router.add_get("/node/peers", node_peers)         # گِیت با NODE_SECRET (wg-sync)
     app.router.add_get("/healthz", healthz)
-    # ترتیب باربر است: aiohttp مسیرها را به ترتیبِ ثبت تطبیق می‌دهد، پس این دو
-    # باید **پیش از** `add_static("/console")` بیایند وگرنه استاتیک روی
-    # `/console/` می‌افتد و به‌جای صفحه، فهرستِ دایرکتوری/۴۰۴ می‌دهد.
+    # یک هندلر برای کلِ زیردرختِ کنسول، نه `add_static`: خروجیِ Next هر صفحه
+    # را `<slug>/index.html` می‌دهد و استاتیکِ aiohttp دایرکتوری را باز نمی‌کند،
+    # پس با آن هر صفحه‌ای جز خانه ۴۰۴ می‌شد. گِیتِ نشست هم فقط روی HTML است و
+    # این تفکیک داخلِ خودِ هندلر زندگی می‌کند، نه در ترتیبِ ثبتِ روت‌ها.
     app.router.add_get("/console", console_page)
-    app.router.add_get("/console/", console_page)
-    if os.path.isdir(_CONSOLE_DIR):
-        app.router.add_static("/console", _CONSOLE_DIR)
+    app.router.add_get(r"/console/{tail:.*}", console_page)
     if os.path.isdir(_STATIC_DIR):
         app.router.add_static("/static", _STATIC_DIR)
     app.on_startup.append(_on_startup)

@@ -1,0 +1,142 @@
+'use client'
+
+import { C } from '@/lib/theme'
+import { LANGS } from '@/lib/pages'
+import { Shell } from '@/components/Shell'
+import { Section } from '@/components/Section'
+import { Bar, Btn, Chip, Cmd, Fa, Head, Input, Row } from '@/components/ui'
+
+/**
+ * ۱۰ LANGS — افزودنِ زبان **داده** است، نه کد.
+ *
+ * حلقهٔ کار روی صفحه نوشته شده چون کلِ قابلیت همان است: export → ترجمه در
+ * بیرون → import. و دو چیزی که به آن گره خورده‌اند و پنهان‌کردنشان گران است:
+ *
+ * • **پوششِ ناقص به انگلیسی می‌افتد، نه فارسی.** زبانِ ۹۰٪‌ترجمه‌شده ۱۰٪
+ *   انگلیسی نشان می‌دهد؛ برای مخاطبی که خطِ فارسی نمی‌خواند این از فارسی
+ *   بی‌فایده‌تر نیست، بلکه تنها چیزِ خواندنی است. پس ستونِ پوشش عددِ اصلیِ
+ *   این صفحه است.
+ * • **حذفِ زبان کاربرانش را بی‌صدا انگلیسی می‌کند** و `users.lang` روی کدِ
+ *   مرده می‌ماند. تنها راهِ خروجشان منوی تنظیماتِ ربات است — پس حذف هشدار
+ *   می‌گیرد، نه یک دکمهٔ ساده.
+ */
+export default function Page() {
+  return (
+    <Shell active="10" cmd="./ctl langs --list" bits={false}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <Chip color={C.acc}>{LANGS.length} languages</Chip>
+        <Chip>2 built-in</Chip>
+        <Chip>214 keys each</Chip>
+        <span style={{ marginLeft: 'auto', fontSize: 9.5, color: C.inkDim, letterSpacing: '.1em' }}>
+          adding a language is data — zero lines of code
+        </span>
+      </div>
+
+      <Section label="LANGUAGES" right="ordered by name, code" pad="22px 14px 12px">
+        <Head
+          cols={[
+            { w: 70, label: 'CODE' },
+            { w: 150, label: 'NAME' },
+            { w: 70, label: 'SOURCE' },
+            { label: 'COVERAGE' },
+            { w: 74, label: 'KEYS', right: true },
+            { w: 62, label: 'USERS', right: true },
+            { w: 148, label: '', right: true },
+          ]}
+        />
+        {LANGS.map((l, i) => {
+          const pct = Math.round((l.keys / l.total) * 100)
+          const col = pct === 100 ? C.acc : pct >= 90 ? C.warn : C.bad
+          return (
+            <Row key={l.code} last={i === LANGS.length - 1}>
+              <span style={{ width: 70, color: C.inkHi }}>{l.code}</span>
+              <span style={{ width: 150 }}>
+                <Fa style={{ color: C.inkMid, fontSize: 12.5 }}>{l.name}</Fa>
+              </span>
+              <span style={{ width: 70 }}>
+                <Chip color={l.builtin ? C.info : C.inkLo}>{l.builtin ? 'code' : 'pack'}</Chip>
+              </span>
+              <span style={{ flex: 1 }}>
+                <Bar pct={pct} width={16} color={col} />
+                <span style={{ color: col, marginLeft: 8 }}>{pct}%</span>
+              </span>
+              <span style={{ width: 74, textAlign: 'right', color: C.inkLo }}>
+                {l.keys}/{l.total}
+              </span>
+              <span style={{ width: 62, textAlign: 'right', color: C.inkLo }}>{l.users.toLocaleString('en-US')}</span>
+              <span style={{ width: 148, textAlign: 'right', display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                <Btn style={{ padding: '3px 9px', fontSize: 9.5 }}>EXPORT</Btn>
+                {!l.builtin && (
+                  <Btn danger style={{ padding: '3px 9px', fontSize: 9.5 }}>
+                    DELETE
+                  </Btn>
+                )}
+              </span>
+            </Row>
+          )
+        })}
+      </Section>
+
+      <div className="mx-duo" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 18 }}>
+        <Section label="IMPORT A PACK" right="export == import" pad="22px 14px 12px">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 9, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Input placeholder="code (e.g. es, pt-BR)" style={{ width: 170 }} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: C.inkLo }}>
+              <input type="checkbox" /> replace instead of merge
+            </label>
+          </div>
+          <textarea
+            dir="ltr"
+            placeholder={'{\n  "lang": "es",\n  "name": "Español",\n  "texts": { "btn_compress": "Comprimir", … }\n}'}
+            style={{
+              width: '100%',
+              height: 148,
+              border: `1px solid ${C.edgeSoft}`,
+              background: C.panelDeep,
+              color: C.inkHi,
+              fontFamily: 'inherit',
+              fontSize: 10.5,
+              lineHeight: 1.7,
+              padding: '8px 10px',
+              outline: 'none',
+              resize: 'vertical',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 9, alignItems: 'center' }}>
+            <Btn solid>REVIEW</Btn>
+            <span style={{ fontSize: 9.5, color: C.inkDim }}>
+              nothing is written before you confirm the diff
+            </span>
+          </div>
+        </Section>
+
+        <Section label="THE LOOP" right="one file, one chat-bot" pad="22px 14px 12px">
+          <Cmd>{`1  EXPORT fa      → telabzar-fa.json  (17,691 B)
+2  paste into any LLM with the
+   instruction that ships inside
+   the file itself
+3  IMPORT the result under a new
+   code — review, then confirm`}</Cmd>
+          <div style={{ marginTop: 11, fontSize: 10, color: C.ink, lineHeight: 1.9 }}>
+            The envelope&apos;s <span style={{ color: C.accHi }}>lang</span> field is compared, never
+            trusted: the form&apos;s code wins. A model can silently change it and the translation would
+            land under the wrong language.
+          </div>
+          <div
+            style={{
+              borderTop: `1px solid ${C.edgeHair}`,
+              marginTop: 11,
+              paddingTop: 10,
+              fontSize: 9.5,
+              color: C.warn,
+              lineHeight: 1.8,
+            }}
+          >
+            deleting a language does not migrate its users — they fall back to English and can only get
+            out through the bot&apos;s own settings menu.
+          </div>
+        </Section>
+      </div>
+    </Shell>
+  )
+}

@@ -29,6 +29,21 @@
     U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
+
+/*
+ * فارسی — برای **دادهٔ** ربات، نه برای پوستهٔ کنسول.
+ *
+ * قیدِ سخت: فارسی هرگز نباید داخلِ فونتِ مونو برود؛ آن‌جا حروف به هم
+ * نمی‌چسبند و کلمه خوانا نیست. همان فایلی است که پنلِ فارسی از قبل دارد.
+ */
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('../public/fonts/Vazirmatn.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 * {
   margin: 0;
   padding: 0;
