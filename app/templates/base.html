@@ -11,8 +11,11 @@
     {% for grp, items in nav %}
       <div class=grp>{{ pt('grp.' ~ grp) }}</div>
       {% for num, key, href, icon in items %}
+        {# بدونِ آیکون: ریلِ ماکتِ مرجع خالص متنی است و شمارهٔ دورقمی خودش
+           نقشِ نشانه را بازی می‌کند. آیکون‌های SVG سرِ جایشان می‌مانند —
+           در سربرگِ کارت‌ها — پس سامانهٔ آیکون بی‌مصرف نمی‌شود. #}
         <a class="{{'on' if active==key}}" href="{{href}}"><span class=nn>{{num}}</span>
-          {{ I.ico(icon, '13px') }}<span>{{ pt('nav.' ~ key) }}</span></a>
+          <span>{{ pt('nav.' ~ key) }}</span><span class=mk>&#9666;</span></a>
       {% endfor %}
     {% endfor %}
   </nav>

@@ -18,7 +18,9 @@
 <div class=slab>
   <div class=sh>FILES PROCESSED · {{s.range|upper}}<span>{{s.series_days}}d series</span></div>
   <div class=row2>
-    <div><div class=big>{{s.files}}</div></div>
+    {% set cols, cells = lcd('{:,}'.format(s.files)) %}
+    <div class=lcd style="--cols:{{cols}};--cell:11px">
+      {% for c in cells %}<i class="{{'on' if c}}"></i>{% endfor %}</div>
     {# میله‌ها همان سریِ روند است، نه تزئین: اسلب بدونشان ۹۰٪ سطحِ سبزِ خالی است #}
     <div class=strip>{% for d in s.ts %}
       <i class="{% if d.f == s.ts_max %}pk{% elif s.ts_max and d.f > s.ts_max * 0.5 %}hi{% endif %}"

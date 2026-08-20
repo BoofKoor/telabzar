@@ -39,8 +39,8 @@
   --vi-400:#b18cff;--vi-600:#7c5bd1;
 
   /* مقیاس‌ها — همان چیزی که «۵۵ مقدارِ padding و ۱۹ اندازهٔ فونت» را جمع می‌کند */
-  --s-1:4px; --s-2:6px; --s-3:8px; --s-4:12px; --s-5:16px; --s-6:20px;
-  --s-7:26px;--s-8:34px;--s-9:48px;
+  --s-1:3px; --s-2:5px; --s-3:7px; --s-4:9px;  --s-5:13px; --s-6:17px;
+  --s-7:22px;--s-8:28px;--s-9:40px;
   --fs-3xs:9.5px;--fs-2xs:10.5px;--fs-xs:11.5px;--fs-sm:12.5px;--fs-md:13.5px;
   --fs-lg:16px;--fs-xl:20px;--fs-2xl:28px;--fs-3xl:40px;--fs-4xl:62px;
   --fw-n:400;--fw-m:600;--fw-b:700;--fw-x:800;
@@ -100,7 +100,7 @@
 html{font-family:var(--font-ui)}
 /* فرم‌ها فونت را ارث نمی‌برند — قاعدهٔ §۵، این‌جا یک بار و برای همیشه */
 input,select,textarea,button{font:inherit;color:inherit}
-body{background:var(--bg);color:var(--ink);font-size:var(--fs-md);line-height:1.7;
+body{background:var(--bg);color:var(--ink);font-size:var(--fs-sm);line-height:1.55;
   -webkit-font-smoothing:antialiased}
 /* خطوطِ اسکنِ CRT — فقط در حالتِ تاریک مقدار می‌گیرد (در روشن کثیف می‌شود) */
 body::before{content:'';position:fixed;inset:0;z-index:1;pointer-events:none;
@@ -135,8 +135,11 @@ code{font-family:var(--font-mono);font-size:var(--fs-xs);unicode-bidi:isolate}
 .grp{font-size:var(--fs-3xs);color:var(--ink3);padding:var(--s-4) var(--s-5) var(--s-2);
   display:flex;align-items:center;gap:var(--s-2)}
 .grp::after{content:'';flex:1;height:1px;background:var(--line)}
-.nav a{display:flex;align-items:center;gap:var(--s-3);padding:var(--s-2) var(--s-5);
+.nav a{display:flex;align-items:center;gap:var(--s-3);padding:3px var(--s-4);
   font-size:var(--fs-sm);color:var(--rail-ink);border-inline-start:2px solid transparent}
+/* نشانهٔ ردیفِ فعال — همان `◂`ِ ماکت، در RTL به سمتِ درست می‌چرخد */
+.nav a .mk{margin-inline-start:auto;opacity:0;font-size:var(--fs-2xs)}
+.nav a.on .mk{opacity:.6}
 .nav a .nn{font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--ink3);
   direction:ltr;unicode-bidi:isolate}
 .nav a:hover{background:var(--panel2);color:var(--ink)}
@@ -197,9 +200,13 @@ code{font-family:var(--font-mono);font-size:var(--fs-xs);unicode-bidi:isolate}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
   box-shadow:var(--shadow)}
 .body>.card+.card,form>.card+.card{margin-top:var(--s-5)}
-.card h3{font-size:var(--fs-sm);font-weight:var(--fw-b);padding:var(--s-3) var(--s-5);
-  border-bottom:1px solid var(--line);display:flex;align-items:center;gap:var(--s-3);
-  background:var(--panel2)}
+.card h3{font-size:var(--fs-xs);font-weight:var(--fw-b);padding:var(--s-3) var(--s-4);
+  border-bottom:1px solid var(--line);display:flex;align-items:center;gap:var(--s-2)}
+/* کلیدواژهٔ لاتینِ کنارِ عنوانِ فارسی — صدای کنسول را برمی‌گرداند بدونِ اینکه
+   فارسی را واردِ mono کند (که اتصالِ حروف را می‌شکند). */
+.kw{font-family:var(--font-mono);font-size:var(--fs-3xs);color:var(--acc);
+  letter-spacing:.1em;text-transform:uppercase;direction:ltr;unicode-bidi:isolate;
+  opacity:.75}
 /* براکت‌ها باید **عنوان** را در بر بگیرند، نه دو لبهٔ کارت را. نسخهٔ اول
    `margin-inline-start:auto` روی `::after` داشت و نتیجه‌اش یک `[` چسبیده به
    یک لبه و یک `]` چسبیده به لبهٔ دیگر بود — از دور شبیهِ یک براکتِ غول‌پیکرِ
@@ -222,10 +229,10 @@ code{font-family:var(--font-mono);font-size:var(--fs-xs);unicode-bidi:isolate}
   border-bottom:1px solid var(--line);display:flex;align-items:center;gap:var(--s-2);
   flex-wrap:wrap}
 .hint b{color:var(--ink2)}
-.rows{padding:var(--s-2) var(--s-5) var(--s-4)}
-.pad{padding:var(--s-4) var(--s-5)}
-.row{display:flex;align-items:center;justify-content:space-between;gap:var(--s-4);
-  padding:var(--s-3) 0;border-bottom:1px solid var(--line)}
+.rows{padding:var(--s-1) var(--s-4) var(--s-3)}
+.pad{padding:var(--s-3) var(--s-4)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:var(--s-3);
+  padding:var(--s-2) 0;border-bottom:1px solid var(--line)}
 .row:last-child{border-bottom:0}
 .row label{font-size:var(--fs-sm);color:var(--ink2)}
 .row label small{display:block;color:var(--ink3);font-size:var(--fs-3xs);margin-top:2px}
@@ -251,6 +258,13 @@ code{font-family:var(--font-mono);font-size:var(--fs-xs);unicode-bidi:isolate}
 .slab .big{font-family:var(--font-mono);font-size:var(--fs-4xl);font-weight:var(--fw-x);
   line-height:1.05;padding:var(--s-2) var(--s-5) 0;direction:ltr;unicode-bidi:isolate;
   letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+/* شبکهٔ نقطه‌ایِ عدد. سلولِ **خاموش** هم رندر می‌شود — همان چیزی که شبکه را
+   از یک عددِ درشت به یک بافت تبدیل می‌کند (و ~۲۰۰ عنصر به تراکمِ صفحه
+   اضافه می‌کند، که سنجشِ مقایسه‌ای گفت کم داریم). */
+.lcd{display:grid;grid-template-columns:repeat(var(--cols),var(--cell,7px));
+  grid-auto-rows:var(--cell,7px);gap:2px;direction:ltr}
+.lcd i{background:currentColor;opacity:.14}
+.lcd i.on{opacity:1}
 .slab .sf{display:flex;align-items:flex-end;gap:var(--s-4);padding:var(--s-2) var(--s-5) var(--s-4);
   font-size:var(--fs-xs);flex-wrap:wrap}
 .slab .sf b{margin-inline-start:auto;font-family:var(--font-mono);font-size:var(--fs-lg);
@@ -265,8 +279,10 @@ code{font-family:var(--font-mono);font-size:var(--fs-xs);unicode-bidi:isolate}
 .slab .strip i{width:14px;flex:none;min-height:3px;background:var(--acc-ink);opacity:.3}
 .slab .strip i.hi{opacity:.55}
 .slab .strip i.pk{opacity:.88}
-.slab .row2{display:flex;align-items:flex-end;justify-content:space-between;
-  gap:var(--s-6);padding:0 var(--s-5) var(--s-4);flex-wrap:wrap}
+/* عدد و اسپارک‌لاین **کنارِ هم** در لبهٔ شروع می‌نشینند، نه دو سرِ اسلب:
+   `space-between` یک حفرهٔ سبزِ ۹۰۰پیکسلی وسطشان می‌گذاشت. */
+.slab .row2{display:flex;align-items:flex-end;gap:var(--s-7);
+  padding:var(--s-2) var(--s-5) var(--s-4);flex-wrap:wrap}
 .slab .row2 .big{padding:0}
 @media(max-width:700px){.slab .big{font-size:var(--fs-3xl)}}
 

@@ -54,6 +54,7 @@ from .keyboards import OPS_BY_KIND
 from .models import DownloadCache, File, Job, Node, User
 from .panel_i18n import DIR as _PANEL_DIR_OF
 from .panel_i18n import LANGS as PANEL_LANGS
+from .panel_glyphs import lcd as _lcd
 from .panel_i18n import normalize_lang, normalize_theme, pt
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
 
@@ -340,6 +341,9 @@ ENV = Environment(
     loader=FileSystemLoader(_TEMPLATE_DIR),
     autoescape=select_autoescape(default=True, default_for_string=True),
 )
+#: عددِ کانونی به‌شکلِ شبکهٔ نقطه‌ای. globalِ Jinja است نه متغیرِ context، چون
+#: تابع است نه داده و هر صفحه‌ای ممکن است بخواهدش.
+ENV.globals["lcd"] = _lcd
 
 
 #: منوی پنل — یک ساختارِ **اعلانی**، نه HTMLِ دست‌نویس در قالب. شماره‌ها بخشی

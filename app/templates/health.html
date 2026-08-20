@@ -18,7 +18,9 @@
 <div class=slab>
   <div class=sh>DOWNLOAD SUCCESS · TODAY · UTC<span>{{health.hosts|length}} platforms</span></div>
   <div class=row2>
-    <div><div class=big>{% if tot %}{{ (ns.ok * 100 // tot) }}%{% else %}—{% endif %}</div></div>
+    {% set cols, cells = lcd(((ns.ok * 100 // tot)|string ~ '%') if tot else '—') %}
+    <div class=lcd style="--cols:{{cols}};--cell:11px">
+      {% for c in cells %}<i class="{{'on' if c}}"></i>{% endfor %}</div>
     {# یک میله به‌ازای هر پلتفرم، به ارتفاعِ نرخِ موفقیتش — همان دادهٔ کارتِ
        کناری، این‌بار به‌شکلی که از دور خوانده می‌شود. #}
     <div class=strip>{% for h in health.hosts %}
