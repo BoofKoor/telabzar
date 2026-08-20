@@ -1,0 +1,205 @@
+/*
+ * پوستهٔ کنسول — پایه، انیمیشن‌ها و ریسپانسیو.
+ *
+ * ۱:۱ با `<style>`ِ طرح، به‌علاوهٔ سه چیز که طرح **نمی‌توانست** داشته باشد:
+ *   • `@font-face`ِ محلی — CSP هیچ هاستِ بیرونی‌ای را اجازه نمی‌دهد، پس
+ *     دو زیرمجموعهٔ latin/latin-ext کنارِ خروجی شیپ می‌شوند.
+ *   • قواعدِ `:hover` واقعی — طرح آن‌ها را به‌شکلِ صفتِ `style-hover` داشت
+ *     که فقط داخلِ ابزارِ طراحی معنا دارد.
+ *   • ریسپانسیوِ کلاس‌محور به‌جای `[data-mx=…]`ِ ابزار.
+ */
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('../public/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('../public/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: #1e3a33 transparent;
+}
+html,
+body {
+  background: #04070a;
+}
+body {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: #00e599;
+  text-decoration: none;
+}
+a:hover {
+  color: #8cffd6;
+}
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: #04070a;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e3a33;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2c6b5b;
+}
+
+@keyframes mx-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes mx-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+@keyframes mx-sweep {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+@keyframes mx-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+@keyframes mx-rain {
+  from {
+    transform: translateY(-50%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes mx-flicker {
+  0%,
+  100% {
+    opacity: 0.045;
+  }
+  45% {
+    opacity: 0.075;
+  }
+  70% {
+    opacity: 0.03;
+  }
+}
+
+/* ── هاوِرها، که در طرح صفتِ ابزار بودند نه CSS ──────────────── */
+.nav-link:hover {
+  background: #08120f;
+  color: #d6e5dd;
+  border-left-color: #00e599;
+}
+.log-row:hover {
+  background: #08120f !important;
+}
+.ghost-btn:hover {
+  border-color: #00e599;
+  color: #00e599;
+}
+.range-btn {
+  transition: none;
+}
+
+/* ── ریسپانسیو ───────────────────────────────────────────────── */
+@media (max-width: 1400px) {
+  .mx-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .mx-trio {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 1200px) {
+  .mx-hide-m {
+    display: none !important;
+  }
+}
+@media (max-width: 1100px) {
+  .mx-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .mx-duo {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+@media (max-width: 900px) {
+  .mx-shell {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .mx-rail {
+    position: static !important;
+    height: auto !important;
+    border-right: 0 !important;
+    border-bottom: 2px solid #12211d;
+  }
+  .mx-railnav {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 3px !important;
+  }
+  .mx-railextra {
+    display: none;
+  }
+  .mx-pad {
+    padding: 14px !important;
+  }
+  .mx-trio {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+@media (max-width: 680px) {
+  .mx-kpis {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .mx-hide-s {
+    display: none !important;
+  }
+}
+
+/* ── دسترس‌پذیری: کسی که حرکت نمی‌خواهد، بافت را از دست ندهد ─── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

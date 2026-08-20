@@ -67,6 +67,11 @@ _SESSION_TTL = 8 * 3600
 #: کانتینر نه — یعنی سبزیِ CI و ۵۰۰ روی تولید. `COPY app ./app` هر دو را می‌آورد.
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 _TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+#: خروجیِ استاتیکِ `panel/` (Next.js). در تولید `docker/admin.Dockerfile` آن را
+#: از مرحلهٔ Node کپی می‌کند؛ در توسعه با `npm run export:panel` ساخته می‌شود.
+#: نبودنش کشنده **نیست** — `/console` یک ۵۰۳ِ گویا می‌دهد و بقیهٔ پنل دست‌نخورده
+#: می‌ماند، چون یک صفحهٔ ساخته‌نشده نباید کلِ سرویس را از کار بیندازد.
+_CONSOLE_DIR = os.path.join(_STATIC_DIR, "console")
 
 # پلتفرم‌هایی که ممکن است کوکیِ ورود لازم داشته باشند (نامِ فایل باید کلید را داشته باشد
 # تا `_pick_cookies` تطبیقش دهد — مثلِ instagram_1.txt). X همان twitter است.
@@ -2236,6 +2241,33 @@ async def healthz(_: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+#: پیامِ «کنسول ساخته نشده» — یک رشته، تا هم هندلر و هم تست یک منبع داشته باشند.
+_CONSOLE_MISSING = (
+    "کنسول ساخته نشده است. روی همین ماشین: cd panel && npm ci && npm run export:panel\n"
+    "در تولید، مرحلهٔ Node در docker/admin.Dockerfile این کار را می‌کند."
+)
+
+
+async def console_page(request: web.Request) -> web.Response:
+    """`/console` — داشبوردِ Next، پشتِ همان نشستِ Fernetِ بقیهٔ پنل.
+
+    **فقط همین HTML گِیت دارد، نه دارایی‌های `_next/`.** آن‌ها JS/CSS/فونتِ
+    ایستا هستند و هیچ دادهٔ کاربری‌ای حمل نمی‌کنند، پس گیت‌زدنشان امنیتی
+    نمی‌خرد و در عوض کشِ مرورگر را می‌شکند — همان تفکیکی که `/static` از قبل
+    دارد.
+
+    نبودِ فایل ۵۰۳ می‌دهد نه ۵۰۰: «هنوز build نشده» یک حالتِ **پیش‌بینی‌شده**
+    است (توسعهٔ محلی، یا ایمیجی که مرحلهٔ Node را رد کرده)، و پیامش باید
+    دستورِ رفع را بگوید نه یک traceback.
+    """
+    if not _session_admin(request):
+        raise web.HTTPFound("/login")
+    index = pathlib.Path(_CONSOLE_DIR, "index.html")
+    if not index.is_file():
+        return web.Response(status=503, text=_CONSOLE_MISSING, content_type="text/plain", charset="utf-8")
+    return web.Response(body=index.read_bytes(), content_type="text/html", charset="utf-8")
+
+
 async def _on_startup(app: web.Application) -> None:
     settings_store.init_store(settings.redis_url)
     app["redis"] = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -2358,6 +2390,13 @@ def build_app() -> web.Application:
     app.router.add_get("/node/install.sh", node_install)  # عمومی
     app.router.add_get("/node/peers", node_peers)         # گِیت با NODE_SECRET (wg-sync)
     app.router.add_get("/healthz", healthz)
+    # ترتیب باربر است: aiohttp مسیرها را به ترتیبِ ثبت تطبیق می‌دهد، پس این دو
+    # باید **پیش از** `add_static("/console")` بیایند وگرنه استاتیک روی
+    # `/console/` می‌افتد و به‌جای صفحه، فهرستِ دایرکتوری/۴۰۴ می‌دهد.
+    app.router.add_get("/console", console_page)
+    app.router.add_get("/console/", console_page)
+    if os.path.isdir(_CONSOLE_DIR):
+        app.router.add_static("/console", _CONSOLE_DIR)
     if os.path.isdir(_STATIC_DIR):
         app.router.add_static("/static", _STATIC_DIR)
     app.on_startup.append(_on_startup)

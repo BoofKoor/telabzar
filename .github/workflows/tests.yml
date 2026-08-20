@@ -154,3 +154,45 @@ jobs:
 
       - name: pytest (panel)
         run: pytest tests/panel -q
+
+  # ── کنسولِ Next (panel/) ────────────────────────────────────────────────────
+  # jobِ سومِ **موازی**، به همان دلیلِ jobِ پنل: وابسته‌کردنش با `needs:` یعنی
+  # یک قرمزیِ بی‌ربط نتیجهٔ این را پنهان کند.
+  #
+  # چه چیزی را می‌گیرد که دو jobِ دیگر نمی‌گیرند: خروجیِ build در ریپو نیست
+  # (gitignore) و تنها جایی که ساخته می‌شود مرحلهٔ Node در
+  # `docker/admin.Dockerfile` است — یعنی بدونِ این job، یک خطای TypeScript یا
+  # یک importِ شکسته تا لحظهٔ `telabzar update` روی مستر پنهان می‌ماند و آن‌جا
+  # به‌شکلِ «buildِ ایمیج شکست» درمی‌آید، نه یک چکِ قرمزِ قابلِ خواندن.
+  # همان دلیلی که `test_the_admin_image_builds_the_console_it_serves` وجود
+  # دارد، ولی یک لایه بالاتر: آن گارد می‌گوید Dockerfile درست نوشته شده،
+  # این job می‌گوید چیزی که می‌سازد واقعاً ساخته می‌شود.
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # نسخهٔ Node با `docker/admin.Dockerfile` (node:22-slim) یکی نگه داشته
+      # می‌شود — هدف، همان محیطِ build تولید است نه پوششِ نسخه‌ها.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: panel/package-lock.json
+
+      # `ci` نه `install`: قفلِ نسخه باید همانی باشد که ایمیج نصب می‌کند.
+      - name: install
+        run: npm ci --no-audit --no-fund
+        working-directory: panel
+
+      # `next build` هم تایپ‌ها را چک می‌کند هم export را انجام می‌دهد.
+      - name: build
+        run: npx next build
+        working-directory: panel
+
+      # به خروجیِ گامِ بالا تکیه نمی‌کنیم: خودِ اجرا باید ثابت کند فایلی که پنل
+      # سرو می‌کند واقعاً تولید شده — همان درسِ «حضور را اثبات کن، به README
+      # تکیه نکن» که برای ffmpeg نوشته شد.
+      - name: prove the export exists
+        run: test -s panel/out/index.html && ls panel/out/_next/static/chunks | head

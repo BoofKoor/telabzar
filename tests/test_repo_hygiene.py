@@ -435,3 +435,56 @@ def test_the_panel_has_one_result_redirect():
     assert not offenders, (
         "این ریدایرکت‌ها باید از `_result(...)` رد شوند تا مسیرِ خطا یک‌جا بماند:\n  "
         + "\n  ".join(offenders))
+
+
+# ── کنسولِ Next: هرچه پنل از دیسک سرو می‌کند باید در ایمیج باشد ─────────────
+# همان حادثهٔ `node/install.sh`: پنل فایلی را از دیسک می‌خواند، Dockerfile
+# کپی‌اش نمی‌کرد، و تست — که از **ریشهٔ ریپو** می‌دود جایی که فایل هست — سبز
+# می‌ماند در حالی که تولید ۴۰۴/۵۰۰ می‌داد. کنسول دقیقاً همین شکل را دارد، با
+# یک تفاوتِ بدتر: خروجی‌اش gitignore است، پس در ریپو **اصلاً وجود ندارد** و
+# تنها چیزی که می‌سازدش مرحلهٔ Node است.
+def _admin_dockerfile() -> str:
+    return (ROOT / "docker" / "admin.Dockerfile").read_text(encoding="utf-8")
+
+
+def _decommented(src: str) -> str:
+    """کامنت‌ها را دور می‌ریزد — وگرنه نثرِ توضیحیِ خودِ Dockerfile داده می‌شود.
+
+    §۶: «هر گاردی که متن اسکن می‌کند سرانجام توضیحاتِ خودش را می‌خواند.»
+    این فایل کامنتِ فارسیِ مفصل دارد که دقیقاً همین واژه‌ها را نام می‌برد.
+    """
+    return "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def test_the_admin_image_builds_the_console_it_serves():
+    """`app/static/console/` باید در ایمیجِ ادمین ساخته و کپی شود."""
+    src = _decommented(_admin_dockerfile())
+    assert re.search(r"FROM\s+node:", src), (
+        "مرحلهٔ Node در admin.Dockerfile نیست — پس `/console` در تولید ساخته نمی‌شود."
+    )
+    assert re.search(r"COPY\s+--from=\S+\s+\S+\s+\./app/static/console", src), (
+        "خروجیِ build به `app/static/console` کپی نمی‌شود؛ `_CONSOLE_DIR` آن‌جا را می‌خواند."
+    )
+    assert re.search(r"COPY\s+panel", src), "سورسِ `panel/` واردِ مرحلهٔ build نمی‌شود."
+
+
+def test_the_dockerfile_guard_ignores_its_own_comments(tmp_path):
+    """کنترلِ خودارجاعی: نامِ چیزها فقط در کامنت، باید «نبود» خوانده شود."""
+    fake = "# FROM node:22\n# COPY --from=console /build/out ./app/static/console\nFROM python:3.12-slim\n"
+    assert not re.search(r"FROM\s+node:", _decommented(fake))
+
+
+def test_the_console_build_output_is_not_committed():
+    """باندلِ هش‌دار نباید در ریپو باشد — دیف را بی‌معنا می‌کند."""
+    bad = [p for p in _tracked_files() if p.startswith("app/static/console/")]
+    assert not bad, f"خروجیِ build کامیت شده: {bad[:5]}"
+    r = subprocess.run(["git", "check-ignore", "-q", "app/static/console/index.html"], cwd=ROOT)
+    assert r.returncode == 0, "`.gitignore` مسیرِ خروجیِ کنسول را نمی‌گیرد"
+
+
+def test_the_console_source_is_committed():
+    """کنترلِ معکوس: خودِ سورس **باید** کامیت شود، وگرنه ایمیج چیزی برای build ندارد."""
+    tracked = set(_tracked_files())
+    for need in ("panel/package.json", "panel/package-lock.json", "panel/next.config.mjs",
+                 "panel/app/page.tsx"):
+        assert need in tracked, f"{need} کامیت نشده — مرحلهٔ Node بدونش می‌شکند"
