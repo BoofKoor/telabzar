@@ -148,21 +148,103 @@ def describe_link(url: str, platform: str, lang: str = "fa") -> str:
     return f"لینکِ {label}" if fa else f"a {label} link"
 
 
-# نشانه‌های خطای «ربات نیستی؟» یوتیوب — نیازمندِ کوکیِ لاگین‌شده (نه صرفاً pot-token).
-_YT_BOTCHECK_HINTS = ("sign in to confirm", "confirm you're not a bot",
-                       "confirm you are not a bot", "--cookies", "cookies-from-browser")
+# ── خواندنِ خطای یوتیوب ─────────────────────────────────────────────
+# yt-dlp به **هر** دلیلِ یوتیوب که «sign in» در آن باشد جملهٔ
+# `Use --cookies-from-browser or --cookies for the authentication …` را می‌چسباند
+# (`YoutubeIE._youtube_login_hint`، شاخهٔ `if 'sign in' in reason.lower()` در
+# `_real_extract`). پس «`--cookies` در متن هست» فقط یعنی «یوتیوب گفت sign in» —
+# ویدیوی **خصوصی** («Private video. Sign in if you've been granted access») و
+# **سنی** («Sign in to confirm your age») هم دقیقاً همین جمله را دارند. تا
+# ۲۰۲۶-۰۹ فهرستِ نشانه‌های bot-check همین `--cookies` و `sign in to confirm` را
+# داشت، پس هر دو «bot-check» خوانده می‌شدند: کاربر پیامِ «ادمین کوکی بگذارد»
+# می‌گرفت و probe تا ۵ اکانت را برای ویدیویی که هیچ اکانتی نمی‌بیند ضربه می‌زد.
+#
+# هر نوع با **متنِ خودِ یوتیوب** شناخته می‌شود، نه با دنبالهٔ yt-dlp. ترتیب مهم
+# است: bot-check اول، ۴۰۳ِ دانلود آخر (متنِ ۴۰۳ هیچ‌کدام از بقیه را ندارد).
+YT_BOT_CHECK = "bot_check"
+YT_AGE_GATE = "age_gate"
+YT_PRIVATE = "private"
+YT_MEMBERS = "members_only"
+YT_RELOAD = "page_reload"
+YT_RATE_LIMIT = "rate_limit"
+YT_GVS_403 = "gvs_403"
+
+_YT_KIND_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # دو شکلِ آپاستروف: یوتیوب «you’re» (U+2019) می‌فرستد؛ متنِ ASCII هم دیده شده.
+    (YT_BOT_CHECK, ("confirm you’re not a bot", "confirm you're not a bot",
+                    "confirm you are not a bot")),
+    # «Sign in to confirm your age. This video may be inappropriate for some
+    # users.» — همان دلایلی که `YoutubeIE._is_agegated` می‌سنجد، ولی به شکلِ
+    # عبارتِ کامل تا «inappropriate or offensive»ِ هشدارِ محتوا را نگیرد.
+    (YT_AGE_GATE, ("confirm your age", "age-restricted", "inappropriate for some users")),
+    (YT_PRIVATE, ("private video",)),
+    (YT_MEMBERS, ("members-only", "join this channel to get access")),
+    # دلیلِ خودِ یوتیوب (در سورسِ yt-dlp نیست). از اوت ۲۰۲۶ کلاینتِ با‌کوکیِ
+    # `tv_downgraded` آن را می‌دهد (yt-dlp #17389/#17405)؛ توصیهٔ نگه‌دارنده
+    # (#17497): «اگر کوکی می‌دهید، بدونِ کوکی امتحان کنید».
+    (YT_RELOAD, ("page needs to be reloaded",)),
+    (YT_RATE_LIMIT, ("content isn't available, try again later",
+                     "content isn’t available, try again later",
+                     "rate-limited by youtube")),
+    # ۴۰۳ **سرِ دانلودِ رسانه** (googlevideo) — توکنِ PO/کلاینت/IP، نه اکانت.
+    # عمداً «Unable to download API page: HTTP Error 403» را نمی‌گیرد: آن
+    # درخواستِ خودِ API است و تستِ کنترل (`test_probe_cookie_blame`) رفتارش را
+    # همان «login_required» نگه می‌دارد.
+    (YT_GVS_403, ("unable to download video data: http error 403",
+                  "got error: http error 403")),
+)
+
+# محتوایی که اکانت‌های استخر هم نمی‌بینند: چرخش بی‌فایده است و ضربه ناعادلانه.
+# (سنی جدا تصمیم می‌گیرد — با فیلترِ ایمنیِ روشن رد، وگرنه امتحانِ اکانتِ دیگر.)
+YT_CONTENT_KINDS = frozenset({YT_PRIVATE, YT_MEMBERS})
+
+
+def youtube_error_kind(msg: str | None) -> str | None:
+    """متنِ خطای موتور → نوعِ خطای یوتیوب (`YT_*`)، یا None اگر هیچ‌کدام نبود."""
+    low = " ".join((msg or "").split()).lower()
+    for kind, hints in _YT_KIND_HINTS:
+        if any(h in low for h in hints):
+            return kind
+    return None
 
 
 def is_youtube_botcheck(msg: str, platform: str | None = None) -> bool:
     """آیا خطا همان «Sign in to confirm you're not a bot»ِ یوتیوب است؟
 
-    این خطا با IPِ دیتاسنتر حتی با pot-provider هم رخ می‌دهد؛ راهِ عملی، کوکیِ
-    یوتیوب (youtube_*.txt) و/یا پروکسیِ تمیز است. پیامِ کاربرپسندِ مخصوص می‌خواهد.
+    این خطا مالِ **IP** است (yt-dlp: «Your IP has been blocked by YouTube while
+    logged out») و با pot-provider هم رخ می‌دهد؛ راهِ عملی کوکیِ یوتیوب و/یا
+    خروجیِ تمیز است. فقط متنِ خودِ bot-check را می‌خواند — نه `--cookies`ِ yt-dlp
+    که روی هر خطای «sign in» (خصوصی، سنی) هم هست؛ بالاتر را ببین.
     """
     if platform not in (None, "youtube"):
         return False
-    low = (msg or "").lower()
-    return any(h in low for h in _YT_BOTCHECK_HINTS)
+    return youtube_error_kind(msg) == YT_BOT_CHECK
+
+
+# نام‌هایی که فقط وقتی خودِ پلاگینِ pot درگیر است در خطا می‌آیند.
+_POT_NAMES = ("bgutil", "getpot", "youtubepot")
+# آخرین خطِ تریس‌بکِ پایتون (`_stderr_summary` همان را برمی‌دارد): «KeyError: …».
+_TRACEBACK_TAIL = re.compile(r"\b[A-Za-z_][\w.]*(?:Error|Exception)\b")
+
+
+def is_pot_crash(msg: str | None) -> bool:
+    """آیا این شکست شبیهِ کرشِ **خودِ پلاگینِ pot** است — نه خطای تمیزِ yt-dlp؟
+
+    فقط در این حالت «یک‌بار بدونِ pot» معنا دارد. تا ۲۰۲۶-۰۹ آن تکرار روی **هر**
+    شکستی می‌خورد، در حالی که اندازه‌گیریِ چهارحالتهٔ ۱۶ اوت نشان داد pot روی این
+    سرور نه bot-check را باز می‌کند نه با کوکی چیزی اضافه می‌کند — پس هر
+    bot-check/خصوصی/۴۰۳ یک اجرای کاملِ دیگر روی همان IPِ فلگ‌شده می‌زد.
+
+    قاعده: اگر پلاگین در متن نام برده شده → بله. اگر yt-dlp تمیز حرف زده
+    (`ERROR:`) → نه. وگرنه فقط وقتی دُمِ متن شکلِ تریس‌بک دارد (`…Error: …`) —
+    نه روی «download timed out» یا «produced no file» که تکرارشان فقط وقت می‌خورد.
+    """
+    text = msg or ""
+    if any(n in text.lower() for n in _POT_NAMES):
+        return True
+    if "ERROR:" in text:
+        return False
+    return bool(_TRACEBACK_TAIL.search(text))
 
 
 def find_url(text: str | None) -> str | None:
@@ -502,6 +584,12 @@ def _stderr_summary(raw: bytes | str, limit: int = 300) -> str:
     وگرنه دو خطِ آخر. اینطوری پیامِ کاربر و لاگ به‌جای سرِ تریس‌بک، علتِ واقعی را نشان می‌دهد.
     """
     text = raw.decode("utf-8", "ignore") if isinstance(raw, (bytes, bytearray)) else (raw or "")
+    # `\r` خط نمی‌شکند: yt-dlp شکستِ دانلودِ تکه‌ای (HLS/DASH) را
+    # `ERROR: \r[download] Got error: HTTP Error 403: …` می‌نویسد
+    # (`FileDownloader.report_retry`)، و `splitlines()` آن را به یک «ERROR:»ِ خالی
+    # و متنی بی‌برچسب می‌شکست — خلاصه فقط «ERROR:» می‌شد، کاربر هیچ علتی نمی‌دید
+    # و `youtube_error_kind` روی آن ۴۰۳ را نمی‌شناخت.
+    text = text.replace("\r", " ")
     lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
     if not lines:
         return ""
@@ -2447,8 +2535,11 @@ async def download_matched(url: str, workdir: str, opts: dict,
             raise
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            # pot-provider می‌تواند yt-dlp را بیندازد → یک‌بار بدونِ pot؛ وگرنه این ترک را رد کن
-            if opts.get("pot_provider") and not isinstance(exc, AgeRestricted):
+            # pot-provider می‌تواند yt-dlp را بیندازد → یک‌بار بدونِ pot؛ وگرنه این ترک را رد کن.
+            # فقط روی کرشِ واقعیِ پلاگین (`is_pot_crash`) — تکرارِ یک bot-check روی همان IP
+            # در یک پلی‌لیستِ ۲۰ترکه یعنی ۲۰ اجرای اضافه بی‌هیچ سودی.
+            if (opts.get("pot_provider") and not isinstance(exc, AgeRestricted)
+                    and is_pot_crash(str(exc))):
                 try:
                     path, yinfo, _thumb = await download_ytdlp(
                         target, tdir, "audio", {**opts, "pot_provider": None}, progress=_p, cancel=cancel)

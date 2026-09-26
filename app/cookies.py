@@ -300,7 +300,10 @@ _CLASS_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
                   "confirm your identity", "suspicious login", "account has been disabled")),
     (RATE_LIMIT, ("rate-limit", "rate limit", "ratelimit", "too many requests", "429",
                   "please wait a few minutes", "try again later", "temporarily blocked")),
-    (BOT_CHECK, ("sign in to confirm", "confirm you\u2019re not a bot", "confirm you're not a bot",
+    # عمداً **بدونِ** «sign in to confirm»: یوتیوب همان پیشوند را برای ویدیوی سنی
+    # هم می‌دهد («Sign in to confirm your age»)، پس آن عبارت محدودیتِ سنی را
+    # bot-check می‌خواند و به اکانت ضربه می‌زد (`downloader.youtube_error_kind`).
+    (BOT_CHECK, ("confirm you\u2019re not a bot", "confirm you're not a bot",
                  "not a bot")),
     # «redirect to home page»/«redirect to login page» = پاسخِ gallery-dl وقتی سشنِ
     # اینستاگرام دیگر معتبر نیست؛ کلمهٔ login در اولی نیست ولی دقیقاً همان معنا را دارد.

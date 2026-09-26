@@ -76,12 +76,69 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d")
 
 
+def _yt_kind(msg: str, platform: str | None) -> str | None:
+    """نوعِ خطای یوتیوب (`D.YT_*`) — فقط وقتی خطا واقعاً از یوتیوب آمده.
+
+    پلتفرمِ ماچ (اسپاتیفای/اپل) دانلود را از یوتیوب می‌گیرد، پس خطایش هم خطای
+    یوتیوب است. `None` برای پلتفرم = «نامعلوم» (همان پیش‌فرضِ `is_youtube_botcheck`).
+    """
+    if platform is not None and platform != "youtube" and platform not in D._MATCH_PLATFORMS:
+        return None
+    return D.youtube_error_kind(msg)
+
+
+# نوعِ خطای یوتیوب → دستهٔ استخر. آنچه این‌جا نیست به `ck.classify_error`ِ عمومی می‌رود.
+# bot-check و محدودیتِ نرخ همان دستهٔ قبلی‌اند (کنترل‌های `test_probe_cookie_blame`)؛
+# ۴۰۳ِ دانلود و «reload» `transient` می‌شوند: چرخش بله، ضربه نه — نه تقصیرِ اکانت‌اند
+# (توکن/کلاینت/باگِ `tv_downgraded`)، و تا امروز ۴۰۳ به‌خاطرِ «403» در نشانه‌های لاگین
+# `login_required` خوانده می‌شد و اکانتِ سالم را می‌سوزاند.
+_YT_KIND_CLASS = {
+    D.YT_BOT_CHECK: ck.BOT_CHECK,
+    D.YT_RATE_LIMIT: ck.RATE_LIMIT,
+    D.YT_GVS_403: ck.TRANSIENT,
+    D.YT_RELOAD: ck.TRANSIENT,
+}
+
+# نه تقصیرِ اکانت‌اند و نه تقصیرِ خروجی: هیچ‌کدام نباید در `failures`/`note_exit` بنشینند.
+_YT_NOT_ACCOUNT_KINDS = frozenset({*D.YT_CONTENT_KINDS, D.YT_AGE_GATE})
+
+
+def _error_class(msg: str, platform: str | None) -> str:
+    """دستهٔ استخر برای این خطا: اول خواندنِ خاصِ یوتیوب، بعد دسته‌بندیِ عمومی."""
+    return _YT_KIND_CLASS.get(_yt_kind(msg, platform) or "") or ck.classify_error(msg)
+
+
+_YT_FAIL_KEYS = {
+    D.YT_PRIVATE: "dl_yt_private",
+    D.YT_MEMBERS: "dl_yt_members",
+    D.YT_AGE_GATE: "dl_yt_age_login",
+    D.YT_BOT_CHECK: "dl_youtube_botcheck",
+}
+
+
+def _yt_fail_text(lang: str, kind: str | None) -> str | None:
+    """پیامِ کاربر برای نوع‌هایی از خطای یوتیوب که علتِ مشخص دارند؛ None = پیامِ عمومی.
+
+    پیش از این ویدیوی خصوصی و سنی هم پیامِ bot-check می‌گرفتند («ادمین کوکی
+    بگذارد») — دستوری که برای آن ویدیو هیچ‌وقت کار نمی‌کند.
+    """
+    key = _YT_FAIL_KEYS.get(kind or "")
+    return t(lang, key) if key else None
+
+
 def _is_cookie_error(msg: str, platform: str | None = None) -> bool:
     """آیا این خطا «کوکی‌محور» است (لاگین/بن/بات‌چک) و ارزشِ تلاش با اکانتِ دیگر را دارد؟
-    خطاهای غیرِکوکی (ویدیوی خصوصی، ۴۰۴، حجم/مدت) نباید استخر را بسوزانند."""
-    low = (msg or "").lower()
-    if D.is_youtube_botcheck(msg, platform):
+    خطاهای غیرِکوکی (ویدیوی خصوصی، ۴۰۴، حجم/مدت) نباید استخر را بسوزانند.
+
+    برای یوتیوب اول نوعِ خطا خوانده می‌شود، چون نشانه‌های عمومی («sign in»، «403»)
+    ویدیوی خصوصی/سنی و ۴۰۳ِ دانلود را هم «کوکی‌محور» می‌خواندند.
+    """
+    kind = _yt_kind(msg, platform)
+    if kind in _YT_NOT_ACCOUNT_KINDS:
+        return False
+    if kind is not None:
         return True
+    low = (msg or "").lower()
     return (any(h in low for h in _BAN_HINTS) or any(h in low for h in _LOGIN_HINTS)
             or any(h in low for h in _TRANSIENT_HINTS))
 
@@ -363,6 +420,38 @@ async def _iganon_metric(redis, bucket: str) -> None:
         if n == 1:
             await redis.expire(key, 172800)  # ۲ روز، مثلِ `_metric`
     except Exception:  # noqa: BLE001
+        pass
+
+
+# هشت روز، نه دو روزِ `_metric`: کارِ این شمارنده مقایسهٔ «قبل/بعد» در چند روز است
+# (بررسیِ وابستگی به کوکی، ۲۰۲۶-۰۹)، و پنجرهٔ دوروزه همان مقایسه را ناممکن می‌کرد.
+_YTAUTH_TTL = 8 * 86400
+
+
+async def _ytauth_metric(redis, platform: str, phase: str, cookie_name: str | None,
+                         outcome: str) -> None:
+    """هر **تلاشِ** یوتیوب یک خانه: `dlstat:ytauth:<phase>:<anon|cookie>:<outcome>:<day>`.
+
+    تا امروز «چند درصدِ دانلودهای یوتیوب بدونِ کوکی رفت» فقط با گرپِ لاگ معلوم
+    می‌شد (همان ~۳۲٪ِ ۱۶ اوت) و هیچ عددی در Redis نبود. `outcome` = `ok`، یکی از
+    `D.YT_*`، `age_limit` (استخراج موفق ولی گیتِ سنی رد کرد) یا `other`.
+
+    واحد **تلاش** است نه جاب — همان تصمیمِ `probe_stats`: سؤال مصرفِ منبع است.
+    پس «سهمِ بی‌کوکی» = `fetch:anon:ok` تقسیم بر همهٔ `fetch:anon:*`، و «هر
+    لینک چند بار کوکی خرج کرد» = جمعِ `*:cookie:*`.
+
+    `EXPIRE` روی **هر** نوشتن، نه فقط اولی: مرگِ پروسه بینِ `INCR` و `EXPIRE`
+    اولی یک کلیدِ جاودان می‌ساخت (§۷). برای کلیدی که روزش در نامش است، تمدید
+    فقط پایانش را کمی جلو می‌برد.
+    """
+    if redis is None or platform != "youtube":
+        return
+    mode = "cookie" if cookie_name else "anon"
+    key = f"dlstat:ytauth:{phase}:{mode}:{outcome}:{_today()}"
+    try:
+        await redis.incr(key)
+        await redis.expire(key, _YTAUTH_TTL)
+    except Exception:  # noqa: BLE001 — تله‌متری هرگز دانلود را نمی‌شکند
         pass
 
 
@@ -814,15 +903,28 @@ async def run_download(ctx: dict, payload: dict) -> None:
         await _edit(bot, chat_id, status_mid, t(lang, "dl_probing"))
         # مثلِ fetch: اگر کوکی خطا داد، کوکیِ بعدی امتحان می‌شود.
         info, msg, tried = None, "", set()
-        attempts = 0
+        attempts, kind = 0, None
         # همان سقفی که حلقهٔ fetch دارد (`dl_max_cookie_tries`). بدونش یک خطای
         # کوکی‌محور در probe **کلِ استخر** را می‌پیماید و هیچ کلیدِ پنلی محدودش
         # نمی‌کند — و چون این حلقه به‌ازای هر اکانتی که لمس می‌کند یک ضربه ثبت
         # می‌کرد، واحدِ آسیب «اکانت» نبود، «استخر» بود.
         max_tries = await settings_store.get_int("dl_max_cookie_tries",
                                                  settings.dl_max_cookie_tries)
+        # فیلترِ ایمنی یک‌بار: هم ویدیوی سنی را بدونِ خرجِ کوکی رد می‌کند (پایین)،
+        # هم بعد از probe روی `age_limit` چک می‌شود.
+        pol = await safety.load_policy()
+        # «The page needs to be reloaded» روی تلاشِ **با کوکی** → یک تلاشِ بی‌کوکی:
+        # از اوت ۲۰۲۶ کلاینتِ با‌کوکیِ `tv_downgraded` آن را می‌دهد (yt-dlp #17389) و
+        # توصیهٔ نگه‌دارنده (#17497) همین است. `anon_tried` هر تلاشِ بی‌کوکی را
+        # می‌شمارد — از جمله وقتی استخر خالی است و `_next_cookie` چیزی نداده — تا
+        # همان تلاشِ محکوم دوباره تکرار نشود.
+        use_anon = anon_tried = False
         while True:
-            cname, cpath = await _next_cookie(redis, platform, workdir, tried)
+            if use_anon:
+                cname, cpath, use_anon = None, None, False
+            else:
+                cname, cpath = await _next_cookie(redis, platform, workdir, tried)
+            anon_tried = anon_tried or not cname
             attempts += 1
             # واحدِ مصرفِ منبع **تلاش** است نه جاب: `_next_cookie` همین حالا
             # `ck.pick` + `note_use` زده، پس روی سطلِ پر هر تلاش یک اکانت خرج
@@ -831,10 +933,12 @@ async def run_download(ctx: dict, payload: dict) -> None:
             try:
                 info = await D.probe(url, await _opts(redis, platform, workdir, cpath))
                 await ck.mark_ok(redis, cname)
+                await _ytauth_metric(redis, platform, "probe", cname, "ok")
                 break
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
-                cls = ck.classify_error(msg)
+                kind = _yt_kind(msg, platform)
+                cls = _error_class(msg, platform)
                 # تنها خطی که توزیعِ خطای فازِ probe را قابلِ اندازه‌گیری می‌کند.
                 # تا امروز این شاخه فقط **نامِ اکانت** را لاگ می‌کرد و متنِ خطا را
                 # هرگز، و شاخهٔ شکستِ نهایی‌اش اصلاً لاگ نمی‌کرد — پس هر سرشماریِ
@@ -842,6 +946,13 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 # عمداً هم‌ریختِ خطِ `attempt %d failed (%s)`ِ حلقهٔ fetch است تا
                 # یک گرپ هر دو فاز را کنارِ هم بیاورد.
                 log.info("probe attempt %d failed (%s): %s", attempts, cls, msg[:90])
+                await _ytauth_metric(redis, platform, "probe", cname, kind or "other")
+                if kind == D.YT_AGE_GATE and pol.enabled:
+                    break           # فیلتر به‌هرحال ردش می‌کند — کوکی خرج نکن
+                # خصوصی/فقط-اعضا این‌جا شاخهٔ جدا ندارند و لازم هم ندارند:
+                # `_is_cookie_error` برایشان False است، پس نه ضربه می‌خورد نه چرخش
+                # (همان «`cname in tried`» پایین) — یک لایه، که تستش هم تنها تصمیم‌گیرنده
+                # است. تا ۲۰۲۶-۰۹ «bot-check/لاگین» خوانده می‌شدند و تا ۵ اکانت ضربه می‌خوردند.
                 if cname and _is_cookie_error(msg, platform):
                     # کلاس و متن پاس داده می‌شوند، دقیقاً مثلِ مسیرِ fetch
                     # (`_resolve_blame`). بدونشان `mark_fail` از هر شاخهٔ
@@ -858,29 +969,46 @@ async def run_download(ctx: dict, payload: dict) -> None:
                                                 _cookie_platform(platform), msg)
                     tried.add(cname)
                     await _alert_if_low(redis, bot, _cookie_platform(platform))
-                    if max_tries and attempts >= max_tries:
-                        log.info("probe: stopping after %d attempts (dl_max_cookie_tries)",
-                                 attempts)
-                        break
-                    if await ck.pick(redis, _cookie_platform(platform), exclude=tried):
-                        log.info("probe: cookie %s failed, trying next", cname)
-                        continue
+                elif cname and kind == D.YT_AGE_GATE:
+                    # فیلترِ ایمنی خاموش است: اکانتِ دیگری شاید احرازِ سن داشته
+                    # باشد، پس چرخش بله — ولی ضربه نه، این اکانت خراب نیست.
+                    tried.add(cname)
+                if max_tries and attempts >= max_tries:
+                    log.info("probe: stopping after %d attempts (dl_max_cookie_tries)",
+                             attempts)
+                    break
+                if kind == D.YT_RELOAD and cname and not anon_tried:
+                    log.info("probe: page-reload with a cookie — retrying once without one")
+                    use_anon = True
+                    continue
+                if cname in tried and await ck.pick(redis, _cookie_platform(platform),
+                                                    exclude=tried):
+                    log.info("probe: cookie %s failed, trying next", cname)
+                    continue
                 break
         if info is None:
             shutil.rmtree(workdir, ignore_errors=True)  # کوکیِ materialize‌شدهٔ نود
+            if kind == D.YT_AGE_GATE and pol.enabled:
+                # همان نتیجه‌ای که با کوکی می‌گرفتیم (`age_limit` در `check_meta`
+                # پایین) — فقط بدونِ خرجِ کوکی. `blocked` نه `fail`، به همان دلیلی
+                # که شاخهٔ `check_meta` دارد: منویی ساخته نمی‌شود چون سیاست رد کرد.
+                await PS.note(redis, PS.BLOCKED)
+                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
+                                 payload.get("tg_user_id") or 0, "age_limit:18", url)
+                return
             await _metric(redis, platform, ok=False)
             await PS.note(redis, PS.FAIL)
-            await ck.note_exit(redis, settings.node_id, platform, ok=False)
-            if D.is_youtube_botcheck(msg, platform):
-                await _edit(bot, chat_id, status_mid, t(lang, "dl_youtube_botcheck"))
-            else:
-                await _edit(bot, chat_id, status_mid,
-                            t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:280])}</code>")
+            if kind not in _YT_NOT_ACCOUNT_KINDS:
+                # ویدیوی خصوصی/سنی دربارهٔ خروجی چیزی نمی‌گوید؛ شمردنش آمارِ
+                # «IPِ این خروجی مسدود است» را آلوده می‌کرد.
+                await ck.note_exit(redis, settings.node_id, platform, ok=False)
+            await _edit(bot, chat_id, status_mid,
+                        _yt_fail_text(lang, kind)
+                        or t(lang, "dl_probe_failed") + f"\n<code>{escape(msg[:280])}</code>")
             return
         shutil.rmtree(workdir, ignore_errors=True)  # probe چیزی نگه نمی‌دارد
         # فیلترِ بزرگسال، لایهٔ ۲ — `age_limit` را خودِ yt-dlp می‌دهد؛ رایگان‌ترین
         # سیگنالِ ممکن، و **قبل از** دانلودِ حتی یک بایت.
-        pol = await safety.load_policy()
         if pol.enabled:
             why = safety.check_meta(info)
             if why:
@@ -1018,6 +1146,17 @@ async def run_download(ctx: dict, payload: dict) -> None:
         paths, dl_err, tried = None, None, set()
         failures: list[tuple[str, str, str]] = []
         cookieless_used, attempts = False, 0
+        # هر تلاشی که بی‌کوکی رفت (پاسِ ناشناس یا استخرِ خالی) — تا «reload با کوکی
+        # → یک‌بار بی‌کوکی» همان تلاشِ محکوم را تکرار نکند. هم‌ریختِ همین متغیر در probe.
+        anon_tried = False
+
+        def _clear_attempt() -> None:
+            """نیمه‌کاره‌های تلاشِ قبلی را پاک کن تا با خروجیِ تلاشِ بعدی قاطی نشود."""
+            for _n in os.listdir(workdir):
+                if _n != "ck":
+                    _p = os.path.join(workdir, _n)
+                    shutil.rmtree(_p, ignore_errors=True) if os.path.isdir(_p) \
+                        else os.remove(_p)
         max_tries = await settings_store.get_int("dl_max_cookie_tries",
                                                  settings.dl_max_cookie_tries)
         # پاسِ اول **ناشناس** برای پلتفرم‌هایی که بدونِ لاگین جواب می‌دهند (یوتیوب و…):
@@ -1071,6 +1210,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                     await _warn_cookieless(redis, bot, _cookie_platform(platform),
                                            settings.node_id)
                     cookieless_used = True      # فقط یک تلاشِ بی‌کوکی، نه حلقهٔ بی‌پایان
+            anon_tried = anon_tried or not cookie_name
             attempts += 1
             ident = await ck.get_meta(redis, cookie_name) if cookie_name else None
             opts = await _opts(redis, platform, workdir, cookie_path, identity=ident)
@@ -1099,11 +1239,13 @@ async def run_download(ctx: dict, payload: dict) -> None:
                         raise      # نه retryِ بدونِ pot، نه fallbackِ کوبالت
                     except Exception as ytdlp_exc:  # noqa: BLE001
                         # پلاگینِ pot-provider گاهی خودِ yt-dlp را می‌اندازد (تریس‌بکِ پایتون، نه خطای
-                        # تمیز — مثلاً ناسازگاریِ نسخهٔ پلاگین با سرورِ pot). یک‌بار بدونِ pot دوباره
-                        # تلاش کن: هم خطای واقعی (bot-check) تمیز بیرون می‌آید، هم اگر فقط pot خراب
-                        # بوده، دانلود (به‌ویژه وقتی کوکیِ یوتیوب هست) موفق می‌شود.
+                        # تمیز — مثلاً ناسازگاریِ نسخهٔ پلاگین با سرورِ pot). فقط **همان** حالت یک‌بار
+                        # بدونِ pot تکرار می‌شود (`D.is_pot_crash`). تا ۲۰۲۶-۰۹ روی **هر** شکستی
+                        # تکرار می‌شد، در حالی که pot روی این سرور اثباتاً بی‌اثر است (جدولِ
+                        # چهارحالتهٔ ۱۶ اوت) — پس هر bot-check/۴۰۳/ویدیوی خصوصی یک اجرای کاملِ دیگر
+                        # روی همان IPِ فلگ‌شده می‌زد و یک لینکِ خصوصی تا ۱۰ اجرا.
                         retried = False
-                        if opts.get("pot_provider"):
+                        if opts.get("pot_provider") and D.is_pot_crash(str(ytdlp_exc)):
                             log.info("yt-dlp failed with pot-provider (%s); retrying without pot",
                                      str(ytdlp_exc)[:140])
                             try:
@@ -1129,6 +1271,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                     paths = [(path, info, thumb)]
                 await ck.mark_ok(redis, cookie_name)   # این اکانت سالم است
                 await ck.note_spend(redis, cookie_name)
+                await _ytauth_metric(redis, platform, "fetch", cookie_name, "ok")
                 # همین خروجی برای این اکانت جواب داد → پس اکانت‌هایی که قبلش
                 # افتادند واقعاً خراب‌اند و تقصیر مالِ خودشان است.
                 await _resolve_blame(redis, bot, _cookie_platform(platform),
@@ -1142,6 +1285,8 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 # لایهٔ ۲ روی همان فراخوانیِ دانلود شلیک کرد — قبل از کشیدنِ رسانه.
                 # چرخشِ اکانت بی‌معنی است (اکانتِ بعدی همین را می‌گیرد) و اکانتِ
                 # فعلی هم مقصر نیست، پس هیچ ضربه‌ای ثبت نمی‌شود.
+                # برای تله‌متری «موفق» نیست ولی «شکستِ مسیر» هم نیست: استخراج جواب داد.
+                await _ytauth_metric(redis, platform, "fetch", cookie_name, "age_limit")
                 await _stop_ticker()
                 pol = await safety.load_policy()
                 await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
@@ -1161,19 +1306,42 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 return
             except Exception as exc:  # noqa: BLE001
                 dl_err = exc
-                cls = ck.classify_error(str(exc))
+                kind = _yt_kind(str(exc), platform)
+                cls = _error_class(str(exc), platform)
+                await _ytauth_metric(redis, platform, "fetch", cookie_name, kind or "other")
+                if kind == D.YT_AGE_GATE:
+                    pol = await safety.load_policy()
+                    if pol.enabled:
+                        # همان نتیجهٔ `AgeRestricted` بالا، ولی **بدونِ** خرجِ کوکی: تا
+                        # ۲۰۲۶-۰۹ این متن bot-check خوانده می‌شد، پس کار به کوکی می‌رفت
+                        # فقط برای اینکه `--match-filter` بعدش ۱۸+ بودن را ببیند و رد کند.
+                        await _stop_ticker()
+                        await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
+                                         payload.get("tg_user_id") or 0, "age_limit:18", url)
+                        await _metric(redis, platform, ok=False)
+                        return
+                if kind in D.YT_CONTENT_KINDS:
+                    # خصوصی/فقط-اعضا: هیچ اکانتی از استخر نمی‌بیندش. نه چرخش، نه ضربه،
+                    # و نه «مقصر خروجی است» — که با ≥۲ اکانت دقیقاً همین را می‌گفت.
+                    log.info("youtube %s — no account can fix this, stopping", kind)
+                    break
                 if anon:
                     # ناشناس نشد → حالا (و فقط حالا) سراغِ کوکی برو. هیچ اکانتی مقصر نیست.
                     anon = False
                     if engine == "direct":
                         break          # فایلِ مستقیم با کوکی هم درست نمی‌شود
-                    if cls != ck.UNRELATED and await ck.pick(redis, _cookie_platform(platform)):
+                    # سنی (با فیلترِ خاموش) همان «اکانت لازم است» است، هرچند `unrelated` باشد
+                    if ((kind == D.YT_AGE_GATE or cls != ck.UNRELATED)
+                            and await ck.pick(redis, _cookie_platform(platform))):
                         log.info("anonymous attempt failed (%s); retrying with a cookie", cls)
                         continue
                     break
                 if cookie_name:
                     tried.add(cookie_name)          # هر اکانتِ استفاده‌شده، نه فقط کوکی‌محورها
-                    failures.append((cookie_name, str(exc), cls))
+                    if kind != D.YT_AGE_GATE:
+                        # سنی نه تقصیرِ اکانت است نه خروجی (اکانت احرازِ سن ندارد)؛ اگر
+                        # این‌جا بنشیند، ≥۲ اکانت یعنی «خروجی مقصر است» — که غلط است.
+                        failures.append((cookie_name, str(exc), cls))
                 if _content_error(str(exc)):
                     log.info("content error (%s) — not an account problem, stopping",
                              str(exc)[:90])
@@ -1181,14 +1349,17 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 if max_tries and attempts >= max_tries:
                     log.info("stopping after %d attempts (dl_max_cookie_tries)", attempts)
                     break
+                if (kind == D.YT_RELOAD and cookie_name and not anon_tried
+                        and engine != "direct"):
+                    # «The page needs to be reloaded» با کوکی → یک‌بار بی‌کوکی
+                    # (توصیهٔ yt-dlp #17497؛ همان قاعدهٔ حلقهٔ probe).
+                    log.info("page-reload with a cookie — retrying once without one")
+                    anon = True
+                    _clear_attempt()
+                    continue
                 log.info("attempt %d failed (%s); rotating: %s",
                          attempts, cls, str(exc)[:90])
-                # نیمه‌کاره‌های تلاشِ قبلی را پاک کن تا با خروجیِ تلاشِ بعدی قاطی نشود
-                for _n in os.listdir(workdir):
-                    if _n != "ck":
-                        _p = os.path.join(workdir, _n)
-                        shutil.rmtree(_p, ignore_errors=True) if os.path.isdir(_p) \
-                            else os.remove(_p)
+                _clear_attempt()
                 # فقط وقتی که واقعاً اکانتی در بازی بوده. با استخرِ **خالی**
                 # (ساندکلاود و هفت پلتفرمِ دیگری که پنل سطلشان را نمی‌سازد)
                 # `cookie_name` تهی است و «اکانتِ دیگری را امتحان می‌کنم» حرفِ
@@ -1211,13 +1382,19 @@ async def run_download(ctx: dict, payload: dict) -> None:
                                             settings.node_id, failures, won=False)
             await _alert_if_low(redis, bot, _cookie_platform(platform))
             await _metric(redis, platform, ok=False)
+            kind = _yt_kind(msg, platform)
             # شکستِ واقعیِ شبکه‌ای (نه ردِ سیاستی) → به حسابِ همین خروجی. اگر همهٔ
-            # اکانت‌ها روی یک خروجی بیفتند، مقصر IP است نه سشن‌ها.
-            await ck.note_exit(redis, settings.node_id, platform, ok=False)
+            # اکانت‌ها روی یک خروجی بیفتند، مقصر IP است نه سشن‌ها. ویدیوی خصوصی/سنی
+            # دربارهٔ خروجی چیزی نمی‌گوید، پس شمرده نمی‌شود.
+            if kind not in _YT_NOT_ACCOUNT_KINDS:
+                await ck.note_exit(redis, settings.node_id, platform, ok=False)
             if exit_bad:
                 # پیامِ «کوکی ست کن» این‌جا دروغ است — کوکی‌ها سالم‌اند، IP مقصر است
                 await _edit(bot, chat_id, status_mid,
                             t(lang, "dl_exit_problem", platform=plabel))
+            elif kind in _YT_NOT_ACCOUNT_KINDS:
+                # علتِ مشخص، نه «ادمین کوکی بگذارد» — که برای این ویدیو هرگز کار نمی‌کند
+                await _edit(bot, chat_id, status_mid, _yt_fail_text(lang, kind))
             elif isinstance(dl_err, D.DirectTooLarge):
                 # فایلِ مستقیم کیفیتِ دیگری ندارد که پیشنهاد شود → پیامِ سرراست.
                 # رو به **بالا** گرد می‌شود، وگرنه ۱٫۴MB با سقفِ ۱MB می‌شود «۱ از ۱ بیشتر است».
