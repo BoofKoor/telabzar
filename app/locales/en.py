@@ -247,6 +247,17 @@ MESSAGES: dict[str, str] = {
         "should upload a YouTube cookies file (name containing <code>youtube</code>, e.g. "
         "<code>youtube_1.txt</code>) in the panel, or set a clean proxy."
     ),
+    "dl_yt_private": (
+        "🔒 This video is <b>private</b>: only its owner and people they granted "
+        "access can watch it, so the bot cannot download it either."
+    ),
+    "dl_yt_members": (
+        "🔒 This video is for <b>channel members</b> only, and the bot is not a member."
+    ),
+    "dl_yt_age_login": (
+        "🔞 This video is <b>age-restricted</b>, and none of the bot's accounts "
+        "was allowed to watch it."
+    ),
     "dl_pick_quality": "🎬 <b>{title}</b>\nChoose the output quality:",
     "btn_dl_best": "⭐ Best",
     "btn_dl_audio": "🎵 Audio only",
