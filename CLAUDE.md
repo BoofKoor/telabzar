@@ -55,9 +55,9 @@ processing (`processing.py`, `downloader.py`) → delivery (`cards.py`, or `gate
 | `app/states.py` | FSM states (rename, meta edit, watermark, trim, screenshot, collect, …) |
 | `app/cards.py` | Send/update the card (file + keyboard), spawn new cards, progress note; **two caption views** — `card_caption()` (open: plain name + info line, no wrapper quote) and `post_view()` (collapsed: the source post's own text in a closed `<blockquote expandable>`), picked by `view_caption(collapsed=…)`; `_video_extra()` forwards duration/dims/cover to Telegram |
 | `app/tasks.py` | `run_op` (ARQ) + `_do_op` op dispatch; live status ticker; `_localize()` resolves every input to a local path — disk path on the master, HTTP download on a remote node (the only remote-input seam); `_outgoing_paths()`+`_too_big_to_send()` = the upload-ceiling gate, one check ahead of all four delivery branches |
-| `app/tasks_download.py` | `run_download` (ARQ): probe→menu / fetch→size-check→spawn; rich-post/album delivery |
+| `app/tasks_download.py` | `run_download` (ARQ): probe→menu / fetch→size-check→spawn; rich-post/album delivery. **خواندنِ خطای یوتیوب** (۲۰۲۶-۰۹): `_yt_kind` (فقط یوتیوب/پلتفرمِ ماچ) → `_error_class` (نگاشتِ `_YT_KIND_CLASS`، وگرنه `ck.classify_error`) و `_is_cookie_error` (اول نوع، بعد نشانه‌های عمومی)؛ `_YT_NOT_ACCOUNT_KINDS` = نوع‌هایی که نه تقصیرِ اکانت‌اند نه خروجی (نه `failures`، نه `note_exit`)؛ `_yt_fail_text` پیامِ مشخصِ کاربر؛ `_ytauth_metric` → `dlstat:ytauth:<phase>:<anon\|cookie>:<outcome>:<day>` (TTL **هشت** روز) |
 | `app/processing.py` | ffmpeg/Pillow ops; `_run` subprocess contract (progress/cancel/`ProcessingCancelled`); `start_cancel_watcher`/`CancelWatch` = the **single** cancel-polling mechanism, shared with `downloader._run_dl` |
-| `app/downloader.py` | Engine routing (`platform_of`/`engine_for`), yt-dlp/gallery-dl/cobalt, and the shared **match** path for DRM platforms (`download_matched` + `_resolve_reference` → `spotify_resolve` / `apple_resolve`), YT-match scorer; **direct-file engine** (`probe_direct`/`download_direct`/`is_direct_response`/`direct_filename`, `DirectTooLarge`) for plain download links; **کست‌باکس** (`castbox_ids`/`castbox_target` خالص و بی‌شبکه + `resolve_castbox` که گاردِ SSRF را سوار می‌کند) |
+| `app/downloader.py` | Engine routing (`platform_of`/`engine_for`), yt-dlp/gallery-dl/cobalt, and the shared **match** path for DRM platforms (`download_matched` + `_resolve_reference` → `spotify_resolve` / `apple_resolve`), YT-match scorer; **direct-file engine** (`probe_direct`/`download_direct`/`is_direct_response`/`direct_filename`, `DirectTooLarge`) for plain download links; **کست‌باکس** (`castbox_ids`/`castbox_target` خالص و بی‌شبکه + `resolve_castbox` که گاردِ SSRF را سوار می‌کند)؛ **نوعِ خطای یوتیوب** — `YT_*` + `_YT_KIND_HINTS` + `youtube_error_kind()` (تنها خوانندهٔ متنِ خطای یوتیوب؛ `is_youtube_botcheck` رویش سوار است) و `YT_CONTENT_KINDS`؛ `is_pot_crash()` = تنها گیتِ «یک‌بار بدونِ pot» (fetch **و** `download_matched`)؛ `_stderr_summary` = خلاصهٔ stderrِ موتور (`\r` خط نمی‌شکند — §۷) |
 | `app/settings_store.py` | Runtime config: Postgres (durable) + Redis (live, read-through); `RUNTIME_KEYS`/`ENUM_VALUES` |
 | `app/textstore.py` | Runtime UI overrides: bot texts/labels, per-op button `style`+`icon_emoji_id`, **and per-kind card menu layout** (`TextOverride`/`ButtonStyle`/`MenuButton`, Postgres) via one in-process dict reloaded on the Redis `txtver` counter; `validate(…, require_all_placeholders=)`, `clean_button()`, `get_menu_layout()`; **نوشتنِ دسته‌ای** `set_texts(lang, mapping, replace=)` (یک تراکنش، **یک** bump — نه `set_text` در حلقه)، `lang_texts()`, `drop_lang()`, و ثبتِ زبان (`languages`/`add_language`/`remove_language`) |
 | `app/admin_web.py` | Web panel: settings/texts/buttons/health/users/stats/cookies/**nodes**/**langs**; `_languages()` = پوستهٔ نازک روی `i18n.available_languages()` (فقط `refresh_if_stale` را اضافه می‌کند؛ **سازنده از فاز C به `i18n` منتقل شد** چون ربات هم همان فهرست را می‌خواهد و نمی‌تواند این ماژول را import کند) + `_pick_lang()`؛ `/langs` + `/langs/{export,import,delete}`; `_rate_limit`/`_client_ip` = سقفِ نرخِ مسیرِ لاگین (per-admin **و** per-IP)؛ `_pot_health`/`_pot_refresh` = سلامتِ pot-provider از کش، با تازه‌سازیِ پس‌زمینه (هرگز روی مسیرِ درخواست)؛ `_users_cached` + شمارندهٔ نسخهٔ `userscache:ver`; `GROUPS` = ردیف‌های **برچسب‌خوردهٔ** فرمِ تنظیمات و `_setting_groups()` = همان به‌علاوهٔ گروهِ خودکارِ ته‌مانده‌های `RUNTIME_KEYS` (تنها منبعِ **هم** رندر **هم** `save()`); `_badge_of()` = کلاسِ بجِ وضعیتِ اکانت، تنها جایی که پیش‌فرضِ ناشناخته تعریف می‌شود; `_CSS` = فقط **خواندنِ** `app/static/css/panel.css` (طراحی آن‌جاست، نه این‌جا — §Panel UI)؛ `_TEMPLATE_DIR`/`_STATIC_DIR` هر دو به `__file__` لنگر می‌خورند و `..` ندارند; node join API (`/node/join`) + install-script (`/node/install.sh`) + `/node/peers` (WG peer config for host `wg-sync`, gated by `NODE_SECRET`); `console_page` + `_CONSOLE_DIR` = سرو کردنِ کنسولِ Next از `app/static/console/` (فقط HTML گِیتِ نشست دارد، دارایی‌ها نه)؛ `console_api` = دادهٔ **واقعیِ** کنسول روی `/api/console` (۴۰۱ می‌دهد نه ریدایرکت، و محاسبه را از `_stats_cached`/`_health` **قرض می‌گیرد** نه اینکه تکرار کند) + `_CONSOLE_GAPS` = فهرستِ **نام‌بردهٔ** پنل‌هایی که منبعِ واقعی ندارند، که در payload می‌رود تا صفحه به‌جای عددِ ساختگی علتش را نشان بدهد؛ `console_page_api` + `_CONSOLE_PAGES` = دادهٔ اختصاصیِ نُه صفحهٔ دیگر روی `/api/console/<page>` (نگاشتِ **صریح** است نه `getattr` روی نامِ صفحه، وگرنه یک مسیرِ کاربر هر تابعی را در ماژول صدا می‌زند)، و هر سازنده از همان تابعی می‌خواند که صفحهٔ Jinja می‌خواند — `_page_keyboard` مشخصاً `keyboards._resolved_menu`/`_rows_from_widths` را صدا می‌زند تا **کپیِ نهمِ** قراردادِ کیبورد ساخته نشود. **Preloads + per-page-refreshes `textstore`** so a restart never shows/saves defaults over real overrides |
@@ -118,9 +118,9 @@ Versions are read from the requirements files; do not edit from memory. Python (
 **Download worker — `requirements-worker-dl.txt`** (base +, slim image, no heavy processing stack):
 | Package | Pin | Why |
 |---|---|---|
-| yt-dlp[default] | (unpinned) | Video/audio downloader + yt-dlp-ejs JS runtime |
+| yt-dlp[default] | `==2026.8.19` | Video/audio downloader + yt-dlp-ejs JS runtime — **pinned on purpose**, see §6 «Engine pins» |
 | gallery-dl | (unpinned) | Image galleries/carousels (Instagram/Pinterest) |
-| bgutil-ytdlp-pot-provider | (unpinned) | YouTube PO-token plugin |
+| bgutil-ytdlp-pot-provider | `==2.0.0` | YouTube PO-token plugin — must equal the server image tag in compose |
 | nudenet + onnxruntime | `>=3.4,<4` / `>=1.16,<2` | Adult-content scan must run where the download happens |
 | aiohttp | (unpinned) | Spotify Web API + Cobalt HTTP |
 | ytmusicapi | `>=1.8,<2` | YouTube Music "songs" search for precise Spotify matching |
@@ -128,7 +128,8 @@ Versions are read from the requirements files; do not edit from memory. Python (
 **Admin panel — `requirements-admin.txt`** (base +): `jinja2 >=3.1,<4` (templates), `cryptography >=42,<46` (Fernet session).
 
 **Infra images (`docker-compose.yml`):** `aiogram/telegram-bot-api:10.2` (pinned), `postgres:16-alpine`,
-`redis:7-alpine`, `clamav/clamav:latest`, `brainicism/bgutil-ytdlp-pot-provider:latest`. The download-worker
+`redis:7-alpine`, `clamav/clamav:latest`, `brainicism/bgutil-ytdlp-pot-provider:2.0.0` (pinned since
+2026-09-26 — same version as the plugin; `tests/test_ytdlp_pins.py`). The download-worker
 image also installs **Deno** (yt-dlp JS runtime) + ffmpeg. See `docs/telegram-api.md` for Bot API version notes.
 
 ## 5. Conventions
@@ -205,6 +206,35 @@ image also installs **Deno** (yt-dlp JS runtime) + ffmpeg. See `docs/telegram-ap
 `download-worker`, `gateway`, `admin`, `bgutil-pot-provider`; volumes: `tg-bot-api-data`, `pg-data`,
 `redis-data`, `work-data`, `clamav-data`). Dockerfiles in `docker/`. Adding a Python dep to the download path
 requires rebuilding **`download-worker`** (`docker compose build download-worker && docker compose up -d download-worker`).
+
+**Engine pins — `telabzar update` on its own never upgrades yt-dlp (2026-09-26).** `compose up -d --build`
+reuses the image's `pip install` layer from the Docker cache for as long as `requirements-worker-dl.txt` is
+byte-identical, so an unpinned `yt-dlp[default]` stayed at whatever version happened to be current the day the
+layer was first built — production was on **2026.07.04** while YouTube broke that version's cookie-free
+client (`android_vr`, all formats 403 since 2026-08-17). An unpinned line is therefore not "always latest", it
+is "frozen at an unknown version and invisible". So the engines are pinned **on purpose**:
+`yt-dlp[default]==2026.8.19` and `bgutil-ytdlp-pot-provider==2.0.0` in `requirements-worker-dl.txt`, the same
+yt-dlp in `requirements-dev.txt` (the tests build error texts with the real library), and the pot **server**
+image tag `2.0.0` in `docker-compose.yml`, which must equal the plugin version. `tests/test_ytdlp_pins.py`
+guards all four, including that the installed yt-dlp *is* the pinned one. **Upgrading an engine = bump the pin
+in a PR**, then `telabzar update` on the master and `node/update.sh` on any node; a pin bump is the one change
+that is guaranteed to invalidate the pip layer. Side effect worth knowing: rebuilding that layer also
+re-resolves the still-unpinned `gallery-dl`, so an engine bump upgrades Instagram's engine too. **Deno has
+the same property one layer up** (`curl … deno.land/install.sh` in `docker/download-worker.Dockerfile`
+sits above the pip layer, so no requirements change ever rebuilds it): if a future yt-dlp's EJS demands a
+newer Deno, only a Dockerfile edit or `docker compose build --no-cache download-worker` gets it.
+
+**Measuring the cookie-free YouTube path on the server — `tools/yt_client_matrix.py`.** Stdlib-only on
+purpose (it must run on the *current* image, before a deploy), so it goes in through stdin like the other tools:
+`git show origin/<branch>:tools/yt_client_matrix.py | docker compose exec -T download-worker python - --versions current,2026.8.19`
+runs a small real download (`--test`, ~10 KB) per video × client × yt-dlp version and prints a table
+(ok / unsupported / bot_check / age_gate / private / members_only / page_reload / rate_limit / http_403 /
+no_formats / timeout / other); `--stats N` prints the production counters `dlstat:ytauth:*` for the last N UTC
+days instead. Other versions are pip-installed into the container's `/tmp`, with the `[default]` extra
+(without it `yt-dlp-ejs` is missing and the `web` client fails for the wrong reason). It **stops on a rate
+limit** (from that point every cell describes the throttled measurement session, not the client — override
+with `--keep-going`), confirms a screening winner with `--full`, and `--cookies <file>` adds a with-cookie
+column, which spends an account and is off by default. The two traps it exists to avoid are in §7.
 
 **Master node infra (auto):** `install.sh` offers it at the end, or run `telabzar nodes-enable` (= `sudo node/master-setup.sh`) any time. It sets up WireGuard on the host + installs a `telabzar-wg-sync` systemd timer that reconciles WG peers from the `Node` table (declarative, self-healing — the panel just writes `Node` rows; the host timer applies them via `/node/peers`), and applies **`docker-compose.nodes.yml`** (overlay that publishes redis/postgres/local-bot-api/pot/gateway on `${WG_MASTER_IP}` — WG-only, not the public IP). The `telabzar` CLI auto-adds the overlay (`-f docker-compose.yml -f docker-compose.nodes.yml`) whenever `.nodes-enabled` exists, so `telabzar update` keeps the WG exposure. Standalone (no overlay) is unchanged — everything runs on the master.
 
@@ -1182,7 +1212,7 @@ usable accounts drop below `cookie_alert_min`.
   interleaving** rather than running things concurrently and hoping: an earlier version did two
   ordinary reads, never reached the branch, and a sabotage proved it vacuous for that claim.
 - **Cross-process settings staleness**: `settings_store` is read-through Redis (durable copy in Postgres), NOT an in-process TTL cache — so a panel change is seen instantly by bot **and** worker. Reading `settings.X` directly bypasses this and silently ignores the panel.
-- **yt-dlp deps**: needs Deno (JS runtime) + `bgutil-pot-provider` for YouTube PO tokens. The pot plugin can crash yt-dlp → toggle `DL_POT_ENABLED` off and there is a retry-without-pot path. Datacenter IPs get blocked → route via `PROXY_URL` (your own clean exit). **ولی PO token روی این استقرار اثری ندارد — بولتِ بعدی را قبل از هر تصمیمی دربارهٔ pot بخوان.**
+- **yt-dlp deps**: needs Deno (JS runtime) + `bgutil-pot-provider` for YouTube PO tokens. The pot plugin can crash yt-dlp → toggle `DL_POT_ENABLED` off; the retry-without-pot path fires **only on a real plugin crash** since 2026-09-26 (`downloader.is_pot_crash`: a traceback tail or a pot plugin name, never a clean `ERROR:` line) — in the fetch loop **and** per track in `download_matched`, where the blind form cost one extra yt-dlp run per track of a playlist. Datacenter IPs get blocked → route via `PROXY_URL` (your own clean exit). **ولی PO token روی این استقرار اثری ندارد — بولتِ بعدی را قبل از هر تصمیمی دربارهٔ pot بخوان.**
 - **PO token روی این سرور بی‌اثر است — و این را باید با هر چهار حالت خواند، وگرنه «pot خراب بود»
   فهمیده می‌شود.** اندازه‌گیریِ زندهٔ اپراتور روی مستر (۲۰۲۶-۰۸-۱۶)، **یک** ویدیو، **چهار** حالت:
 
@@ -1201,6 +1231,12 @@ usable accounts drop below `cookie_alert_min`.
   زمانِ ورکر نیست، یک **برخوردِ اضافه با یوتیوب** است که ریسکِ bot-check و مرگِ سشن را بالا می‌برد.
   دامنهٔ شاهد: یک ویدیو روی یک IP. برای «pot هرگز به‌درد نمی‌خورد» کافی نیست؛ برای «امروز روی این
   ماشین چیزی نمی‌خرد» کافی است، و تصمیم هم دربارهٔ همین است.
+  **رفع شد ۲۰۲۶-۰۹-۲۶:** تکرار فقط روی کرشِ واقعیِ پلاگین (`is_pot_crash`)؛ هر خطای تمیزِ yt-dlp
+  (bot-check، ۴۰۳، خصوصی، …) دیگر اجرای دوم نمی‌زند. خودِ pot خاموش **نشد**: سرور و پلاگین هر دو
+  روی `2.0.0` پین شدند (سرورِ ۲.۰ فقط بدنهٔ JSON می‌پذیرد و پلاگینِ ۱.۳.۱ از قبل همان را می‌فرستد)،
+  چون کلاینتِ `web` (نیمهٔ دومِ پیش‌فرضِ بی‌کوکیِ 2026.08.19) برای فرمت‌های HTTPS/DASH توکنِ GVS را
+  **الزامی** می‌داند (`WEB_PO_TOKEN_POLICIES`؛ برای HLS نه)، و این جدول روی 2026.07.04 گرفته شده بود —
+  با نسخهٔ تازه باید دوباره سنجیده شود (`tools/yt_client_matrix.py` با و بی `--no-pot`).
 - **دانلودِ ناشناسِ یوتیوب حدود ۳۲٪ جواب می‌دهد — نه صفر، نه بیشتر.** دو اندازه‌گیریِ **مستقل** روی
   تولید (۲۰۲۶-۰۸-۱۶) هم‌گرا شدند: ۳۲ خطِ `anonymous attempt failed (bot_check)` در برابرِ ۴۷ جابِ
   یوتیوبِ آن روز (۴۱ ok + ۶ fail)؛ و یک تستِ مستقیمِ سه‌ویدیویی که **۱ از ۳** را ناشناس گرفت.
@@ -1208,7 +1244,12 @@ usable accounts drop below `cookie_alert_min`.
   این نرخِ **یک روزِ ناقص** است، نه نرخِ پایدار. معنیِ عملی‌اش برای طراحی این است که `_ANON_FIRST`
   برای یوتیوب **می‌ارزد** (یک‌سومِ دانلودها هیچ اکانتی لمس نمی‌کنند) ولی برخلافِ اینستاگرام
   (~۸۷٪) هرگز جای کوکی را نمی‌گیرد. هدفِ کارِ یوتیوب کاهشِ مصرفِ بی‌مورد است، نه حذفِ کوکی.
-- **فرمِ خطای تازهٔ یوتیوب: «The page needs to be reloaded.» — ثبت شد، رفع نشد (۲۰۲۶-۰۸-۱۸).**
+  **این عدد مالِ 2026.07.04 است و دیگر معتبر نیست (۲۰۲۶-۰۹-۲۶):** کلاینتِ بی‌کوکیِ آن نسخه
+  (`android_vr`) از ۱۷ اوت برای **همهٔ** فرمت‌ها 403 می‌گیرد (کامنتِ سورسِ خودِ yt-dlp) — پس هر
+  شکستِ بی‌کوکیِ بعد از آن تاریخ دربارهٔ نسخه بود، نه دربارهٔ IP. نرخِ بی‌کوکی با 2026.08.19
+  (`visionos,web`) باید از نو سنجیده شود؛ ابزارش `tools/yt_client_matrix.py` و شمارنده‌اش
+  `dlstat:ytauth:fetch:anon:*` است (§۶).
+- **فرمِ خطای تازهٔ یوتیوب: «The page needs to be reloaded.» — ثبت شد، رفع نشد (۲۰۲۶-۰۸-۱۸). رفع شد ۲۰۲۶-۰۹-۲۶ — پاراگرافِ آخرِ همین بولت.**
   متنِ کامل: `ERROR: [youtube] <id>: The page needs to be reloaded.` و
   `classify_error` آن را **`unrelated`** می‌خواند. در پنجرهٔ لاگِ **یک‌ساعتهٔ**
   اپراتور هر ۴ شکستِ یوتیوب همین بودند و **صفر** bot-check — یعنی برای آن ساعت
@@ -1225,6 +1266,15 @@ usable accounts drop below `cookie_alert_min`.
   مخرجِ کامل سنجیده می‌شود؛ **پیش از آن هیچ فهرستی (`_YT_BOTCHECK_HINTS`،
   `_CLASS_HINTS`، `_CONTENT_HINTS`) دست نخورد** — همان قاعدهٔ «اول عدد، بعد
   تصمیم» که برای خودِ فازِ probe هم اعمال شد.
+  **رفع (۲۰۲۶-۰۹-۲۶) و دو تصحیح روی متنِ بالا.** این دیگر «گذرا و بی‌علت» نیست:
+  yt-dlp آن را باگِ کلاینتِ **با‌کوکیِ** `tv_downgraded` می‌داند (#17389 باز، #17405)،
+  و توصیهٔ نگه‌دارنده (#17497) «اگر کوکی می‌دهی، بی‌کوکی امتحان کن» است. پس حالا
+  `YT_RELOAD` نوعِ خودش را دارد: دستهٔ استخر `transient` (چرخش بله، ضربه نه) و
+  اگر تلاشِ افتاده **کوکی داشت**، **یک‌بار** بی‌کوکی تکرار می‌شود — در probe و fetch
+  هر دو، با `anon_tried` که تلاشِ بی‌کوکیِ ازپیش‌انجام‌شده را هم می‌شمارد تا همان
+  تلاشِ محکوم دوباره نرود. تصحیح‌ها: «upgrade همان را می‌دهد» فقط در آن تاریخ درست
+  بود (2026.08.19 فردایش منتشر شد و پیش‌فرض‌های کلاینت را عوض کرد)، و
+  `_YT_BOTCHECK_HINTS` دیگر وجود ندارد — جایش `downloader._YT_KIND_HINTS` است.
 - **فرم‌های خطایی که فهرست‌های واگرا نگرانشان بودند، در ترافیکِ واقعی وجود ندارند.** سرشماریِ کلِ
   پنجرهٔ لاگ (۲۰۲۶-۰۸-۱۶): **صفر** «members-only»، **صفر** «Music Premium»، **صفر** «not available
   on this app». تنها فرمِ خطای یوتیوب همان bot-checkِ استاندارد است، **۲۹ بار**. یک ریزه‌کاریِ
@@ -1247,6 +1297,65 @@ usable accounts drop below `cookie_alert_min`.
   باعث می‌شود گیتِ ارتقای anon→کوکی (`tasks_download.py`، شاخهٔ `if anon:` در حلقهٔ fetch، شرطِ
   `cls != ck.UNRELATED`) بعضی خطاها را رد کند — **واقعی ولی امروز بی‌هزینه** است: درستیِ نهفته،
   بدونِ فوریت. اگر روزی یکی از آن سه فرم در لاگ دیده شد، آن‌وقت فوری می‌شود.
+  **بسته شد ۲۰۲۶-۰۹-۲۶، و آن «بی‌هزینه» اشتباه بود:** فهرستِ bot-check هر دو طرف عبارتِ
+  عمومیِ `--cookies`/`sign in to confirm` را داشت که yt-dlp به **هر** دلیلِ «sign in» می‌چسباند،
+  پس ویدیوی خصوصی و سنی هم bot-check خوانده می‌شدند — بولتِ «هر خطای sign in» پایین‌تر. برای
+  یوتیوب حالا یک خواننده هست (`youtube_error_kind`) و هر دو مسیر اول آن را می‌پرسند.
+- **هر خطای «sign in»ِ یوتیوب جملهٔ `--cookies`ِ yt-dlp را دارد — پس خصوصی و سنی «bot-check»
+  خوانده می‌شدند (رفع ۲۰۲۶-۰۹-۲۶).** yt-dlp به هر دلیلی که «sign in» داشته باشد
+  `_youtube_login_hint` («Use --cookies-from-browser or --cookies …») را می‌چسباند، و هم
+  `downloader._YT_BOTCHECK_HINTS` هم `cookies._CLASS_HINTS[BOT_CHECK]` نشانهٔ
+  `--cookies`/`sign in to confirm` داشتند؛ «403» هم در نشانه‌های لاگین بود. پیامدهای
+  اندازه‌گیری‌شده با `run_download`ِ واقعی روی سورسِ پیش از رفع: probe (مسیرِ پیش‌فرضِ یوتیوب) یک
+  لینکِ **خصوصی** را تا ۵ اکانت می‌چرخاند و به هرکدام ضربه + کول‌داون می‌زد و کاربر «ادمین کوکی
+  بگذارد» می‌گرفت؛ fetch با ≥۲ اکانت «خروجی مقصر است» اعلام می‌کرد (DMِ ادمین + کول‌داونِ
+  خروجی)؛ ویدیوی **سنی** کوکی خرج می‌کرد فقط برای اینکه `--match-filter` بعدش ردش کند؛ ۴۰۳ِ
+  دانلودِ رسانه (googlevideo — توکن/کلاینت/IP) اکانتِ سالم را `login_required` می‌سوزاند؛ و
+  retryِ کورِ بی‌pot همهٔ این‌ها را دو برابر می‌کرد. رفع: `downloader.youtube_error_kind` تنها
+  خوانندهٔ متنِ خطای یوتیوب است (`bot_check`, `age_gate`, `private`, `members_only`,
+  `page_reload`, `rate_limit`, `gvs_403`) و `tasks_download._is_cookie_error`/`_error_class`
+  برای یوتیوب **اول نوع** را می‌پرسند. خصوصی/فقط-اعضا: نه چرخش، نه ضربه، نه خروجی. سنی: با
+  فیلترِ ایمنیِ روشن **بی‌کوکی** رد می‌شود (همان `nsfw_blocked`)، با فیلترِ خاموش چرخشِ بی‌ضربه
+  و بی‌تقصیرِ خروجی. ۴۰۳ِ رسانه: `transient`. هر سه پیامِ مشخصِ کاربر دارند (`dl_yt_private`،
+  `dl_yt_members`، `dl_yt_age_login`). **دو چیز عمداً عوض نشد:** ۴۰۳ِ «Unable to download API
+  page» همان `login_required` می‌ماند (کنترلِ `test_probe_cookie_blame`)، و bot-check همچنان
+  ضربه می‌زند. **قاعدهٔ عام:** متنی که یک کتابخانه به **پیام‌های متفاوت** می‌چسباند (این‌جا
+  راهنمای کوکی) هرگز نشانهٔ یکی از آن‌ها نیست؛ و تستش متنِ خطا را با **خودِ** yt-dlp می‌سازد
+  (`tests/yt_errors.py`) نه با رشتهٔ دست‌نویس — رشتهٔ دست‌نویس همان جمله را جا می‌انداخت و تله را
+  پنهان می‌کرد.
+- **کلاینتی که yt-dlp صدا می‌زند به نسخه بسته است — و کلاینتِ ناشناخته بی‌صدا پیش‌فرض می‌شود.**
+  از سورسِ خودِ دو نسخه:
+
+  | نسخه | بی‌کوکی | با کوکی | یادداشتِ سورس |
+  |---|---|---|---|
+  | 2026.07.04 (تولید تا ۲۰۲۶-۰۹) | `android_vr`, `web_safari` | `tv_downgraded`, `web_safari` | `visionos` **وجود ندارد** |
+  | 2026.08.19 (پین) | `visionos`, `web` (بی JS runtime: فقط `visionos`) | `web_embedded`, `tv_downgraded`, `web` | `android_vr` همهٔ فرمت‌ها 403 از ۱۷ اوت؛ `web_safari` HLS فقط برای سشنِ لاگین/«trusted» از ۲۰۲۶-۰۷؛ `visionos` بی PO token و بی JS player، و کوکی نمی‌پذیرد |
+
+  **تلهٔ سنجش:** `YoutubeIE._get_requested_clients` کلاینتی را که نمی‌شناسد با یک WARNING رد
+  می‌کند و اگر چیزی نماند **پیش‌فرض** را می‌گذارد — پس `player_client=visionos` روی 2026.07.04
+  همان `android_vr,web_safari` را می‌سنجد، و `--no-warnings`ِ `_common_flags` همان WARNING را هم
+  می‌بلعد (بازتولیدشده با خودِ yt-dlp در `tests/test_yt_client_matrix.py`). با کوکی، کلاینتِ
+  بی‌پشتیبانیِ کوکی (`visionos`) به همین شکل بی‌صدا کنار می‌رود. هر سنجشی از کلاینت‌ها باید
+  WARNINGها را نگه دارد — `tools/yt_client_matrix.py` چنین خانه‌ای را `unsupported` می‌خواند؛ و
+  **هر کلیدِ پنلیِ آینده برای `player_client`** همین گارد را لازم دارد، وگرنه تایپِ ادمین بی‌صدا به
+  پیش‌فرض برمی‌گردد و پنل «ذخیره شد» می‌گوید.
+- **شکستِ دانلودِ تکه‌ای `ERROR: \r[download] Got error: …` است — و `\r` در دو لایه متن را
+  می‌خورد (رفع ۲۰۲۶-۰۹-۲۶).** `FileDownloader.report_retry` (HLS/DASH، بعد از تمام‌شدنِ
+  `fragment_retries`) پیام را با `\r` بعد از `ERROR:` می‌نویسد. `downloader._stderr_summary` با
+  `splitlines()` آن را به یک «ERROR:»ِ خالی و متنی بی‌برچسب می‌شکست و خلاصه **فقط «ERROR:»** می‌شد
+  (اجراشده با پیامی که خودِ yt-dlp ساخت): کاربر `<code>download failed: ERROR:</code>` می‌دید، ۴۰۳
+  `unrelated` می‌ماند، و پاسِ بی‌کوکی به کوکی **ارتقا نمی‌یافت** — روی **هر** پلتفرمِ HLS‌دار، نه
+  فقط یوتیوب. رفع: `\r` پیش از شکستن فاصله می‌شود. **و لایهٔ دوم که فقط زیرفرایندِ واقعی نشانش
+  داد:** `subprocess.run(text=True)` پیش از هر چیز `\r` را `\n` می‌کند (`_translate_newlines`)، پس
+  هر خواننده‌ای که stderrِ موتور را در حالتِ متنی بگیرد همان باگ را از نو می‌سازد — `_run_dl` و
+  `probe` بایت می‌خوانند و ابزارِ سنجش هم عمداً.
+- **شمارندهٔ کوکی/بی‌کوکیِ یوتیوب: `dlstat:ytauth:<phase>:<anon|cookie>:<outcome>:<day>`، TTLِ
+  هشت روز.** هر **تلاشِ** یوتیوب (نه جاب — همان تصمیمِ `probe_stats`) یک خانه: `outcome` = `ok`،
+  یکی از نوع‌های `YT_*`، `age_limit` (استخراج موفق ولی گیتِ سنی رد کرد) یا `other`. «سهمِ
+  بی‌کوکی» = `fetch:anon:ok` بر همهٔ `fetch:anon:*`؛ «مصرفِ کوکی» = جمعِ `*:cookie:*`. هشت روز نه
+  دو روزِ `_metric`، چون کارش مقایسهٔ قبل/بعد در چند روز است — همان چیزی که تصمیمِ فازِ ۲ (probeِ
+  بی‌کوکی) رویش سوار است. خواندن: `tools/yt_client_matrix.py --stats N`. **قیدِ نود** مثلِ بقیهٔ
+  شمارنده‌های `tasks_download`: تا `node/update.sh` اجرا نشود فقط مستر می‌شمارد.
 - **پیکربندیِ یوتیوب در تولید: تنها کلیدِ غیرپیش‌فرض `dl_ux_youtube = probe` است.** `COBALT_URL`
   خالی است (پس شاخهٔ fallbackِ کوبالت **هرگز اجرا نمی‌شود** و نباید در هیچ تحلیلی حساب شود)،
   `PROXY_URL` خالی است (خروجیِ مستقیم از IPِ دیتاسنتر — همان چیزی که یوتیوب چالش می‌کند)، و هیچ
@@ -1759,6 +1868,10 @@ usable accounts drop below `cookie_alert_min`.
   the accounts. Because the admin cannot tell the two apart by eye, each download worker reports its
   `gallery-dl`/`yt-dlp` version to Redis at startup (`worker.startup_dl` → `dlver:<who>`) and `/health`
   shows them: old engine → `telabzar update` + `node/update.sh`, current engine → replace the session.
+  **Corrected 2026-09-26: `telabzar update` alone never upgraded the engine** — the pip layer comes from
+  the Docker cache until the requirements file changes (§6 «Engine pins»), which is exactly how production
+  sat on 2026.07.04. yt-dlp is now pinned, so "old engine" means *bump the pin in a PR*, then update. The
+  still-unpinned gallery-dl is re-resolved whenever that layer rebuilds, i.e. on any engine pin bump.
 - **A dead Instagram session doesn't say "login".** gallery-dl answers a request made with an
   expired/invalidated cookie by following the redirect and reporting
   `[instagram][error] HTTP redirect to home page (https://www.instagram.com/)`. That string contains
@@ -2209,6 +2322,27 @@ usable accounts drop below `cookie_alert_min`.
 - `docs/ADMIN_PANEL.md` — admin panel / runtime settings notes (pre-existing).
 
 ## Open Questions
+- **وابستگیِ یوتیوب به کوکی — فاز ۰ و ۱ ساخته شد، فاز ۲ و ۳ عمداً نه (۲۰۲۶-۰۹-۲۶، تصمیمِ اپراتور:
+  «اول عدد، بعد تصمیم»).** بررسی نشان داد وابستگیِ ~۱۰۰٪ به کوکی عمدتاً ساختهٔ خودمان بود نه
+  یوتیوب: probe بی‌قیدوشرط کوکی برمی‌دارد، yt-dlpِ تولید (2026.07.04، یخ‌زده در کشِ داکر) کلاینتِ
+  بی‌کوکیِ شکسته داشت، خطاهای خصوصی/سنی/۴۰۳ bot-check یا لاگین خوانده می‌شدند، و retryِ کورِ
+  بی‌pot درخواست‌ها را دوبرابر می‌کرد. فاز ۱ سه‌تای آخر را بست (§۶ «Engine pins»، §۷). **آنچه
+  منتظرِ عدد است** — `dlstat:ytauth:*` پس از ۲ تا ۳ روز، و یک اجرای `tools/yt_client_matrix.py`
+  روی مستر: **فاز ۲** — probeِ بی‌کوکی‌اول (همان `_ANON_FIRST`ی که fetch دارد)، «تصمیمِ چسبنده»
+  (اگر probe با کوکی رفت، fetch هم)، قطع‌کنندهٔ مدار وقتی نرخِ بی‌کوکی فرو ریخت، کشِ نتیجهٔ probe
+  برای pick، و کلیدِ اختیاریِ `player_client` (که گاردِ «کلاینتِ ناشناخته بی‌صدا پیش‌فرض می‌شود»ِ
+  §۷ را لازم دارد). **فاز ۳ فقط با تأییدِ جدا:** بازاستفادهٔ `--load-info-json`ِ probe در fetch، و
+  خروجیِ تمیزِ per-platform (WARP/پروکسی). اگر عددِ بی‌کوکی با 2026.08.19 پایین ماند، مشکل IP
+  است نه کد، و فاز ۳ جلو می‌افتد.
+- **۳۴ موردِ دفترچهٔ سابوتاژ «الگو رُت کرده» می‌دهند — همه روی `app/admin_web.py`، ثبت شد، رفع نشد
+  (۲۰۲۶-۰۹-۲۶).** سنجیده روی `HEAD` (`85f133b`، بعد از #132) با شمارشِ الگوی هر مورد در فایلش، نه
+  با اجرا: هر ۳۴ الگو متنِ قالب/CSS است (`.err{background:…}`، `gallery-dl {{ e['gallery-dl'] … }}`،
+  `<title>{% block title %}…`) که در استخراجِ ۲۰۲۶-۰۸-۱۹ به `app/templates/*.html` و
+  `app/static/css/panel.css` رفت، ولی `path`ِ این موردها روی `admin_web.py` ماند. یعنی علتِ واحد و
+  رفعِ مکانیکی: هر مورد را به فایلی ببر که الگو امروز **دقیقاً `count` بار** در آن است، و بعد
+  همان مورد را replay کن (بازلنگرِ بی‌replay همان «سابوتاژی که اعمال شد ولی چیزِ دیگری را شکست» را
+  پنهان می‌کند). شکستشان **بلند** است (`SabotageError`) نه خاموش، پس هیچ ادعای سبزی را جعل نمی‌کنند —
+  فقط آن ۳۴ نگهبان تا رفع اثبات‌نشده‌اند. عمداً در کارِ یوتیوب نیامد: بی‌ربط و پنلی.
 - **پنج گروهِ CSSِ مرده — ثبت شد، عمداً حذف نشد (۲۰۲۶-۰۸-۱۹، تصمیمِ اپراتور).**
   اندازه‌گیری‌شده با رندرِ هر ۹ صفحهٔ GET + `/login` و تفکیکِ «تعریف‌شده منهای
   رندرشده»: `.bar-row` (`panel.css` — قواعدِ سه‌گانه)، `.hist` (+`.hist .b`,
@@ -2835,6 +2969,7 @@ usable accounts drop below `cookie_alert_min`.
 - **Why does `wg0` exist but carry no IP? — unknown, and it blocks bringing nodes back.** Observed on the master (2026-08-10): after the nodes were deleted from the panel, the stack would not come up because `.nodes-enabled` was still present, so the CLI kept applying `docker-compose.nodes.yml`, whose `local-bot-api` binds `${WG_MASTER_IP:-10.51.0.1}:8081:8081` (`docker-compose.nodes.yml:20-22`) — and that bind fails when `wg0` has no address. The interface existed; the address did not. **Nothing in this repo explains that state** — `node/master-setup.sh` is what assigns the WG address, and whether it never ran to completion, ran before a reboot, or had its address removed later is not something the code can tell us. This has to be answered on the master (`ip addr show wg0`, `wg show`, the `[Interface] Address` line in `/etc/wireguard/wg0.conf`, the `wg-quick@wg0` unit state, and the systemd ordering drop-in the setup installs) **before** re-enabling nodes, because re-enabling means re-applying the same overlay that failed. Related and separately confirmed: **`.nodes-enabled` is create-only.** `node/master-setup.sh:125` `touch`es it and **no code path anywhere removes it** (repo-wide grep), while the CLI gates the overlay on mere file presence (`install.sh:176`) with no check that a `Node` row still exists. So deleting every node from the panel leaves the master still configured for WG-bound services. Renaming it (`.nodes-enabled.off`) is the current workaround; the real fix is either to have the panel/`master-setup.sh` own the flag's lifecycle, or to gate the overlay on something that reflects reality rather than on a file that is never cleaned up.
 
 ## Changelog
+- 2026-09-26 — **وابستگیِ یوتیوب به کوکی، فاز ۰ و ۱: پینِ موتور، خواندنِ درستِ خطا، پایانِ تکرارِ کورِ بی‌pot، شمارنده، و ابزارِ سنجش.** انگیزه: دانلودِ یوتیوب عملاً ۱۰۰٪ کوکی‌محور بود، در حالی که ویکیِ yt-dlp کوکی را فقط برای محتوای «نیازمندِ اکانت» لازم می‌داند و از ریسکِ بنِ اکانت هشدار می‌دهد. **(۰ ریشه — عمدتاً کدِ ما، نه یوتیوب.)** چهار علت، هر چهار با اجرا: probe بی‌قیدوشرط کوکی برمی‌دارد و `dl_ux_youtube = probe` در تولید ست است؛ yt-dlpِ تولید **2026.07.04** بود و `telabzar update` هرگز ارتقایش نمی‌داد (لایهٔ pip از کشِ داکر می‌آید تا فایلِ requirements عوض شود) در حالی که کلاینتِ بی‌کوکیِ همان نسخه (`android_vr`) از ۱۷ اوت برای همهٔ فرمت‌ها 403 می‌گیرد؛ خطاهای خصوصی/سنی bot-check و ۴۰۳ِ رسانه لاگین خوانده می‌شدند؛ و retryِ بی‌pot هر شکستی را دوبرابر می‌کرد. **(۱ پین.)** `yt-dlp[default]==2026.8.19` و `bgutil-ytdlp-pot-provider==2.0.0` در `requirements-worker-dl.txt`، همان yt-dlp در `requirements-dev.txt` (تست‌ها متنِ خطا را با خودِ کتابخانه می‌سازند) و تگِ `2.0.0` برای ایمیجِ سرورِ pot؛ `tests/test_ytdlp_pins.py` هر چهار را نگه می‌دارد، از جمله اینکه yt-dlpِ نصب‌شده **همان** پین است. ارتقای موتور از این به بعد = بالا بردنِ پین در یک PR (§۶). **(۲ دسته‌بندی.)** `downloader.youtube_error_kind` تنها خوانندهٔ متنِ خطای یوتیوب شد (هفت نوع) و `_is_cookie_error`/`_error_class` برای یوتیوب اول نوع را می‌پرسند؛ `sign in to confirm` از فهرستِ bot-checkِ `cookies` برداشته شد. رفتارِ تازه: خصوصی/فقط-اعضا نه چرخش نه ضربه نه تقصیرِ خروجی؛ سنی با فیلترِ روشن بی‌کوکی رد و با فیلترِ خاموش چرخشِ بی‌ضربه؛ ۴۰۳ِ رسانه و «page needs to be reloaded» `transient`؛ reload روی تلاشِ با‌کوکی یک‌بار بی‌کوکی تکرار می‌شود (yt-dlp #17497)؛ سه پیامِ مشخصِ کاربر در دو زبان. **(۳ pot.)** تکرارِ بی‌pot فقط روی کرشِ واقعیِ پلاگین (`is_pot_crash`) — در fetch **و** به‌ازای هر ترک در `download_matched`، که آن‌جا هم کور بود و بی‌تست. **(۴ شمارنده.)** `dlstat:ytauth:<phase>:<anon|cookie>:<outcome>:<day>` با TTLِ هشت‌روزه، تا تصمیمِ فازِ ۲ روی عدد گرفته شود نه حدس. **(۵ ابزار، و سه تلهٔ سنجش که همه در نسخهٔ اولِ خودِ ابزار بودند.)** `tools/yt_client_matrix.py` (فقط stdlib، روی ایمیجِ فعلی اجرا می‌شود): **(الف)** کلاینتی که نسخه نمی‌شناسد بی‌صدا پیش‌فرض می‌شود و 2026.07.04 اصلاً `visionos` ندارد — ردیفِ «visionos» روی نسخهٔ فعلی در واقع پیش‌فرض را می‌سنجید، و `--no-warnings` تنها گواهش را می‌بلعید؛ با خودِ yt-dlp بازتولید و با خروجیِ `unsupported` بسته شد. **(ب)** خطای دانلودِ تکه‌ای `ERROR: \r[download] …` است و `splitlines()` آن را می‌شکند. **(پ)** `subprocess.run(text=True)` پیش از هر چیز `\r` را `\n` می‌کند، پس رفعِ (ب) بدونِ خواندنِ بایت بی‌اثر بود — فقط تستِ انتها‌به‌انتها با زیرفرایندِ واقعی این را دید. **(۶ باگِ تولیدی که ابزار پیدا کرد.)** تلهٔ (ب) در `downloader._stderr_summary` هم بود: خلاصهٔ هر شکستِ دانلودِ تکه‌ای (HLS/DASH، هر پلتفرمی) فقط «ERROR:» می‌شد — کاربر علتی نمی‌دید و پاسِ بی‌کوکی به کوکی ارتقا نمی‌یافت؛ رفع + تستِ انتها‌به‌انتها. **(۷ پنل.)** راهنمای نسخهٔ موتور در `/health` و کنسول می‌گفت «موتور قدیمی → `telabzar update`» که **غلط** بود (همان کشِ داکر)؛ حالا «پین را بالا ببر، بعد update». **تصحیحِ CLAUDE.md طبقِ قاعدهٔ ۵:** ادعای «`telabzar update` موتور را ارتقا می‌دهد» در بولتِ JSONDecodeError و ادعای «~۳۲٪ بی‌کوکی» (مالِ نسخهٔ شکسته) تصحیح شدند. **(۸ تست.)** jobِ اصلی 958 → 1101 (به‌علاوهٔ 13 skip)، پنل 335، و `tests/yt_errors.py` تنها سازندهٔ متنِ خطای یوتیوب برای هر دو فایلِ تست است. سیزده تستِ رفتاری روی سورسِ پیش از رفع می‌افتند، و چهار تستِ `\r`/`download_matched` با برداشتنِ رفعِ خودشان (اجراشده با `tests/sabotage`). ۳۸ موردِ سابوتاژِ تازه (سه کنترلِ معکوس) و دو موردِ قدیمی بازلنگر شدند چون بازآراییِ حلقهٔ probe الگویشان را جابه‌جا کرده بود (`attempt cap` صفر تطبیق، `age-blocked probe` دو تطبیق). **(۹ اعمال.)** `telabzar update` روی مستر: لایهٔ pipِ `download-worker` دوباره ساخته می‌شود (yt-dlp 2026.08.19، پلاگینِ pot 2.0.0 و gallery-dlِ تازه‌حل‌شده) و ایمیجِ `bgutil-pot-provider:2.0.0` کشیده می‌شود؛ بدونِ مهاجرت، بدونِ کلیدِ تنظیمات، سه رشتهٔ locale؛ `node/update.sh` فقط اگر نودی وصل شد. پیش از استقرار یک‌بار `tools/yt_client_matrix.py --versions current,2026.8.19` روی مستر اجرا شود تا مبنای «قبل» ثبت شود.
 - 2026-08-20 — **بررسیِ پیش از استقرار: چهار باگِ خاموش، و دو گاردی که پیدایشان کردند.** پیش از استقرار سه چیزِ **اجرانشده** ماند و هر سه سنجیده شد؛ دو تایش باگ داد. **(۱ فرم‌هایی که کار نمی‌کردند — بدترین رده.)** فرم‌های کنسول به هندلرهای موجودِ Jinja پست می‌کنند، و نامِ فیلدِ غلط شکستِ **کاملاً خاموش** می‌دهد: POST می‌رود، ۳۰۲ برمی‌گردد، صفحهٔ نتیجه می‌آید، و هیچ اتفاقی نمی‌افتد. یک پروبِ مرورگرِ واقعی (کلیک روی BLOCK، بعد پرسیدنِ **API** نه صفحه) نشان داد کاربر بلاک **نشد**: `users_block` با `db.get(User, int(uid))` **کلیدِ اصلی** را می‌خواهد و کنسول `tg_user_id` می‌فرستاد. بعد یک ممیزیِ **سرتاسری** (هر `<form action>` در برابرِ فیلدهایی که هندلرش می‌خواند) **دو موردِ دیگر** داد: `/cookies/add` فیلد را `text` نامیده بود و هندلر `content` می‌خواند، و `/langs/delete` فیلد را `lang` نامیده بود و هندلر `code`. هیچ‌کدام هیچ تستی را قرمز نمی‌کردند و هر سه از بیرون «کار می‌کند» به‌نظر می‌رسیدند — همان «بنرِ سبز روی کاری که انجام نشد» که §۷ چهار نمونه‌اش را ثبت کرده، این‌بار از سمتِ **فرستنده**. `tests/panel/test_console_forms.py` هر دو جهت را **کشف‌محور** می‌بندد (فیلدی که هندلر نمی‌خواند / فیلدی که فرم نمی‌فرستد، با استثناهای **نام‌بردهٔ** `confirm`/`name`/`page`/`q`)، و `test_console_pages` ادعای بلاک را روی **اثر** می‌گذارد نه کدِ وضعیت، با کنترلِ معکوسی که ثابت می‌کند `id` و `tg` در fixture واقعاً متفاوت‌اند — وگرنه تست به دلیلِ غلط سبز می‌ماند. هر سه سابوتاژ گرفته شد. **درسِ عام: تستی که ۳۰۲ را assert کند دربارهٔ کنش هیچ نمی‌گوید؛ ادعا باید روی حالتِ بعد از کنش باشد.** **(۲ زمینهٔ build — ۴۸۵ مگابایت، و یک خطرِ درستی.)** اندازه‌گیری‌شده: زمینه ۴۸۵MB بود در حالی که سورسِ tracked ۴٫۹MB است؛ ۴۶۶MBش `panel/node_modules` + `panel/.next`. ولی مسئلهٔ اصلی حجم نیست: `admin.Dockerfile` اول `npm ci` می‌زند و بعد `COPY panel ./` می‌کند، پس بدونِ `.dockerignore` آن COPY همان `node_modules`ی را که تازه از روی lockfile نصب شده با نسخهٔ **محلیِ ماشینِ builder** بازنویسی می‌کند — تضمینِ lockfile خنثی، و ایمیج بند به وضعِ دیسکِ توسعه‌دهنده. `.dockerignore` اضافه شد و `tests/test_dockerignore.py` **جهتِ خطرناک** را می‌بندد: هرچه یک Dockerfile COPY می‌کند نباید بیرون بماند، وگرنه ایمیجِ ناقص با **CIِ سبز** می‌سازیم — دقیقاً حادثهٔ `node/install.sh` که §۷ ثبت کرده. با سابوتاژ (`app` را بیرون بگذار) اثبات شد. **(۳ خودِ مرحلهٔ Node، بازتولیدشده.)** daemonِ داکر در سندباکس نیست، پس مرحله **دستی بازسازی شد**: `npm ci` روی lockfileِ خالص (۳۰ بسته، rc=0) و بعد `next build` روی زمینه‌ای که فقط سورس دارد — هر ۱۱ روت ساخته شد. یعنی ادعای «ایمیج build می‌شود» اجرا شده است نه استنتاج‌شده. **(۴ چیزهایی که سنجیده شدند و **باگ نبودند**، تا کسی دوباره دنبالشان نگردد.)** CSP نیازی به `connect-src` ندارد — `default-src 'self'` پوششش می‌دهد و اجرای مرورگر صفر درخواستِ شکست‌خورده داد؛ ناهماهنگیِ ظاهریِ `/buttons/save` آرتیفکتِ رجکسِ ممیزی است (`text_${op}` در برابرِ `f"text_{op}"` عملاً یکی‌اند)؛ و `/favicon.ico`ِ ۴۰۴ **پیش‌موجودِ پنلِ فارسی** است (قالبِ پایه favicon اعلام نمی‌کند)، نه چیزی که کنسول ساخته باشد. **(۵ مرزی که عمداً باز ماند.)** هر فرم پس از POST به صفحهٔ **Jinja** ریدایرکت می‌شود نه به کنسول (اندازه‌گیری‌شده: `/users`, `/texts?ok=1`, `/cookies?ok=fix`, `/nodes`). برگرداندنش به کنسول یعنی `_result` باید `back` بگیرد، **و** کنسول باید رندرِ نتیجه/خطا داشته باشد — بدونِ نیمهٔ دوم، یک ذخیرهٔ ردشده بی‌صدا «انگار انجام شد» دیده می‌شود، یعنی دقیقاً همان ردهٔ باگی که بندِ (۱) بست. پس امروز صفحهٔ فارسی — که بنرِ واقعیِ نتیجه را دارد — مقصد می‌ماند. **اعمال:** `telabzar update` روی مستر؛ بدونِ مهاجرت، بدونِ کلیدِ تنظیمات، بدونِ رشتهٔ locale، بدونِ `node/update.sh`.
 - 2026-08-20 — **اتصالِ کنسول (فازِ ۲): نُه صفحهٔ دیگر + فرم‌هایی که واقعاً POST می‌کنند.** **(۱ چرا اندپوینتِ جدا.)** `/api/console/<page>` کنارِ پیلودِ مشترک نشست نه داخلش: پوسته روی **هر** صفحه پیلودِ مشترک را می‌خواهد (نوارِ اعداد، مشِ ریل)، ولی دادهٔ ۲۱۹ رشتهٔ STRINGS را فقط STRINGS لازم دارد — ریختنشان در یک پاسخ یعنی هر صفحه هزینهٔ همهٔ صفحه‌ها را بدهد. نگاشت **صریح** است نه `getattr` روی نامِ صفحه، وگرنه یک مسیرِ کاربر می‌تواند هر تابعی را در ماژول صدا بزند؛ تستش همین را با `/_page_health` می‌سنجد. **(۲ قاعدهٔ مرکزی: قرض بگیر، بازننویس.)** هر سازنده از **همان** تابعی می‌خواند که صفحهٔ Jinja می‌خواند — `_users_cached`, `ck_pool.accounts`, `node_mod.list_live`, `_setting_groups`, `_texts_groups`, `_stats_cached`, `_languages`. اگر کنسول فهرستِ خودش را می‌ساخت، کلیدِ تازه در یکی ظاهر می‌شد و در دیگری نه — دقیقاً همان یک‌طرفه‌بودنی که شش کلیدِ تنظیمات را ماه‌ها نامرئی نگه داشت؛ `test_settings_groups_come_from_the_panel_not_a_second_list` مجموعه را با `RUNTIME_KEYS` مقایسه می‌کند. **و مهم‌ترین مصداقش کیبورد است:** نسخهٔ اولِ من ترتیب/مخفی/عرض را **بازنویسی** کرده بود، در حالی که `keyboards._resolved_menu` همان قاعده را دارد (به‌علاوهٔ «opِ تازه ته می‌رود») و `_rows_from_widths` بسته‌بندیِ ردیف را — و CLAUDE.md ثبت کرده که این قرارداد از قبل **هشت** کپیِ دست‌نویس بینِ JS و پایتون دارد. حالا سرور از خودِ `keyboards` می‌خواند، `widthCap` را هم می‌فرستد تا پیش‌نمایشِ زندهٔ کلاینت جدولِ ظرفیت را بازننویسد، و تستی هر دو را به منبعِ واقعی گره می‌زند — یکی کمتر از هشت، و اولین تستی که دو طرف را می‌بندد. **(۳ سه شکلِ درونی را حدس زدم به‌جای اینکه بخوانم، و هر سه ۵۰۰ دادند.)** `_users_list` کلیدِ `tg` می‌دهد نه `tg_user_id`، `_texts_groups` کلیدِ `items`/`current` می‌دهد نه `rows`/`val`، و `get_menu_layout` یک **لیست** برمی‌گرداند نه دیکشنری (و `get_button_style` یک **تاپل**). یک اسموکِ پارامتریِ نُه‌تایی هر سه را در یک اجرا گرفت — که ارزانش همین است: پیش از نوشتنِ یک خط UI، اول همهٔ سازنده‌ها را صدا بزن. **(۴ چیزی که ساخته شد چون منبع داشت: کارتِ جابِ گیرکرده.)** Open Questions می‌خواستش («جابی که سنش از هر `job_timeout`ی گذشته») و دادهٔ لازمش در `jobs` هست: `status ∈ {queued, running}` و `created_at` کهنه‌تر از بلندترین `job_timeout` به‌علاوهٔ حاشیه. تا امروز این‌ها در «در صف» جمع می‌شدند و از یک صفِ واقعی تفکیک‌ناپذیر بودند — یعنی «همیشه یکی هست» که همان «هیچ‌وقت نگاهش نکن» است. با **کنترلِ معکوس**: سه جابِ تازهٔ fixture نباید گیرکرده خوانده شوند، وگرنه کارت هر صفِ سالمی را قرمز می‌کند. **(۵ فرم‌ها.)** همه به هندلرهای **موجودِ** Jinja پست می‌کنند (`/save`, `/users/block`, `/cookies/add`, `/cookies/unfreeze`, `/texts/save`, `/texts/reset`, `/buttons/save`, `/buttons/reset`, `/nodes/add`, `/langs/import`, `/langs/delete`) — صفر هندلرِ تازه، پس اعتبارسنجی و اتمیک‌بودنِ ثبت‌شده دست‌نخورده می‌ماند. **جست‌وجو سمتِ سرور است** (کاربران و رشته‌ها) نه فیلترِ کلاینتی: صفحه‌بندی می‌شود، پس فیلترِ محلی فقط صفحهٔ جاری را می‌گردد و کاربری که در صفحهٔ دوم است «پیدا نشد» می‌گیرد — بدترین شکلِ نتیجهٔ غلط، چون شبیهِ جوابِ درست است. **(۶ سه چیز که فقط رندر نشان داد.)** صفحهٔ STRINGS با ۲۱۹ کلید **۱۸٬۴۲۱ پیکسل** شد؛ صفحهٔ فارسی همین را با گروهِ تاشو حل کرده و `_texts_groups` از قبل فلگِ `open` را می‌سازد (هنگام جست‌وجو همه باز، وگرنه فقط اولی) — پس همان فلگ فرستاده شد نه یک قاعدهٔ کلاینتیِ دوم، و حالتِ محلی فقط **انحراف** از تصمیمِ سرور را نگه می‌دارد وگرنه با عوض‌شدنِ جست‌وجو آن تصمیم خنثی می‌شد. دراپ‌داونِ `dl_ux_*` **خالی** رندر می‌شد چون مقدارِ خالی یک گزینهٔ واقعی است («تنظیم نشده») ولی بدونِ برچسب شکسته به‌نظر می‌رسد. و کارتِ دیسک روی محیطی که `/work` ندارد به‌جای صفر، «WORK_DIR NOT READABLE» می‌دهد. **(۷ تفکیک‌های صادقانه که نگه داشته شدند.)** سطلِ سشنی که هرگز پر نشده «سوخته» نیست، ولی فرمِ افزودن باید **همهٔ** سطل‌ها را بدهد وگرنه اولین اکانتِ یک سطلِ خالی اضافه‌شدنی نیست (`platforms` جدا از `unstocked`)؛ نودِ بدونِ heartbeat `DOWN` است حتی با ردیفِ DB؛ «تازه یا کهنهٔ» موتور عمداً قضاوت نمی‌شود چون مقایسه با PyPI یک درخواستِ شبکه می‌خواهد و بجِ حدسی از نبودش بدتر است. **(۸ اعتبارسنجی.)** پنل ۲۹۴ → ۳۲۹، اصلی ۹۵۳ بی‌تغییر. هر ده صفحه از پنلِ **واقعی** رندر شد: صفر خطای کنسول، صفر درخواستِ شکست‌خورده، صفر پاسخِ غیرِ۲xx. **و یک انتظارِ غلط در تستِ خودم:** `op_perf` را ۳ خواسته بودم و ۲ بود — `n` برابرِ `done + failed` است و جابِ در صف شمرده نمی‌شود. کد درست بود؛ کارت دربارهٔ کارِ **انجام‌شده** است و ریختنِ صف در آن نرخِ موفقیت را رقیق می‌کند. **اعمال:** `telabzar update` روی مستر — بدونِ مهاجرت، بدونِ کلیدِ تنظیمات، بدونِ رشتهٔ locale، بدونِ `node/update.sh`.
 - 2026-08-20 — **اتصالِ کنسول به دادهٔ واقعی (فازِ ۱): `/api/console` + قاعدهٔ «هیچ سقوطِ بی‌صدا».** تا این پاس، کنسول روی اعدادِ `lib/data.ts` می‌دوید. **(۱ اندپوینت.)** `console_api` محاسبه را از `_stats_cached` و `_health` **قرض می‌گیرد** نه اینکه تکرار کند — پس کنسول و پنلِ فارسی نمی‌توانند دو عددِ متفاوت بدهند؛ کپیِ دومِ دست‌نویس همان واگرایی است که §۷ برای `remove_cookie_file` ثبت کرده. روی نبودِ نشست **۴۰۱ JSON** می‌دهد نه ریدایرکت، چون `fetch` نمی‌تواند ریدایرکت به صفحهٔ HTMLِ ورود را به چیزِ مفیدی تبدیل کند: بدنهٔ HTML با ۲۰۰ برمی‌گردد و کنسول سرِ `JSON.parse` با پیامی می‌شکند که هیچ ربطی به «نشستت تمام شده» ندارد. **(۲ قاعدهٔ مرکزی، و دلیلِ اینکه این کار بیشتر از یک fetch است.)** §۷ ثبت کرده «fallbackی که بی‌صدا به دادهٔ بی‌مصرف تنزل کند از خطا بدتر است»؛ در یک کنسولِ **عملیاتی** بدتر هم هست، چون اپراتور روی همان عددها تصمیم می‌گیرد. پس صفحه سه حالتِ **صریح** دارد (`loading`/`ready`/`error`)، شکست یک بنرِ قرمزِ تمام‌عرض می‌گیرد که می‌گوید «هر عددِ زیر placeholder است، نه سیستمِ تو»، و هرچه منبع ندارد در `_CONSOLE_GAPS` **نام برده می‌شود** و به‌جای عدد، علتش رندر می‌شود. سه شکافِ نام‌برده: جدولِ audit (وجود ندارد — نه در `models.py` و نه هیچ‌جای ریپو)، درصدِ پیشرفتِ جاب (در ورکر زندگی می‌کند نه DB)، و cpu/mem/net (`psutil` در هیچ requirements نیست). **(۳ و همین قاعده بلافاصله یک باگ در کدِ خودم گرفت — با رندر، نه با خواندن.)** شرطِ merge را روی *طولِ* آرایه گذاشته بودم (`api.platforms.length`)، پس روی سیستمِ بی‌دانلود «فهرست خالی» با «داده نداریم» یکی می‌شد و به دادهٔ نمایشی سقوط می‌کرد: کنارِ «۰ فایل» یک رادارِ پر با «YOUTUBE ۱۸٬۴۲۰» می‌نشست. دقیقاً همان سقوطِ بی‌صدایی که این لایه برای بستنش ساخته شده بود. همین شکل در `heroSub` هم بود (`?? cfg.kpis[2].value` → سیستمِ بی‌کار «۹۶٫۷٪ موفقیت» گزارش می‌کرد). هر دو با کنترلِ معکوسِ `test_an_empty_system_reports_zero_not_a_placeholder` پین شدند. **قاعدهٔ عام: در هر merge از «واقعی بر نمایشی می‌چربد»، شرط باید روی *حضورِ* پاسخ باشد نه روی *ناتهی‌بودنِ* محتوایش** — وگرنه دقیقاً سیستمِ خالی (تازه‌نصب، یا خرابِ واقعی) است که دادهٔ ساختگی می‌بیند. **(۴ سه چیزِ دیگر که فقط رندر نشان داد.)** `_human_size` واحد را داخلِ رشته می‌گذارد، پس واحدِ جدا «5.7 GB GB» می‌داد؛ کارتِ POSTURE جملهٔ «ALL CORE SYSTEMS NOMINAL» را **هاردکد** داشت و روی سیستمی با دو نودِ خواب هم همان را می‌گفت (حالا از شمارشِ واقعیِ سرویس/نود/سشن ساخته می‌شود و می‌تواند `DEGRADED` بدهد)؛ و سربرگِ کارتِ سشن‌ها «2 degraded» ثابت بود. **(۵ آنچه واقعی شد.)** KPIها، نمودارِ گذردهی (با تاریخِ واقعی)، رادار و جدولِ پلتفرم (با کلیدِ **خام** از سرور — `PLATFORM_HUE` روی نامِ انگلیسی کلید می‌خورد و برچسبِ فارسی باید از `<Fa>` رد شود، پس `_bars` حالا `key` را هم می‌فرستد)، عمقِ صف، دیسک، سرویس‌ها، استخرِ سشن، نودها، خطاها، **جریانِ جابِ واقعی** از جدولِ `jobs`، و **نقشهٔ فعالیتِ ۷×۲۴** از `File.created_at` (سطل‌بندی در پایتون، چون `extract(hour)` پستگرس-محور است و تست‌ها روی SQLite می‌دوند). **(۶ دو مرزِ صادقانه که عمداً برچسب خوردند نه پنهان شدند.)** ستونِ `OK%` جدولِ پلتفرم **فقط امروز** را می‌بیند (`dlstat` روزانه است) در حالی که `N` بازه‌محور است — دو پنجرهٔ متفاوت در یک جدول، همان چیزی که §۷ برای کارتِ سلامت ثبت کرده، پس ستون صریحاً برچسب خورد و نبودِ داده `—` می‌دهد نه `0%`. و جریانِ جاب یادداشتِ «downloads excluded (they create no Job row)» گرفت، چون با اعدادِ تولید ~۷۹٪ کار در آن فهرست نیست. **(۷ سریِ سومِ نمودار.)** لِجند `ERR` بود ولی `_stats` شکستِ جاب را per-day سطل‌بندی نمی‌کند؛ ریختنِ «کاربرِ تازه» در جای «خطا» یک دروغِ تمام‌عیار بود، پس سری صریحاً به `new users` تغییرِ نام داد. **(۸ اعتبارسنجی.)** تست‌ها: اصلی ۹۵۳ بی‌تغییر، پنل ۲۷۸ → ۲۹۴ (۱۶ تستِ تازه، همه روی **HTTPِ واقعی** نه صداکردنِ تابع — ادعا دربارهٔ اتصال است نه تابعِ کمکی). عددها با ردیف‌های **کاشته‌شده** سنجیده می‌شوند نه صفرِ DBِ خالی، چون «صفر» با «نرسید» تفکیک‌ناپذیر است. تستِ عمقِ صف روی **تفاضل** است نه مقدارِ مطلق، چون fixture خودش صف‌ها را پر می‌کارد و عددِ هاردکد به دادهٔ fixture گره می‌خورد. و کلِ زنجیره از پنلِ **واقعیِ** aiohttp با CSPِ واقعی و دادهٔ کاشته‌شده رندر شد: یک فراخوانیِ ۲۰۰، صفر خطای کنسول، صفر درخواستِ شکست‌خورده، و عددهای صفحه دقیقاً همان‌هایی که کاشته شدند (۹۱ فایل، ۲۳ کاربر، ۷۱٪، پنج پلتفرم با شمارشِ درست). **(۹ آنچه هنوز وصل نیست، صریح.)** نُه صفحهٔ دیگر هنوز روی `lib/pages.ts` می‌دوند و فرم‌ها POST نمی‌کنند؛ `WIRE MONITOR` و بارشِ آنتروپی عمداً تزئینی‌اند. **اعمال:** `telabzar update` روی مستر — بدونِ مهاجرت، بدونِ کلیدِ تنظیمات، بدونِ رشتهٔ locale، بدونِ `node/update.sh`.

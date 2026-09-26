@@ -118,6 +118,9 @@ _LNG = "tests/panel/test_langs_page.py"
 _STF = "tests/test_start_flow.py"
 _PAR = "tests/test_locale_parity.py"
 _TPF = "tests/panel/test_template_files.py"
+_YEK = "tests/test_youtube_error_kinds.py"
+_PIN = "tests/test_ytdlp_pins.py"
+_YCM = "tests/test_yt_client_matrix.py"
 
 # «گروهِ خودکار را بردار» — یک خرابکاری با **سه** ادعای متفاوت، پس یک‌بار
 # تعریف می‌شود. دو تا باید بیفتند و یکی عمداً **نباید**، که کلِ نکته است:
@@ -126,6 +129,25 @@ _AUTO_GROUP_PATCH = {
     "path": "app/admin_web.py",
     "old": "    return [*GROUPS, (_AUTO_GROUP, leftover)] if leftover else list(GROUPS)",
     "new": "    return list(GROUPS)",
+}
+
+# ── وابستگیِ یوتیوب به کوکی (۲۰۲۶-۰۹) ── سه خرابکاری که هرکدام بیش از یک
+# ادعا (یا یک کنترلِ معکوس) دارند، پس یک‌بار تعریف می‌شوند.
+_POT_GATE_PATCH = {
+    "path": "app/tasks_download.py",
+    "old": '                        if opts.get("pot_provider") and D.is_pot_crash(str(ytdlp_exc)):',
+    "new": '                        if opts.get("pot_provider"):',
+}
+_SUMMARY_CR_PATCH = {
+    "path": "app/downloader.py",
+    "old": '    text = text.replace("\\r", " ")\n',
+    "new": "",
+}
+_MATRIX_NOWARN_PATCH = {
+    "path": "tools/yt_client_matrix.py",
+    "old": '    cmd = [*base, "-j", "--no-simulate", "--no-progress", "--no-playlist", "--no-part",',
+    "new": ('    cmd = [*base, "-j", "--no-simulate", "--no-progress", "--no-warnings", '
+            '"--no-playlist", "--no-part",'),
 }
 
 # برگرداندنِ هارنسِ ساندکلاود به ctxِ دست‌سازِ پیش از رفع. یک خرابکاری با سه
@@ -402,11 +424,13 @@ CASES: list[dict] = [
 
     {"name": "probe: the attempt cap is removed (walks the whole pool)",
      "path": "app/tasks_download.py",
-     "old": "                    if max_tries and attempts >= max_tries:\n"
-            '                        log.info("probe: stopping after %d attempts '
+     # بازلنگر ۲۰۲۶-۰۹-۲۶: چک از داخلِ شاخهٔ کوکی بیرون آمد (یک پله کم‌عمق‌تر)
+     # تا شکستِ بی‌کوکی (reload) هم سقف بخورد — الگوی قدیمی ۰ تطبیق داشت.
+     "old": "                if max_tries and attempts >= max_tries:\n"
+            '                    log.info("probe: stopping after %d attempts '
             '(dl_max_cookie_tries)",',
-     "new": "                    if False:\n"
-            '                        log.info("probe: stopping after %d attempts '
+     "new": "                if False:\n"
+            '                    log.info("probe: stopping after %d attempts '
             '(dl_max_cookie_tries)",',
      "count": 1,
      "target": _PCB,
@@ -1692,10 +1716,15 @@ CASES: list[dict] = [
     # اگر `blocked` به `menu` تبدیل شود، هر لینکِ سنی «رهاشده» شمرده می‌شود.
     {"name": "probe-stats: an age-blocked probe is filed as a menu",
      "path": "app/tasks_download.py",
+     # بازلنگر ۲۰۲۶-۰۹-۲۶: شاخهٔ گیتِ سنیِ **پیش از** منو (خطای «confirm your
+     # age» در خودِ probe) همین دو خط را دارد، پس الگوی کوتاه دو تطبیق داشت؛
+     # `why, url` این را به شاخهٔ `check_meta` (هدفِ اصلیِ این مورد) می‌بندد.
      "old": "                await PS.note(redis, PS.BLOCKED)\n"
-            "                await _nsfw_stop(",
+            "                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,\n"
+            '                                 payload.get("tg_user_id") or 0, why, url)',
      "new": "                await PS.mark_menu(redis, ref)\n"
-            "                await _nsfw_stop(",
+            "                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,\n"
+            '                                 payload.get("tg_user_id") or 0, why, url)',
      "target": _PST,
      "expect": "test_an_age_blocked_probe_is_not_counted_as_a_menu"},
 
@@ -2355,6 +2384,310 @@ CASES: list[dict] = [
      "new": '_CSS = "body{background:#fff}"',
      "target": _TPF,
      "expect": "test_the_stylesheet_that_ships_is_the_file_on_disk"},
+
+    # ── وابستگیِ یوتیوب به کوکی (۲۰۲۶-۰۹): دسته‌بندیِ خطا ───────────────────
+    # هر خطای «sign in»ِ یوتیوب جملهٔ `--cookies`ِ yt-dlp را دارد؛ هر نشانه‌ای که
+    # به آن تکیه کند ویدیوی سنی/خصوصی را bot-check می‌خواند و اکانت می‌سوزاند.
+    {"name": "yt-auth: 'sign in to confirm' is a bot-check hint again (age gate strikes)",
+     "path": "app/cookies.py",
+     "old": '    (BOT_CHECK, ("confirm you\\u2019re not a bot", "confirm you\'re not a bot",',
+     "new": ('    (BOT_CHECK, ("sign in to confirm", "confirm you\\u2019re not a bot", '
+             '"confirm you\'re not a bot",'),
+     "target": _YEK,
+     "expect": "test_the_generic_classifier_no_longer_calls_an_age_gate_a_bot_check"},
+
+    {"name": "yt-auth: --cookies reads as a bot-check again (age/private misfiled)",
+     "path": "app/downloader.py",
+     "old": '    (YT_BOT_CHECK, ("confirm you’re not a bot", "confirm you\'re not a bot",',
+     "new": '    (YT_BOT_CHECK, ("--cookies", "confirm you’re not a bot", "confirm you\'re not a bot",',
+     "target": _YEK,
+     "expect": "test_each_youtube_error_reads_as_its_own_kind[age]"},
+
+    # ۴۰۳ِ googlevideo بدونِ این نگاشت به `classify_error` می‌افتد که «403» را
+    # لاگین می‌خواند — همان ضربه به اکانتِ سالم.
+    {"name": "yt-auth: a media-download 403 strikes the account again",
+     "path": "app/tasks_download.py",
+     "old": "    D.YT_GVS_403: ck.TRANSIENT,\n",
+     "new": "",
+     "target": _YEK,
+     "expect": "test_fetch_download_403_does_not_strike_the_account"},
+
+    # ── probe ──
+    {"name": "yt-auth: probe age gate spends a second account again",
+     "path": "app/tasks_download.py",
+     "old": ("                if kind == D.YT_AGE_GATE and pol.enabled:\n"
+             "                    break           # فیلتر"),
+     "new": ("                if False:\n"
+             "                    break           # فیلتر"),
+     "target": _YEK,
+     "expect": "test_probe_age_gate_is_blocked_without_a_second_account"},
+
+    # کنترلِ معکوس: تستِ «فیلترِ خاموش» اصلاً از آن `break` رد نمی‌شود — پس سبز
+    # ماندنش نشان می‌دهد دو تستِ سنی دو شاخهٔ جدا را می‌سنجند، نه یکی را دوبار.
+    {"name": "yt-auth: CONTROL — dropping the probe age break must NOT fail the safety-off test",
+     "path": "app/tasks_download.py",
+     "old": ("                if kind == D.YT_AGE_GATE and pol.enabled:\n"
+             "                    break           # فیلتر"),
+     "new": ("                if False:\n"
+             "                    break           # فیلتر"),
+     "target": _YEK + "::test_probe_age_gate_with_safety_off_rotates_without_strikes",
+     "expect": None},
+
+    {"name": "yt-auth: a probe age block is filed as a probe failure",
+     "path": "app/tasks_download.py",
+     "old": ("                await PS.note(redis, PS.BLOCKED)\n"
+             "                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,\n"
+             '                                 payload.get("tg_user_id") or 0, "age_limit:18", url)'),
+     "new": ("                await PS.note(redis, PS.FAIL)\n"
+             "                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,\n"
+             '                                 payload.get("tg_user_id") or 0, "age_limit:18", url)'),
+     "target": _YEK,
+     "expect": "test_probe_age_gate_is_blocked_without_a_second_account"},
+
+    {"name": "yt-auth: probe page-reload is not retried without a cookie",
+     "path": "app/tasks_download.py",
+     "old": "                if kind == D.YT_RELOAD and cname and not anon_tried:",
+     "new": "                if False:",
+     "target": _YEK,
+     "expect": "test_probe_page_reload_with_a_cookie_is_retried_once_without_one"},
+
+    {"name": "yt-auth: a private video counts against the exit again (probe)",
+     "path": "app/tasks_download.py",
+     "old": ("            if kind not in _YT_NOT_ACCOUNT_KINDS:\n"
+             "                # ویدیوی خصوصی/سنی دربارهٔ خروجی"),
+     "new": ("            if True:\n"
+             "                # ویدیوی خصوصی/سنی دربارهٔ خروجی"),
+     "target": _YEK,
+     "expect": "test_probe_private_video_costs_one_attempt_and_no_account"},
+
+    # ── fetch ──
+    {"name": "yt-auth: a private video escalates to a cookie again (fetch)",
+     "path": "app/tasks_download.py",
+     "old": ("                if kind in D.YT_CONTENT_KINDS:\n"
+             "                    # خصوصی/فقط-اعضا"),
+     "new": ("                if False:\n"
+             "                    # خصوصی/فقط-اعضا"),
+     "target": _YEK,
+     "expect": "test_fetch_private_video_never_escalates_to_a_cookie"},
+
+    {"name": "yt-auth: a fetch age gate goes to a cookie before the filter",
+     "path": "app/tasks_download.py",
+     "old": ("                if kind == D.YT_AGE_GATE:\n"
+             "                    pol = await safety.load_policy()"),
+     "new": ("                if False:\n"
+             "                    pol = await safety.load_policy()"),
+     "target": _YEK,
+     "expect": "test_fetch_age_gate_is_blocked_before_any_cookie"},
+
+    {"name": "yt-auth: an age-gated account failure blames the exit again",
+     "path": "app/tasks_download.py",
+     "old": ("                    if kind != D.YT_AGE_GATE:\n"
+             "                        # سنی نه تقصیرِ اکانت"),
+     "new": ("                    if True:\n"
+             "                        # سنی نه تقصیرِ اکانت"),
+     "target": _YEK,
+     "expect": "test_fetch_age_gate_with_safety_off_rotates_but_blames_nobody"},
+
+    {"name": "yt-auth: fetch page-reload is not retried without a cookie",
+     "path": "app/tasks_download.py",
+     "old": "                if (kind == D.YT_RELOAD and cookie_name and not anon_tried\n",
+     "new": "                if (False\n",
+     "target": _YEK,
+     "expect": "test_fetch_page_reload_with_a_cookie_tries_once_without_one"},
+
+    {"name": "yt-auth: a private video counts against the exit again (fetch)",
+     "path": "app/tasks_download.py",
+     "old": ("            if kind not in _YT_NOT_ACCOUNT_KINDS:\n"
+             "                await ck.note_exit(redis, settings.node_id, platform, ok=False)\n"
+             "            if exit_bad:"),
+     "new": ("            if True:\n"
+             "                await ck.note_exit(redis, settings.node_id, platform, ok=False)\n"
+             "            if exit_bad:"),
+     "target": _YEK,
+     "expect": "test_fetch_private_video_never_escalates_to_a_cookie"},
+
+    # ── تکرارِ «بدونِ pot» فقط برای کرشِ پلاگین ──
+    {"name": "yt-auth: fetch retries without pot on any error again",
+     **_POT_GATE_PATCH,
+     "target": _YEK,
+     "expect": "test_a_clean_youtube_error_is_not_repeated_without_pot"},
+
+    # کنترلِ معکوس: تستِ کرش از آن گیت مستقل است — سبزش یعنی مسیرِ کرش را
+    # می‌سنجد، نه صرفاً «گیت هست».
+    {"name": "yt-auth: CONTROL — an open pot gate must NOT fail the plugin-crash test",
+     **_POT_GATE_PATCH,
+     "target": _YEK + "::test_a_plugin_crash_is_still_retried_without_pot",
+     "expect": None},
+
+    {"name": "yt-auth: matched tracks retry without pot on any error again",
+     "path": "app/downloader.py",
+     "old": ('            if (opts.get("pot_provider") and not isinstance(exc, AgeRestricted)\n'
+             "                    and is_pot_crash(str(exc))):"),
+     "new": '            if (opts.get("pot_provider") and not isinstance(exc, AgeRestricted)):',
+     "target": _YEK,
+     "expect": "test_a_matched_track_is_not_repeated_without_pot_on_a_clean_error"},
+
+    # ── تله‌متری ──
+    {"name": "yt-auth: other platforms land in the youtube counter",
+     "path": "app/tasks_download.py",
+     "old": ('    if redis is None or platform != "youtube":\n'
+             "        return\n"
+             '    mode = "cookie" if cookie_name else "anon"'),
+     "new": ("    if redis is None:\n"
+             "        return\n"
+             '    mode = "cookie" if cookie_name else "anon"'),
+     "target": _YEK,
+     "expect": "test_other_platforms_write_no_youtube_counter"},
+
+    {"name": "yt-auth: the youtube counter expires in two days like _metric",
+     "path": "app/tasks_download.py",
+     "old": "_YTAUTH_TTL = 8 * 86400",
+     "new": "_YTAUTH_TTL = 2 * 86400",
+     "target": _YEK,
+     "expect": "test_each_attempt_lands_in_its_own_counter"},
+
+    # ── `_stderr_summary`: `\r`ِ خطای دانلودِ تکه‌ای ──
+    {"name": "yt-auth: the summary splits on the carriage return again (HLS 403 → 'ERROR:')",
+     **_SUMMARY_CR_PATCH,
+     "target": _YEK,
+     "expect": "test_a_fragment_download_error_keeps_its_text[alone]"},
+
+    {"name": "yt-auth: a fragment 403 is no longer escalated end to end",
+     **_SUMMARY_CR_PATCH,
+     "target": _YEK,
+     "expect": "test_fetch_fragment_403_escalates_and_shows_its_cause"},
+
+    # ── پین‌ها ──
+    {"name": "yt-pins: production yt-dlp floats again (Docker freezes it silently)",
+     "path": "requirements-worker-dl.txt",
+     "old": "yt-dlp[default]==2026.8.19 ",
+     "new": "yt-dlp[default] ",
+     "target": _PIN,
+     "expect": "test_production_pins_yt_dlp_exactly"},
+
+    {"name": "yt-pins: the test environment floats yt-dlp again",
+     "path": "requirements-dev.txt",
+     "old": "yt-dlp==2026.8.19\n",
+     "new": "yt-dlp\n",
+     "target": _PIN,
+     "expect": "test_the_test_environment_pins_the_production_yt_dlp"},
+
+    {"name": "yt-pins: the pot server image floats on :latest again",
+     "path": "docker-compose.yml",
+     "old": "    image: brainicism/bgutil-ytdlp-pot-provider:2.0.0",
+     "new": "    image: brainicism/bgutil-ytdlp-pot-provider:latest",
+     "target": _PIN,
+     "expect": "test_the_pot_server_image_is_pinned_not_latest"},
+
+    # ── ابزارِ سنجش (`tools/yt_client_matrix.py`) ──
+    # کلاینتِ ناشناخته بی‌صدا پیش‌فرض می‌شود و فقط WARNING گواهِ آن است.
+    {"name": "yt-matrix: --no-warnings is back (an unknown client is silently the default)",
+     **_MATRIX_NOWARN_PATCH,
+     "target": _YCM,
+     "expect": "test_the_tool_keeps_the_warnings_production_hides"},
+
+    # کنترلِ معکوس: استابِ `run_cell` WARNING را بی‌اعتنا به پرچم‌ها می‌نویسد، پس
+    # همان خرابکاری آن را نمی‌اندازد — نگهبانِ پرچم تستِ ساختاریِ بالاست، نه این.
+    {"name": "yt-matrix: CONTROL — --no-warnings back must NOT fail the stub's unsupported test",
+     **_MATRIX_NOWARN_PATCH,
+     "target": _YCM + "::test_an_unsupported_client_run_is_flagged_even_though_it_succeeded",
+     "expect": None},
+
+    {"name": "yt-matrix: a run for a client that never ran reads as ok",
+     "path": "tools/yt_client_matrix.py",
+     "old": ("    if any(h in _norm(stderr) for h in _UNSUPPORTED):\n"
+             '        return "unsupported"\n'),
+     "new": "",
+     "target": _YCM,
+     "expect": "test_a_run_for_a_client_that_never_ran_is_not_ok"},
+
+    {"name": "yt-matrix: the carriage return splits the error line again",
+     "path": "tools/yt_client_matrix.py",
+     "old": ('    return [ln.strip() for ln in (text or "").replace("\\r", " ").split("\\n") '
+             "if ln.strip()]"),
+     "new": '    return [ln.strip() for ln in (text or "").splitlines() if ln.strip()]',
+     "target": _YCM,
+     "expect": "test_the_final_error_wins_over_an_earlier_warning"},
+
+    {"name": "yt-matrix: a text-mode pipe turns the carriage return into a newline",
+     "path": "tools/yt_client_matrix.py",
+     "old": "                           capture_output=True, timeout=timeout, env=env)",
+     "new": "                           capture_output=True, text=True, timeout=timeout, env=env)",
+     "target": _YCM,
+     "expect": "test_a_fragment_403_survives_the_pipe"},
+
+    {"name": "yt-matrix: a warning outranks the final error",
+     "path": "tools/yt_client_matrix.py",
+     "old": '    return _match(errs) or _match(stderr) or "other"',
+     "new": '    return _match(stderr) or "other"',
+     "target": _YCM,
+     "expect": "test_the_final_error_wins_over_an_earlier_warning"},
+
+    {"name": "yt-matrix: no fallback to the whole stderr",
+     "path": "tools/yt_client_matrix.py",
+     "old": '    return _match(errs) or _match(stderr) or "other"',
+     "new": '    return _match(errs) or "other"',
+     "target": _YCM,
+     "expect": "test_a_hint_outside_the_error_line_is_still_read"},
+
+    {"name": "yt-matrix: extraction alone counts as ok",
+     "path": "tools/yt_client_matrix.py",
+     "old": "    if rc == 0 and got_json and file_ok:",
+     "new": "    if rc == 0 and got_json:",
+     "target": _YCM,
+     "expect": "test_ok_needs_real_bytes_not_just_extraction"},
+
+    # کپیِ دومِ نشانه‌ها: واگرایی از تولید در هر دو جهت دیده می‌شود.
+    {"name": "yt-matrix: a tool hint drifts from production",
+     "path": "tools/yt_client_matrix.py",
+     "old": ('    ("bot_check", ("confirm you’re not a bot", "confirm you\'re not a bot",\n'
+             '                   "confirm you are not a bot")),'),
+     "new": '    ("bot_check", ("confirm you’re not a bot", "confirm you\'re not a bot")),',
+     "target": _YCM,
+     "expect": "test_each_production_hint_reads_the_same_in_the_tool[bot_check-2]"},
+
+    {"name": "yt-matrix: a new production kind goes unnoticed",
+     "path": "app/downloader.py",
+     "old": '    (YT_PRIVATE, ("private video",)),',
+     "new": '    ("x_new", ("zzzz-never-seen",)),\n    (YT_PRIVATE, ("private video",)),',
+     "target": _YCM,
+     "expect": "test_every_production_kind_has_a_tool_outcome"},
+
+    {"name": "yt-matrix: the stats reader drifts from the production key",
+     "path": "tools/yt_client_matrix.py",
+     "old": '        if len(parts) != 6 or parts[:2] != ["dlstat", "ytauth"]:',
+     "new": '        if len(parts) != 6 or parts[:2] != ["dlstat", "yt_auth"]:',
+     "target": _YCM,
+     "expect": "test_the_stats_reader_parses_what_production_writes"},
+
+    # ارکستراسیون
+    {"name": "yt-matrix: a version already measured is counted twice",
+     "path": "tools/yt_client_matrix.py",
+     "old": "        if label in seen:",
+     "new": "        if False:",
+     "target": _YCM,
+     "expect": "test_a_version_equal_to_one_already_measured_is_not_counted_twice"},
+
+    {"name": "yt-matrix: an unknown client is tried on every video",
+     "path": "tools/yt_client_matrix.py",
+     "old": '                if res["outcome"] == "unsupported":',
+     "new": "                if False:",
+     "target": _YCM,
+     "expect": "test_an_unknown_client_costs_one_request_not_one_per_video"},
+
+    {"name": "yt-matrix: a rate limit does not stop the measurement",
+     "path": "tools/yt_client_matrix.py",
+     "old": '                if res["outcome"] == "rate_limit" and not keep_going:',
+     "new": "                if False:",
+     "target": _YCM,
+     "expect": "test_a_rate_limit_stops_the_measurement"},
+
+    {"name": "yt-matrix: the other version is installed without the production extra",
+     "path": "tools/yt_client_matrix.py",
+     "old": '                        f"yt-dlp[default]=={version}"], check=True)',
+     "new": '                        f"yt-dlp=={version}"], check=True)',
+     "target": _YCM,
+     "expect": "test_a_new_version_is_installed_with_the_production_extra"},
 ]
 
 
