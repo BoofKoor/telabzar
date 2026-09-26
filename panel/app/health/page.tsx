@@ -144,7 +144,11 @@ export default function Page() {
                 {!engines.length && <Empty>NO WORKER HAS REPORTED YET</Empty>}
               </PageState>
               <div style={{ marginTop: 10, fontSize: 10, color: C.inkDim, lineHeight: 1.8 }}>
-                stale engine → <span style={{ color: C.accHi }}>node/update.sh</span> on that host.
+                {/* موتورها پین‌اند: `telabzar update` به‌تنهایی ارتقا نمی‌دهد (کشِ لایهٔ pip). */}
+                stale engine → bump its pin in{' '}
+                <span style={{ color: C.accHi }}>requirements-worker-dl.txt</span>, then{' '}
+                <span style={{ color: C.accHi }}>telabzar update</span> /{' '}
+                <span style={{ color: C.accHi }}>node/update.sh</span>.
                 <br />
                 current engine + login errors → replace the session, not the code.
               </div>

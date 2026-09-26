@@ -197,9 +197,14 @@ services:
     cap_drop:
       - ALL
 
-  # سرویسِ توکنِ PO یوتیوب (yt-dlp روی IP دیتاسنتر بدونِ این بلاک می‌شود).
+  # سرویسِ توکنِ PO یوتیوب. تگ **پین** است و باید با پلاگینِ
+  # `bgutil-ytdlp-pot-provider` در `requirements-worker-dl.txt` هم‌نسخه بماند:
+  # `:latest` فقط سرِ اولین pull خوانده می‌شد و بعد یخ می‌زد، و پلاگین/سرورِ
+  # ناهم‌نسخه خطای 403ِ بی‌صدا می‌دهند (گارد: `tests/test_ytdlp_pins.py`).
+  # PO token جلوی bot-check را نمی‌گیرد؛ کارش جلوگیری از 403 روی فرمت‌های
+  # کلاینت‌های web است (README خودِ bgutil).
   bgutil-pot-provider:
-    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.0
     restart: unless-stopped
     init: true
     expose:
