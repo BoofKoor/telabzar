@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# ── تل‌ابزار · نصب تعاملی (Milestone 1) ─────────────────────────
-# مقادیر را موقع نصب می‌پرسد، .env می‌سازد، و استک را بالا می‌آورد.
-# حالت‌ها: master (فعال)، node (در M5).
+# ── Telabzar · interactive installer ───────────────────────────────────────
+# Asks for the settings, writes .env, and brings the stack up.
+# Modes: master (this script). Nodes are added later from the admin panel.
+#
+# Everything this script prints is English on purpose: Persian text does not
+# render readably in most server terminals (no RTL shaping, broken joining).
 set -euo pipefail
 
 BOLD=$'\e[1m'; DIM=$'\e[2m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; RED=$'\e[31m'; RESET=$'\e[0m'
@@ -12,7 +15,7 @@ die()  { printf "${RED}✗ %s${RESET}\n" "$*" >&2; exit 1; }
 
 rand() { openssl rand -hex "${1:-24}" 2>/dev/null || head -c "${1:-24}" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
-# مقدارِ یک کلید از .envِ موجود (برای حفظِ اسرار هنگامِ reconfigure)
+# Value of a key from an existing .env (keeps secrets stable on reconfigure)
 env_get() { [[ -f .env ]] && sed -n "s/^$1=//p" .env | head -n1 || true; }
 
 ask() { # ask <var> <prompt> [default]
@@ -30,86 +33,87 @@ read_pem() { # read_pem <outfile> <label>
   local out=$1 label=$2 line
   say ""
   say "${BOLD}${label}${RESET}"
-  say "${DIM}کلِ متن (شاملِ خطوطِ BEGIN/END) را بچسبان، بعد در یک خطِ جدا فقط ${RESET}${BOLD}EOF${RESET}${DIM} بنویس و Enter بزن:${RESET}"
+  say "${DIM}Paste the whole text (including the BEGIN/END lines), then type ${RESET}${BOLD}EOF${RESET}${DIM} on a line of its own and press Enter:${RESET}"
   : > "$out"; chmod 600 "$out"
   while IFS= read -r line; do
     [[ "$line" == "EOF" ]] && break
     printf '%s\n' "$line" >> "$out"
   done
   if ! grep -q "BEGIN" "$out"; then
-    warn "به‌نظر PEM معتبری وارد نشد (خطِ BEGIN پیدا نشد)."
+    warn "That does not look like a valid PEM (no BEGIN line found)."
   fi
 }
 
 require_docker() {
-  command -v docker >/dev/null 2>&1 || die "Docker نصب نیست. اول Docker را نصب کن: https://docs.docker.com/engine/install/"
+  command -v docker >/dev/null 2>&1 || die "Docker is not installed. Install it first: https://docs.docker.com/engine/install/"
   if docker compose version >/dev/null 2>&1; then COMPOSE="docker compose";
   elif command -v docker-compose >/dev/null 2>&1; then COMPOSE="docker-compose";
-  else die "Docker Compose پیدا نشد."; fi
-  ok "Docker و Compose آماده‌اند."
+  else die "Docker Compose not found."; fi
+  ok "Docker and Compose are ready."
 }
 
 banner() {
   cat <<'EOF'
 
   ┌────────────────────────────────────────────┐
-  │   تل‌ابزار — نصب تعاملی · Telabzar setup     │
+  │        Telabzar — interactive setup        │
   └────────────────────────────────────────────┘
 EOF
 }
 
 install_master() {
   say ""
-  say "${BOLD}پیکربندی سرور master${RESET}"
-  say "${DIM}مقادیر تلگرام را از @BotFather و my.telegram.org بگیر.${RESET}"
+  say "${BOLD}Master server configuration${RESET}"
+  say "${DIM}Get the Telegram values from @BotFather and my.telegram.org.${RESET}"
   say ""
 
-  ask BOT_TOKEN "توکن ربات (BotFather)"
-  [[ "$BOT_TOKEN" == *:* ]] || die "فرمت توکن نامعتبر است."
-  ask TG_API_ID "TG_API_ID (my.telegram.org)"
-  [[ "$TG_API_ID" =~ ^[0-9]+$ ]] || die "TG_API_ID باید عدد باشد."
-  ask TG_API_HASH "TG_API_HASH (my.telegram.org)"
-  [[ -n "$TG_API_HASH" ]] || die "TG_API_HASH خالی است."
-  ask ADMIN_IDS "شناسهٔ عددی ادمین‌ها (با کاما جدا کن)"
-  ask DEFAULT_LANG "زبان پیش‌فرض (fa/en)" "fa"
-  ask MAX_FILE_MB "سقف حجم هر فایل (مگابایت)" "2000"
+  ask BOT_TOKEN "Bot token (from @BotFather)"
+  [[ "$BOT_TOKEN" == *:* ]] || die "Invalid token format."
+  ask TG_API_ID "TG_API_ID (from my.telegram.org)"
+  [[ "$TG_API_ID" =~ ^[0-9]+$ ]] || die "TG_API_ID must be a number."
+  ask TG_API_HASH "TG_API_HASH (from my.telegram.org)"
+  [[ -n "$TG_API_HASH" ]] || die "TG_API_HASH is empty."
+  ask ADMIN_IDS "Numeric Telegram ID(s) of the admins (comma-separated)"
+  ask DEFAULT_LANG "Default language (fa/en)" "fa"
+  ask MAX_FILE_MB "Max size per file (MB)" "2000"
 
-  # ── دامنه و TLS برای لینکِ دانلود/استریم (اختیاری) ──
+  # ── Domain and TLS for download/stream links (optional) ──
   say ""
-  say "${BOLD}لینکِ دانلود/استریم${RESET} ${DIM}(اختیاری — برای دادنِ لینک به فایل‌ها)${RESET}"
-  say "${DIM}دامنه پشتِ Cloudflare (پروکسی روشن) و یک Origin Certificate از پنلِ Cloudflare لازم است.${RESET}"
-  ask DOMAIN "دامنه (مثلِ files.example.com — Enter برای رد شدن)" ""
+  say "${BOLD}Download / stream links${RESET} ${DIM}(optional — lets the bot hand out links to files)${RESET}"
+  say "${DIM}Needs a domain behind Cloudflare (proxy on) and an Origin Certificate from the Cloudflare dashboard.${RESET}"
+  ask DOMAIN "Domain (e.g. files.example.com — press Enter to skip)" ""
 
   local PUBLIC_BASE="" TLS_CERT="" TLS_KEY="" GW_PORT="8080"
   if [[ -n "$DOMAIN" ]]; then
-    say "${DIM}اگر ۴۴۳ سرور آزاد است بزن ۴۴۳؛ اگر اشغال است ۸۴۴۳ (کلودفلر هر دو را پروکسی می‌کند).${RESET}"
-    ask GW_PORT "پورتِ HTTPS روی سرور" "8443"
+    say "${DIM}Use 443 if it is free on this server; otherwise 8443 (Cloudflare proxies both).${RESET}"
+    ask GW_PORT "HTTPS port on this server" "8443"
     if [[ "$GW_PORT" == "443" ]]; then PUBLIC_BASE="https://${DOMAIN}"; else PUBLIC_BASE="https://${DOMAIN}:${GW_PORT}"; fi
     mkdir -p certs
-    read_pem certs/cert.pem "۱) سرتیفیکیتِ Origin کلودفلر (Origin Certificate)"
-    read_pem certs/key.pem  "۲) کلیدِ خصوصیِ Origin (Private Key)"
+    read_pem certs/cert.pem "1) Cloudflare Origin Certificate"
+    read_pem certs/key.pem  "2) Origin Private Key"
     TLS_CERT="/certs/cert.pem"; TLS_KEY="/certs/key.pem"
-    ok "دامنه و سرتیفیکیت تنظیم شد → ${PUBLIC_BASE}"
+    ok "Domain and certificate configured → ${PUBLIC_BASE}"
   else
-    warn "بدونِ دامنه؛ دکمهٔ «لینک» تا تنظیمِ دامنه (telabzar reconfigure) غیرفعال است."
+    warn "No domain; the \"Link\" button stays disabled until you set one (telabzar reconfigure)."
   fi
 
-  # اسرارِ ثابت را از .envِ موجود حفظ کن (رمزِ Postgres در ولومِ pg-data پخته
-  # شده؛ بازتولیدِ آن هنگامِ reconfigure اتصالِ دیتابیس را می‌شکند).
+  # Keep fixed secrets from an existing .env (the Postgres password is baked
+  # into the pg-data volume; regenerating it on reconfigure breaks the DB link).
   local PG_PASS
   PG_PASS=$(env_get POSTGRES_PASSWORD); [[ -n "$PG_PASS" ]] || PG_PASS=$(rand 18)
-  # ADMIN_SECRET/NODE_SECRET هم همین رفتار را دارند: اگر هستند حفظ می‌شوند،
-  # وگرنه تولید. تا امروز اصلاً نوشته نمی‌شدند و کدْ بی‌صدا به BOT_TOKEN
-  # برمی‌گشت — یعنی هر دارندهٔ توکنِ ربات (از جمله هر نود) می‌توانست نشستِ
-  # ادمین جعل کند. عوض‌کردنِ ADMIN_SECRET نشست‌های باز را باطل می‌کند و
-  # عوض‌شدنِ NODE_SECRET توکن‌های joinِ صادرشده را؛ هر دو کوتاه‌عمرند.
+  # ADMIN_SECRET/NODE_SECRET behave the same: kept if present, generated
+  # otherwise. They used to not be written at all and the code silently fell
+  # back to BOT_TOKEN — so anyone holding the bot token (every node included)
+  # could forge an admin session. Changing ADMIN_SECRET invalidates open
+  # sessions and changing NODE_SECRET invalidates issued join tokens; both are
+  # short-lived.
   local ADMIN_SECRET NODE_SECRET
   ADMIN_SECRET=$(env_get ADMIN_SECRET); [[ -n "$ADMIN_SECRET" ]] || ADMIN_SECRET=$(rand 32)
   NODE_SECRET=$(env_get NODE_SECRET);   [[ -n "$NODE_SECRET" ]]  || NODE_SECRET=$(rand 32)
 
   umask 077
   cat > .env <<EOF
-# ساخته‌شده توسط install.sh — دستی ویرایش نکن (از: ./install.sh یا telabzar reconfigure)
+# Generated by install.sh — do not edit by hand (re-run: ./install.sh or telabzar reconfigure)
 BOT_TOKEN=${BOT_TOKEN}
 TG_API_ID=${TG_API_ID}
 TG_API_HASH=${TG_API_HASH}
@@ -119,70 +123,77 @@ MAX_FILE_MB=${MAX_FILE_MB}
 POSTGRES_USER=telabzar
 POSTGRES_PASSWORD=${PG_PASS}
 POSTGRES_DB=telabzar
-# اسرارِ تولیدشده. خالی‌گذاشتنشان یعنی کد به BOT_TOKEN برمی‌گردد، و پنل با
-# ADMIN_SECRETِ خالی عمداً بالا **نمی‌آید**.
+# Generated secrets. Leaving them empty makes the code fall back to BOT_TOKEN,
+# and the admin panel deliberately refuses to start with an empty ADMIN_SECRET.
 ADMIN_SECRET=${ADMIN_SECRET}
 NODE_SECRET=${NODE_SECRET}
-# نکته: DOMAIN عمداً نوشته نمی‌شود — فقط ورودیِ همین اسکریپت است تا PUBLIC_BASE
-# و مسیرِ سرتیفیکیت از آن ساخته شوند؛ هیچ کدی آن را از .env نمی‌خواند.
+# Note: DOMAIN is deliberately not written — it is only an input to this
+# script, used to build PUBLIC_BASE and the certificate paths; no code reads it.
 PUBLIC_BASE=${PUBLIC_BASE}
 GATEWAY_HTTPS_PORT=${GW_PORT}
 TLS_CERT=${TLS_CERT}
 TLS_KEY=${TLS_KEY}
 EOF
-  ok ".env ساخته شد (اسرار تصادفی تولید شدند)."
+  ok ".env written (secrets generated randomly)."
 
   say ""
-  say "${BOLD}خلاصه:${RESET}"
-  say "  • ربات با ${BOLD}long-polling${RESET} به local-bot-api وصل می‌شود."
-  say "  • سرویس‌ها: local-bot-api · postgres · redis · bot · worker · clamav · gateway"
+  say "${BOLD}Summary:${RESET}"
+  say "  • The bot connects to local-bot-api with ${BOLD}long-polling${RESET}."
+  say "  • Services: local-bot-api · postgres · redis · bot · worker · download-worker · clamav · gateway · admin · bgutil-pot-provider"
   if [[ -n "$DOMAIN" ]]; then
-    say "  • لینک/استریم روی ${BOLD}${PUBLIC_BASE}${RESET} (پورتِ ${GW_PORT})."
+    say "  • Links/streams on ${BOLD}${PUBLIC_BASE}${RESET} (port ${GW_PORT})."
   fi
   local CONFIRM
-  ask CONFIRM "شروع نصب و بالا آوردن استک؟ (y/n)" "y"
-  [[ "$CONFIRM" =~ ^[Yy]$ ]] || { warn "لغو شد. .env ساخته شد؛ بعداً 'telabzar up' را بزن."; exit 0; }
+  ask CONFIRM "Start the install and bring the stack up? (y/n)" "y"
+  [[ "$CONFIRM" =~ ^[Yy]$ ]] || { warn "Cancelled. .env was written; run 'telabzar up' later."; exit 0; }
 
   say ""
-  say "در حال build و اجرا…"
+  say "Building and starting… (the first build takes several minutes)"
   $COMPOSE up -d --build
 
   install_cli
 
-  # ── نودهای توزیع‌شده (اختیاری) — آماده‌سازیِ خودکارِ WireGuard/زیرساختِ مستر ──
+  # ── Distributed nodes (optional) — automatic WireGuard / master infra setup ──
   say ""
-  say "${BOLD}نودهای توزیع‌شده${RESET} ${DIM}(اختیاری — افزودنِ سرورهای دانلود/پردازش/استریم)${RESET}"
-  say "${DIM}اگر بله بزنی، WireGuard و زیرساختِ لازم روی همین مستر خودکار ساخته و تنظیم می‌شود؛${RESET}"
-  say "${DIM}بعد نودها را از پنل → «نودها» اضافه می‌کنی. بدونِ نود هم همه‌چیز روی مستر کار می‌کند.${RESET}"
+  say "${BOLD}Distributed nodes${RESET} ${DIM}(optional — extra download/processing/stream servers)${RESET}"
+  say "${DIM}If you answer yes, WireGuard and the required infrastructure are set up on this master automatically;${RESET}"
+  say "${DIM}you then add nodes from the admin panel → Nodes. Without nodes everything runs on the master.${RESET}"
   local WANT_NODES
-  ask WANT_NODES "الان زیرساختِ نودها آماده شود؟ (y/n)" "n"
+  ask WANT_NODES "Set up node infrastructure now? (y/n)" "n"
   if [[ "$WANT_NODES" =~ ^[Yy]$ ]]; then
     if [[ $EUID -eq 0 ]] || sudo -n true 2>/dev/null; then
       local SUDO=""; [[ $EUID -eq 0 ]] || SUDO="sudo"
-      $SUDO bash "$(pwd)/node/master-setup.sh" || warn "آماده‌سازیِ نود ناموفق بود؛ بعداً 'telabzar nodes-enable' را بزن."
+      $SUDO bash "$(pwd)/node/master-setup.sh" || warn "Node setup failed; run 'telabzar nodes-enable' later."
     else
-      warn "برای آماده‌سازیِ نود root لازم است؛ بعداً 'sudo telabzar nodes-enable' را بزن."
+      warn "Node setup needs root; run 'sudo telabzar nodes-enable' later."
     fi
   fi
 
   say ""
-  ok "بالا آمد. ربات هنگام استارت، وبهوک را خودش ثبت می‌کند."
-  say "${DIM}وضعیت:${RESET}  telabzar status    ${DIM}|${RESET}   ${DIM}لاگ:${RESET}  telabzar logs"
-  say "${DIM}حالا در تلگرام به ربات /start بده.${RESET}"
+  ok "Stack is up. The bot connects with long-polling (no webhook needed)."
+  say "${DIM}Status:${RESET}  telabzar status    ${DIM}|${RESET}   ${DIM}Logs:${RESET}  telabzar logs <service>"
+  say "${DIM}ClamAV downloads its signature database on first start; it is ready after a few minutes.${RESET}"
+  if [[ -n "$DOMAIN" ]]; then
+    say "${DIM}Admin panel:${RESET}  https://${DOMAIN}:2083"
+  else
+    say "${DIM}Admin panel:${RESET}  http://<server-ip>:2083"
+  fi
+  say "${DIM}Now send /start to the bot in Telegram (do this before logging into the panel —${RESET}"
+  say "${DIM}the panel's login code is sent to you by the bot).${RESET}"
 }
 
 install_cli() {
-  # نصب یک CLIِ کمکی سبک برای مدیریت روزمره
+  # Install a small helper CLI for day-to-day management
   local target="/usr/local/bin/telabzar" here; here=$(pwd)
-  local COMPOSE="${COMPOSE:-docker compose}"   # اگر headless صدا زده شد و ست نبود
+  local COMPOSE="${COMPOSE:-docker compose}"   # when called headless and not set
   if [[ -w "$(dirname "$target")" ]] || sudo -n true 2>/dev/null; then
     local SUDO=""; [[ -w "$(dirname "$target")" ]] || SUDO="sudo"
-    # نوشتنِ اتمی (temp سپس mv) تا حتی اگر `telabzar update` در حالِ اجرا این را دوباره
-    # بنویسد، پروسهٔ در حالِ اجرا (inodeِ قدیم) نشکند.
+    # Atomic write (temp, then mv) so that even if `telabzar update` rewrites
+    # this file while running, the running process (old inode) does not break.
     $SUDO tee "$target.tmp" >/dev/null <<EOF
 #!/usr/bin/env bash
 cd "$here" || exit 1
-# اگر نودها فعال باشند، overlayِ WG را هم به compose بده (انتشارِ سرویس‌ها روی IPِ WG)
+# If nodes are enabled, pass the WG overlay to compose too (publish services on the WG IP)
 FILES="-f docker-compose.yml"
 [ -f "$here/.nodes-enabled" ] && FILES="\$FILES -f docker-compose.nodes.yml"
 case "\${1:-}" in
@@ -191,50 +202,52 @@ case "\${1:-}" in
   status|ps)   ${COMPOSE} \$FILES ps ;;
   logs)        ${COMPOSE} \$FILES logs --tail=200 \${2:-} ;;
   logf)        ${COMPOSE} \$FILES logs -f --tail=100 \${2:-} ;;
-  # آپدیت: کد را بکش، استک را بالا بیاور، سپس CLI را هم دوباره بنویس تا زیرفرمان‌های
-  # جدید (و منطقِ overlay) روی دیسک بیایند — وگرنه CLI کهنه می‌ماند.
+  # Update: pull the code, bring the stack up, then rewrite this CLI so new
+  # subcommands (and the overlay logic) land on disk — otherwise it goes stale.
   update)      git fetch origin main && git checkout -f -B main origin/main \\
                  && ${COMPOSE} \$FILES up -d --build \\
                  && bash "$here/install.sh" refresh-cli ;;
-  nodes-enable) sudo bash "$here/node/master-setup.sh" \${2:-} ;;   # آماده‌سازیِ خودکارِ WG/زیرساخت
-  wg-sync)     sudo /usr/local/sbin/telabzar-wg-sync ;;             # همگام‌سازیِ دستیِ peerها
+  nodes-enable) sudo bash "$here/node/master-setup.sh" \${2:-} ;;   # automatic WG/infra setup
+  wg-sync)     sudo /usr/local/sbin/telabzar-wg-sync ;;             # manual peer sync
   reconfigure) exec bash "$here/install.sh" ;;
-  *) echo "استفاده: telabzar {up|down|status|logs|logf|update|nodes-enable|wg-sync|reconfigure}" ;;
+  *) echo "Usage: telabzar {up|down|status|logs|logf|update|nodes-enable|wg-sync|reconfigure}" ;;
 esac
 EOF
     $SUDO chmod +x "$target.tmp"
     $SUDO mv -f "$target.tmp" "$target"
-    ok "CLI نصب شد: ${BOLD}telabzar${RESET}"
+    ok "CLI installed: ${BOLD}telabzar${RESET}"
   else
-    warn "دسترسی نوشتن در /usr/local/bin نبود؛ CLI نصب نشد (اختیاری)."
+    warn "No write access to /usr/local/bin; the CLI was not installed (optional)."
   fi
 }
 
 install_node() {
   say ""
-  warn "حالت node در Milestone 5 (لایهٔ توزیع‌شده) فعال می‌شود."
-  say "${DIM}فعلاً فقط master را نصب کن؛ افزودن نود بعداً از پنل ادمین انجام می‌شود.${RESET}"
+  warn "Nodes are not installed from this script."
+  say "${DIM}Install the master first, then add nodes from the admin panel → Nodes;${RESET}"
+  say "${DIM}it gives you a one-line install command to run on the node server.${RESET}"
   exit 0
 }
 
 main() {
-  # حالتِ headless: فقط CLI را دوباره بنویس (بدونِ پرسش). `telabzar update` این را صدا
-  # می‌زند تا زیرفرمان‌های جدید (nodes-enable/wg-sync/overlay) پس از هر آپدیت روی دیسک بیایند.
+  # Headless mode: only rewrite the CLI (no prompts). `telabzar update` calls
+  # this so new subcommands (nodes-enable/wg-sync/overlay) land on disk after
+  # every update.
   case "${1:-}" in
     refresh-cli|cli) require_docker >/dev/null 2>&1 || true; install_cli; exit 0 ;;
   esac
   banner
   require_docker
   say ""
-  say "این سرور چیست؟"
-  say "  ${BOLD}1${RESET}) master  ${DIM}(همه‌چیز رویش هست)${RESET}"
-  say "  ${BOLD}2${RESET}) node    ${DIM}(کارگر — در M5)${RESET}"
+  say "What is this server?"
+  say "  ${BOLD}1${RESET}) master  ${DIM}(runs everything)${RESET}"
+  say "  ${BOLD}2${RESET}) node    ${DIM}(worker — added from the admin panel)${RESET}"
   local MODE
-  ask MODE "انتخاب" "1"
+  ask MODE "Choice" "1"
   case "$MODE" in
     1|master) install_master ;;
     2|node)   install_node ;;
-    *) die "انتخاب نامعتبر." ;;
+    *) die "Invalid choice." ;;
   esac
 }
 
