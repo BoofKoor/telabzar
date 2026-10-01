@@ -92,7 +92,8 @@ class Clock:
     پنجره را با پاک‌کردنِ دستیِ کلید **تقلید** کند (یعنی همان چیزی را که می‌سنجد
     جعل کند).
 
-    این‌جا هیچ‌کدام: `fakeredis._basefakesocket.time` عوض می‌شود، پس ریاضیِ
+    این‌جا هیچ‌کدام: `time`ِ ماژولی که `BaseFakeSocket` در آن تعریف شده عوض
+    می‌شود (`_fakeredis_clock_module`)، پس ریاضیِ
     انقضای **خودِ fakeredis** (`db.time = time.time()` و بعد
     `key.expireat - db.time`) روی ساعتِ ما می‌دود. TTL و انقضا واقعاً اجرا
     می‌شوند، فقط زمان را ما جلو می‌بریم. `test_the_clock_fixture_really_drives_
@@ -116,10 +117,37 @@ class Clock:
         return getattr(_real_time, name)
 
 
+def _fakeredis_clock_module():
+    """ماژولی که fakeredis ساعتِ انقضا را از آن می‌خواند — کشف‌شده، نه هاردکد.
+
+    تا ۲.۳۸ این ماژول `fakeredis._basefakesocket` بود و از ۲.۳۹ به
+    `fakeredis._socket._base` رفت؛ پینِ `fakeredis>=2.20,<3` هر دو را مجاز
+    می‌داند، پس رانرِ تمیز روزِ انتشارِ ۲.۳۹ با `ImportError` روی ۱۷ تست افتاد
+    در حالی که هیچ کدی عوض نشده بود. مسیرِ خصوصی را دوباره هاردکد نمی‌کنیم:
+    از MROِ `AsyncFakeSocket` (مسیرِ **عمومیِ** `fakeredis.aioredis`) کلاسِ
+    `BaseFakeSocket` را پیدا و ماژولش را برمی‌داریم. اگر روزی آن ماژول دیگر
+    ساعت را از `time` نخواند، این assert بلند می‌افتد — نه اینکه وصله بی‌اثر
+    بنشیند و هر ادعای پنجره‌ای به دلیلِ غلط سبز بماند.
+    """
+    import sys
+
+    from fakeredis.aioredis import AsyncFakeSocket
+
+    for cls in AsyncFakeSocket.__mro__:
+        if cls.__name__ == "BaseFakeSocket":
+            mod = sys.modules[cls.__module__]
+            break
+    else:
+        raise AssertionError("BaseFakeSocket در MROِ AsyncFakeSocket نیست — fakeredis بازآرایی شده")
+    assert getattr(mod, "time", None) is _real_time, (
+        f"{mod.__name__} دیگر ماژولِ `time` را با این نام نگه نمی‌دارد — ساعتِ fakeredis جای دیگری است")
+    return mod
+
+
 @pytest.fixture
 def clock(monkeypatch) -> Clock:
     """ساعتِ fakeredis را در دستِ تست می‌گذارد."""
-    from fakeredis import _basefakesocket as bfs
+    bfs = _fakeredis_clock_module()
 
     c = Clock()
     monkeypatch.setattr(bfs, "time", c)
