@@ -195,7 +195,7 @@ def delivered(monkeypatch):
 
     async def _album(bot, chat_id, owner_id, media_paths, caption, lang):
         out.append(("album", list(media_paths), caption))
-        return []
+        return [], None          # (آیتم‌های رسیده, خطا) — همان قراردادِ `_deliver_album`
 
     monkeypatch.setattr(TD, "_spawn", _spawn)
     monkeypatch.setattr(TD, "_deliver_rich_post", _rich)

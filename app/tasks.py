@@ -85,6 +85,22 @@ def _fail_note(lang: str, exc: Exception) -> str:
     return note
 
 
+async def _card_below(bot: Bot, chat_id: int, card_mid: int, file: File, lang: str) -> None:
+    """کارت را زیرِ خروجی ببر؛ اگر نشد همان‌جا به‌روزش کن.
+
+    این گام بعد از تحویلِ **موفقِ** خروجی است و فقط آرایشِ چت است. پیش از فاز
+    ۲ِ ممیزی بی‌گارد صدا زده می‌شد: یک خطای شبکه در `send_card` از شاخهٔ `else`ِ
+    `run_op` بیرون می‌زد، `finally` جاب را با وضعیتِ **`running`** و
+    `finished_at`ِ ست‌شده commit می‌کرد، و کاربر کارتی بی‌منو داشت.
+    """
+    try:
+        await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
+    except Exception:  # noqa: BLE001
+        log.warning("moving the card below the output failed; updating in place",
+                    exc_info=True)
+        await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+
+
 #: کلیدهای نتیجهٔ `_do_op` که بایتِ تازه‌ای به تلگرام می‌فرستند. هر کلیدِ دیگری
 #: (`editor`, `message`, `note_only`) فقط متن است و آپلودی ندارد.
 _BYTE_KEYS = ("path", "spawn", "send_media", "files")
@@ -685,6 +701,8 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     changelog=[],
                 )
                 await _refresh_media_meta(newf, p)  # مدت/ابعاد از خودِ فایل (وگرنه ۰:۰۰)
+                # ردیف **پیش از** ارسال commit می‌شود تا دکمه‌های کارتِ تازه از همان
+                # لحظه کار کنند (هندلرها با `ref` دنبالِ ردیف می‌گردند).
                 session.add(newf)
                 await session.commit()
                 try:
@@ -699,11 +717,20 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                         newf.file_id = fid
                     if fuid:
                         newf.file_unique_id = fuid
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    # پیش از فاز ۲ِ ممیزی این‌جا فقط لاگ می‌شد و جاب `done` می‌گرفت،
+                    # برچسب در changelog می‌نشست و ردیفِ `files` با `file_id=""` یتیم
+                    # می‌ماند — موفقیتِ کاذب برای فایلی که هرگز نرسید.
                     log.exception("job %s spawn-card send failed", job_id)
-                file.changelog = list(file.changelog or []) + [res["label"]]
-                await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
-                job.status = "done"
+                    await session.delete(newf)
+                    job.status = "failed"
+                    job.error = str(exc)[:500]
+                    await set_card_note(bot, chat_id, card_mid, file, lang,
+                                        note=_fail_note(lang, exc), keyboard=True)
+                else:
+                    file.changelog = list(file.changelog or []) + [res["label"]]
+                    await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+                    job.status = "done"
             elif res.get("editor") is not None:
                 # خواندنِ متادیتای فعلی → ذخیره روی فایل و رندرِ ویرایشگر درجا
                 file.meta = res["editor"]
@@ -726,33 +753,55 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                         await bot.send_photo(chat_id, src)
                     else:
                         await bot.send_document(chat_id, src)
-                    file.changelog = list(file.changelog or []) + [res["label"]]
-                    await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
-                    job.status = "done"
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ بدونِ بن‌بست
                     log.exception("job %s artifact delivery failed", job_id)
                     job.status = "failed"
                     job.error = str(exc)[:500]
                     await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
+                else:
+                    # جابه‌جاییِ کارت بیرونِ `try`: خروجی رسیده، پس شکستِ آرایشِ چت
+                    # نباید جاب را «ناموفق» بخواند.
+                    file.changelog = list(file.changelog or []) + [res["label"]]
+                    await _card_below(bot, chat_id, card_mid, file, lang)
+                    job.status = "done"
             elif res.get("files") is not None:
                 # خروجیِ چندفایلی (استخراج) → فایل‌ها بالا، کارتِ تازه پایین (چت تمیز)
+                # هر فایل جدا فرستاده می‌شود و شکستِ یکی بقیه را متوقف نمی‌کند؛ ولی
+                # جاب فقط وقتی `done` است که **همه** رسیده باشند. پیش از فاز ۲ِ ممیزی
+                # شکست‌ها فقط لاگ می‌شدند و جاب حتی با صفر فایلِ رسیده `done` می‌گرفت.
+                failed_n, last_exc = 0, None
                 for p in res["files"]:
                     try:
                         await bot.send_document(chat_id, FSInputFile(p, filename=os.path.basename(p)))
-                    except Exception:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001
+                        failed_n, last_exc = failed_n + 1, exc
                         log.warning("sending extracted file failed: %s", p)
-                file.changelog = list(file.changelog or []) + [res["label"]]
-                await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
-                job.status = "done"
+                if failed_n:
+                    total_n = len(res["files"])
+                    job.status = "failed"
+                    job.error = f"{failed_n} of {total_n} files not sent: {last_exc}"[:500]
+                    await set_card_note(
+                        bot, chat_id, card_mid, file, lang, keyboard=True,
+                        note=_fail_note(lang, RuntimeError(
+                            f"{failed_n}/{total_n} not sent: {last_exc}")))
+                else:
+                    file.changelog = list(file.changelog or []) + [res["label"]]
+                    await _card_below(bot, chat_id, card_mid, file, lang)
+                    job.status = "done"
             elif res.get("message") is not None:
                 # نتیجهٔ متنی (لیستِ آرشیو) → پیام بالا، کارتِ تازه پایین
                 try:
                     await bot.send_message(chat_id, res["message"])
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     log.warning("sending listing failed")
-                file.changelog = list(file.changelog or []) + [res["label"]]
-                await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
-                job.status = "done"
+                    job.status = "failed"
+                    job.error = str(exc)[:500]
+                    await set_card_note(bot, chat_id, card_mid, file, lang,
+                                        note=_fail_note(lang, exc), keyboard=True)
+                else:
+                    file.changelog = list(file.changelog or []) + [res["label"]]
+                    await _card_below(bot, chat_id, card_mid, file, lang)
+                    job.status = "done"
             elif res.get("note_only"):
                 # عملیاتِ بررسی (اسکن) → فقط لاگ + کپشن؛ رسانه دست‌نخورده، درجا
                 file.changelog = list(file.changelog or []) + [res["label"]]

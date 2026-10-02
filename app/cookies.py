@@ -651,8 +651,17 @@ async def pick(redis, platform: str, exclude: set[str] | None = None,
     پین‌شده به خروجیِ دیگر اصلاً برداشته نمی‌شود، چون اینستاگرام IP را هویت می‌داند و
     جابه‌جاییِ IPِ یک سشن سریع‌ترین راهِ چک‌پوینت است.
     اگر همه سهمیه‌شان تمام باشد، `ignore_budget=True` آخرین تلاش را ممکن می‌کند.
+
+    **خروجیِ مستر رشتهٔ خالی است، نه «بی‌قید».** تا فاز ۲ِ ممیزی شرطِ پین
+    `pinned and node_id and pinned != node_id` بود، و چون `settings.node_id`
+    روی مستر `""` است، نیمهٔ وسط همیشه غلط می‌شد: اکانتی که به نودِ X پین شده
+    روی مستر **بی‌صدا از IPِ مستر** استفاده می‌شد — دقیقاً همان جابه‌جاییِ IP که
+    پین برای جلوگیری از آن ساخته شده. `None` (فراخوانی که خروجی را نمی‌دهد)
+    یعنی «خروجیِ همین پروسه»، نه «پین را نادیده بگیر»؛ وگرنه نگاهِ پیشاپیشِ
+    «اکانتِ دیگری هست؟» روی نود با انتخابِ واقعی اختلاف پیدا می‌کرد.
     """
     exclude = exclude or set()
+    here = str((settings.node_id if node_id is None else node_id) or "")
     lim = lim or await load_limits()   # یک‌بار برای کلِ انتخاب (نه per-account)
     now = int(time.time())
     pool = await accounts(redis, platform, lim)
@@ -663,8 +672,7 @@ async def pick(redis, platform: str, exclude: set[str] | None = None,
              if a["name"] not in exclude
              and a["status"] not in (COOLDOWN, DISABLED, FROZEN)
              and a["status"] in _USE_ORDER
-             and not (str(a.get("node_id") or "") and node_id
-                      and str(a.get("node_id")) != node_id)]
+             and str(a.get("node_id") or "") in ("", here)]
     used: dict[str, int] = {}
     lasts: dict[str, int] = {}
     if cands and not ignore_budget:
@@ -682,7 +690,7 @@ async def pick(redis, platform: str, exclude: set[str] | None = None,
                                              lasts.get(a["name"], 0), now, lim):
             continue
         # اکانتِ پین‌شده به همین خروجی مقدم است (هویتِ پایدار = عمرِ بیشتر)
-        affinity = 0 if (pinned and pinned == node_id) else 1
+        affinity = 0 if (pinned and pinned == here) else 1
         ranked.append((affinity, rank, int(a.get("last_ok") or 0), a["name"]))
     if not ranked:
         # همه سهمیه‌شان پر است؟ یک‌بار بدونِ سرعت‌گیر تلاش کن تا کاربر بی‌جواب نماند

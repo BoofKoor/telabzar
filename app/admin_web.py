@@ -25,7 +25,7 @@ import shutil
 import ssl
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import aiohttp
 import redis.asyncio as aioredis
@@ -36,6 +36,7 @@ from markupsafe import Markup
 from sqlalchemy import func, select, text as sql_text, true as sa_true
 
 from . import cookies as ck_pool
+from . import counters
 from . import dl_active
 from . import nodes as node_mod
 from . import settings_store
@@ -1165,17 +1166,12 @@ async def _rate_limit(r: aioredis.Redis, key: str, limit: int, window: int) -> b
     یک پیاده‌سازی برای هر سه سطل — پیش از این همان قاعده **دو بار دستی** نوشته
     شده بود، همان شکلی که §۷ برای `remove_cookie_file` ثبت کرده.
 
-    `expire` وقتی TTL گم باشد هم دوباره زده می‌شود، نه فقط روی `n == 1`.
-    `INCR` و `EXPIRE` دو فرمانِ جدا هستند؛ اگر پروسه بینشان بمیرد کلید **بدونِ
-    انقضا** می‌ماند و شمارنده تا ابد بالا می‌رود — یعنی قفلِ دائمیِ ورود که خودش
-    ترمیم نمی‌شود و فقط با پاک‌کردنِ دستیِ کلید باز می‌شود (همان شکستی که §۷ برای
-    `dl:active` ثبت کرده). با این فرم، درخواستِ بعدی ترمیمش می‌کند و هزینه‌اش
-    همان دو فرمان می‌ماند.
+    ترمیمِ TTLِ گم‌شده در `counters.incr_window` است — همان یک پیاده‌سازی که
+    سقفِ نرخِ ربات (`routers/ops.py`) هم از آن رد می‌شود. پیش از فاز ۲ ربات کپیِ
+    دست‌نویسِ **بی‌ترمیمِ** همین قاعده را داشت و `rate:<uid>`ش می‌توانست جاودان
+    شود؛ یعنی رفعی که این‌جا بود به آن‌جا نرسیده بود.
     """
-    n = await r.incr(key)
-    if n == 1 or await r.ttl(key) < 0:
-        await r.expire(key, window)
-    return n <= limit
+    return await counters.incr_window(r, key, window) <= limit
 
 
 async def _send_code(chat_id: int, code: str) -> bool:
@@ -2814,9 +2810,10 @@ async def _on_cleanup(app: web.Application) -> None:
 #: هدر جلوی تکرارِ همین رده را برای هر مسیرِ آیندهٔ پنل می‌گیرد.
 _SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
-    # پنل قابلِ iframe شدن بود. چون توکنِ CSRF ندارد و کلِ دفاعش
-    # `SameSite=Lax`ِ کوکی است، یک کلیکِ فریب‌خورده روی «بلاکِ کاربر» یا «حذفِ
-    # اکانتِ کوکی» کافی بود.
+    # پنل قابلِ iframe شدن بود. توکنِ CSRF ندارد؛ دفاعش `SameSite=Lax`ِ کوکی
+    # است به‌علاوهٔ `_csrf_guard` (از فاز ۲ِ ممیزی: `Sec-Fetch-Site`/`Origin`)،
+    # و clickjacking از هر دو رد می‌شود چون درخواست واقعاً از خودِ پنل می‌رود —
+    # یک کلیکِ فریب‌خورده روی «بلاکِ کاربر» یا «حذفِ اکانتِ کوکی» کافی بود.
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
     # CSP سخت‌گیرانه است چون پنل **هیچ منبعِ خارجی ندارد** (اندازه‌گیری‌شده:
@@ -2866,8 +2863,60 @@ async def _security_headers(request: web.Request, handler):
     return resp
 
 
+#: مسیرهای POSTی که **مرورگر** صدایشان نمی‌زند و کوکیِ نشست هم نمی‌خواهند، پس
+#: CSRF درباره‌شان بی‌معناست: `/node/join` را نصب‌کنندهٔ نود با curl و یک توکنِ
+#: یک‌بارمصرف در بدنه صدا می‌زند، نه نشستِ ادمین.
+_CSRF_EXEMPT = frozenset({"/node/join"})
+_UNSAFE = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _origin_netlocs(request: web.Request) -> set[str]:
+    """مبدأهای قابلِ قبول: همان هاستی که درخواست به آن آمده، به‌علاوهٔ `ADMIN_BASE`.
+
+    دومی برای پروکسیِ معکوسی است که `Host` را بازنویسی می‌کند — آن‌وقت مبدأِ
+    مرورگر (دامنهٔ عمومی) با `Host`ِ داخلی یکی نیست.
+    """
+    out = {request.host.lower()}
+    base = settings.admin_base or ""
+    if base:
+        out.add(urlsplit(base).netloc.lower())
+    return out
+
+
+@web.middleware
+async def _csrf_guard(request: web.Request, handler):
+    """POSTِ میان‌سایتی را رد می‌کند — **سایت** نه فقط **دامنه**.
+
+    تنها دفاعِ قبلی `SameSite=Lax`ِ کوکیِ نشست بود، و Lax مرزش «site» است نه
+    «origin»: گیت‌وی (`:8443`) و پنل (`:2083`) روی یک هاست‌اند، پس از دیدِ
+    مرورگر **هم‌سایت**‌اند و کوکی همراهِ هر POSTی که از صفحه‌ای روی گیت‌وی بیاید
+    فرستاده می‌شد. فاز ۱ِ ممیزی جلوی سروِ HTMLِ inline روی گیت‌وی را گرفت؛ این
+    لایهٔ دوم است تا یک مسیرِ بعدی که محتوای کاربر را same-site سرو کند باز
+    دوباره «بلاکِ کاربر»/«حذفِ کوکی»/«ذخیرهٔ تنظیمات» را با یک کلیک ممکن نکند.
+
+    قاعده: اگر مرورگر `Sec-Fetch-Site` فرستاد، فقط `same-origin` (هم‌سایتِ
+    پورتِ دیگر یعنی `same-site` و رد می‌شود). وگرنه اگر `Origin` فرستاد، باید
+    همین هاست باشد. اگر هیچ‌کدام نبود (curl، کلاینتِ غیرمرورگری) مجاز است:
+    چنین کلاینتی کوکیِ نشستِ قربانی را ندارد که سوءاستفاده کند.
+    """
+    if request.method in _UNSAFE and request.path not in _CSRF_EXEMPT:
+        sfs = request.headers.get("Sec-Fetch-Site", "").lower()
+        origin = request.headers.get("Origin")
+        if sfs:
+            ok = sfs == "same-origin"
+        elif origin is not None:
+            ok = urlsplit(origin).netloc.lower() in _origin_netlocs(request)
+        else:
+            ok = True
+        if not ok:
+            log.warning("refused cross-site %s %s (sec-fetch-site=%r origin=%r)",
+                        request.method, request.path, sfs, origin)
+            raise web.HTTPForbidden(text="cross-site request refused")
+    return await handler(request)
+
+
 def build_app() -> web.Application:
-    app = web.Application(middlewares=[_security_headers, _panel_prefs])
+    app = web.Application(middlewares=[_security_headers, _csrf_guard, _panel_prefs])
     app.router.add_get("/", dashboard)
     app.router.add_get("/login", login)
     app.router.add_post("/auth/request", auth_request)

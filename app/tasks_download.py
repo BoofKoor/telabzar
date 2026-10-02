@@ -182,12 +182,19 @@ async def _resolve_blame(redis, bot, platform: str, node: str,
     - درخواست شکست خورد و **≥۲ اکانتِ متفاوت** امتحان شد → مقصر اکانت‌ها نیستند،
       خروجی است → **هیچ ضربه‌ای به هیچ اکانتی** + خروجی کنار گذاشته می‌شود.
     - فقط یک اکانت داشتیم → قابلِ تفکیک نیست → همان تقصیرِ عادی.
+    - یکی از شکست‌ها **محتوایی** بود (۴۰۴/خصوصی/حذف‌شده) → درخواست به خودِ
+      پلتفرم رسید و جوابِ قطعی گرفت، پس خروجی **کار می‌کند** → همان تقصیرِ عادی.
+      پیش از فاز ۲ِ ممیزی «اکانتِ اول ورود نداد، اکانتِ دوم ۴۰۴ گرفت» به
+      «۲ اکانت افتادند ⇒ IP مقصر است» ترجمه می‌شد: خروجیِ سالم کول‌داون می‌گرفت
+      و ادمین DMِ «کوکی‌ها را عوض نکن» می‌گرفت، برای لینکی که فقط وجود نداشت.
 
     خروجی: آیا خروجی مقصر شناخته شد؟
     """
     if not failures:
         return False
-    blame_exit = (not won) and len({n for n, _m, _c in failures}) >= 2
+    reached_content = any(_content_error(m) for _n, m, _c in failures)
+    blame_exit = ((not won) and not reached_content
+                  and len({n for n, _m, _c in failures}) >= 2)
     if blame_exit:
         for name, msg, _cls in failures:      # فقط ثبت، بدونِ شمارنده و کول‌داون
             await ck.mark_fail(redis, name, cooldown=False,
@@ -556,24 +563,32 @@ _ALBUM_VID = (".mp4", ".mov", ".webm", ".mkv", ".m4v")
 
 
 async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str],
-                         caption: str | None, lang: str) -> list[dict]:
+                         caption: str | None, lang: str) -> tuple[list[dict], str | None]:
     """پستِ چند‌تاییِ گالری (کاروسلِ اینستاگرام) → آلبومِ سوایپ‌شدنیِ تلگرام.
 
     کپشنِ پست (بدونِ هشتگ) روی آیتمِ اول؛ عکس و ویدیو در همان آلبوم؛ بدونِ دکمه/کارت
     (media group اصلاً reply_markup نمی‌پذیرد → با «کلیدها را لیست نکن» جور است).
     کاروسلِ بیش از ۱۰ آیتم به چند آلبومِ پشتِ‌سرِ‌هم شکسته می‌شود.
+
+    خروجی: `(آیتم‌های رسیده, خطا)`. `خطا` تهی نیست یعنی **حداقل یک** دسته نرسید —
+    آن‌وقت فراخوان نه کش می‌نویسد (وگرنه آلبومِ ناقص برای همیشه از کش بازپخش
+    می‌شد) نه دانلود را موفق می‌شمارد. پیش از فاز ۲ِ ممیزی شکستِ دسته فقط لاگ
+    می‌شد و هر دو اتفاق می‌افتاد.
     """
     media = [f for f in files
              if os.path.isfile(f) and os.path.getsize(f) > 0
              and f.lower().endswith(_ALBUM_IMG + _ALBUM_VID)]
     if len(media) < 2:  # کمتر از ۲ رسانه → آلبوم بی‌معنی؛ برگرد به کارتِ معمولی
+        err = None
         for p in media:
             kind = "video" if p.lower().endswith(_ALBUM_VID) else "image"
-            await _spawn(bot, chat_id, owner_id, p, os.path.basename(p), kind, {}, lang)
-        return []
+            err = await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
+                               kind, {}, lang) or err
+        return [], err
     cap_text = D.clean_caption(caption)  # تضمینِ بدونِ‌هشتگ + سقفِ ۱۰۲۴ (idempotent)
     cap = escape(cap_text) if cap_text else None  # parse_mode=HTML → کپشنِ کاربر escape شود
     items: list[dict] = []
+    failed, last = 0, ""
     for gi in range(0, len(media), 10):  # سقفِ ۱۰ آیتم در هر media group
         batch = media[gi:gi + 10]
         b = MediaGroupBuilder(caption=cap if gi == 0 else None)
@@ -585,9 +600,12 @@ async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str]
         try:
             sent = await bot.send_media_group(chat_id, media=b.build())
             items += dl_cache.collect_album_items(sent)   # برای کشِ کاروسل
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             log.exception("album send failed (batch starting %d)", gi)
-    return items
+            failed, last = failed + len(batch), str(exc)
+    if failed:
+        return items, f"{failed}/{len(media)} not sent: {last}"
+    return items, None
 
 
 async def _deliver_rich_post(bot: Bot, chat_id: int, owner_id: int, files: list[str],
@@ -604,7 +622,10 @@ async def _deliver_rich_post(bot: Bot, chat_id: int, owner_id: int, files: list[
     if len(media) < 2:  # کمتر از ۲ رسانه → کارتِ معمولی (مثلِ آلبوم)
         for p in media:
             kind = "video" if p.lower().endswith(_ALBUM_VID) else "image"
-            await _spawn(bot, chat_id, owner_id, p, os.path.basename(p), kind, {}, lang)
+            err = await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
+                               kind, {}, lang)
+            if err:
+                raise RuntimeError(err)      # فراخوان به مسیرِ آلبوم برمی‌گردد
         return
     slides: list = []
     for p in media[:50]:  # سقفِ رسانهٔ Rich Message
@@ -729,9 +750,14 @@ def _canonical_url(info: dict, platform: str | None) -> str | None:
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
                  kind: str, info: dict, lang: str, thumb_path: str | None = None,
                  post_caption: str | None = None, platform: str | None = None,
-                 url: str | None = None, selector: str | None = None) -> None:
+                 url: str | None = None, selector: str | None = None) -> str | None:
     """فایلِ دانلودی را وارد pipeline می‌کند (الگوی spawn) با source='dl'.
-    url/selector اگر داده شوند، نتیجه کش می‌شود (مسیرِ gallery-dl از این‌جا می‌آید)."""
+    url/selector اگر داده شوند، نتیجه کش می‌شود (مسیرِ gallery-dl از این‌جا می‌آید).
+
+    خروجی: `None` یعنی کارت رسید؛ وگرنه متنِ خطا. روی شکست ردیفِ `File` پاک
+    می‌شود — پیش از فاز ۲ِ ممیزی می‌ماند (`file_id=""`، یتیم) و فراخوان دانلود
+    را موفق می‌شمرد و پیامِ وضعیت را پاک می‌کرد، یعنی کاربر **هیچ‌چیز** نمی‌دید.
+    """
     path, info, thumb_path = await _media_meta(path, kind, info, thumb_path)
     name = os.path.basename(path)   # remux ممکن است پسوند را به mp4 عوض کرده باشد
     thumb = None
@@ -752,26 +778,39 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
         await s.commit()
         try:
             sent = await send_card(bot, chat_id, f, lang, path=path, thumb=thumb)
-            fid, fuid = message_media_id(sent)
-            if fid:
-                f.file_id = fid
-            if fuid:
-                f.file_unique_id = fuid
-            if url and f.file_id:
+        except Exception as exc:  # noqa: BLE001
+            log.exception("dl spawn-card send failed")
+            await s.delete(f)
+            await s.commit()
+            return str(exc) or type(exc).__name__
+        fid, fuid = message_media_id(sent)
+        if fid:
+            f.file_id = fid
+        if fuid:
+            f.file_unique_id = fuid
+        await s.commit()
+        # کش بهینه‌سازی است: شکستش نباید تحویلِ انجام‌شده را «ناموفق» بخواند.
+        if url and f.file_id:
+            try:
                 await dl_cache.put_cached(s, url, selector or "best", f,  # دفعهٔ بعد آنی
                                           canonical_url=_canonical_url(info, platform))
-        except Exception:  # noqa: BLE001
-            log.exception("dl spawn-card send failed")
-        await s.commit()
+            except Exception:  # noqa: BLE001
+                log.warning("dl cache write failed", exc_info=True)
+        return None
 
 
 async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int, p: str,
                           name: str, kind: str, info: dict, lang: str, thumb_path: str | None,
                           url: str, selector: str, post_caption: str | None = None,
-                          platform: str | None = None) -> None:
+                          platform: str | None = None) -> str | None:
     """تک‌فایل را **درجا** روی پیامِ لنگرگاه تحویل می‌دهد (عکسِ منو → ویدیو) و
     file_id را برای دفعهٔ بعد کش می‌کند. اگر لنگرگاه متنی بود، update_card خودش
-    کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند."""
+    کارتِ تازه می‌فرستد و قدیمی را پاک می‌کند.
+
+    خروجی: `None` یعنی رسید؛ وگرنه متنِ خطا (ردیفِ `File` پاک شده). پیش از فاز ۲ِ
+    ممیزی شکست فقط لاگ می‌شد: پیامِ لنگرگاه روی «در حالِ ارسال…» می‌ماند، ردیف
+    یتیم می‌ماند و `dlstat` موفقیت ثبت می‌کرد.
+    """
     p, info, thumb_path = await _media_meta(p, kind, info, thumb_path)
     name = os.path.basename(p)      # remux ممکن است پسوند را به mp4 عوض کرده باشد
     thumb = None
@@ -792,16 +831,23 @@ async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int
         await s.commit()
         try:
             sent = await update_card(bot, chat_id, anchor_mid, f, lang, path=p, thumb=thumb)
-            fid, fuid = message_media_id(sent)
-            if fid:
-                f.file_id = fid
-            if fuid:
-                f.file_unique_id = fuid
+        except Exception as exc:  # noqa: BLE001
+            log.exception("dl in-place delivery failed")
+            await s.delete(f)
             await s.commit()
+            return str(exc) or type(exc).__name__
+        fid, fuid = message_media_id(sent)
+        if fid:
+            f.file_id = fid
+        if fuid:
+            f.file_unique_id = fuid
+        await s.commit()
+        try:
             await dl_cache.put_cached(s, url, selector, f,  # دفعهٔ بعد آنی
                                       canonical_url=_canonical_url(info, platform))
         except Exception:  # noqa: BLE001
-            log.exception("dl in-place delivery failed")
+            log.warning("dl cache write failed", exc_info=True)
+        return None
 
 
 _SP_NAME_RE = re.compile(r'[\\/:*?"<>|\x00]+')
@@ -1066,7 +1112,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
     # fetch مشترک است و `on_dl_pick` می‌تواند از یک منو چند کیفیت را پشتِ‌هم بفرستد،
     # پس دو جابِ هم‌زمان با یک ref همدیگر را بازنویسی/حذف می‌کردند.
     active_member = f"{ref}:{secrets.token_urlsafe(6)}"
-    active, beat = 0, None
+    active, beat, ticker = 0, None, None
     if redis is not None:
         try:
             active = await dl_active.enter(redis, active_member)
@@ -1497,6 +1543,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
         # مرحلهٔ پایانی: در حالِ ارسال به کاربر (آپلود به سرورِ لوکالِ Bot API)
         await _edit(bot, chat_id, status_mid, t(lang, "dl_uploading"))
 
+        # خطای تحویل (None = همه رسید). پیامِ وضعیت فقط وقتی پاک می‌شود که چیزی
+        # جایش را گرفته باشد؛ وگرنه همان‌جا `dl_failed` می‌گیرد.
+        deliver_err: str | None = None
         if engine == "gallerydl" and len(paths) > 1:
             # پستِ چند‌تایی (کاروسل) → Rich Message (مقاله‌ایِ ورق‌زدنی) یا آلبوم
             media_paths = [p for p, _i, _t in paths]
@@ -1508,9 +1557,9 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 except Exception as exc:  # noqa: BLE001
                     log.warning("rich post failed (%s); fallback به آلبوم", str(exc)[:120])
             if not delivered:
-                items = await _deliver_album(bot, chat_id, owner_id, media_paths,
-                                             gallery_caption, lang)
-                if items:   # کاروسل هم کش می‌شود → بارِ بعد آنی، بدونِ دانلود
+                items, deliver_err = await _deliver_album(bot, chat_id, owner_id, media_paths,
+                                                          gallery_caption, lang)
+                if items and not deliver_err:   # کاروسل هم کش می‌شود → بارِ بعد آنی
                     try:
                         async with Sessionmaker() as cs:
                             await dl_cache.put_album_cached(
@@ -1518,27 +1567,38 @@ async def run_download(ctx: dict, payload: dict) -> None:
                                 caption=D.clean_caption(gallery_caption), platform=platform)
                     except Exception:  # noqa: BLE001
                         log.warning("album cache write failed", exc_info=True)
-            try:
-                await bot.delete_message(chat_id, status_mid)
-            except Exception:  # noqa: BLE001
-                pass
         elif engine != "gallerydl" and len(paths) == 1:
-            # تک‌فایل → تحویلِ درجا روی همان پیامِ لنگرگاه + کش
+            # تک‌فایل → تحویلِ درجا روی همان پیامِ لنگرگاه + کش. لنگرگاه خودش جای
+            # کارت را می‌گیرد، پس پاک نمی‌شود.
             p, info, thumb = paths[0]
-            await _deliver_single(bot, chat_id, status_mid, owner_id, p, os.path.basename(p),
-                                  _kind_from_info(info, p), info, lang, thumb, url, selector,
-                                  post_caption=_post_text(info, gallery_caption),
-                                  platform=platform)
+            deliver_err = await _deliver_single(
+                bot, chat_id, status_mid, owner_id, p, os.path.basename(p),
+                _kind_from_info(info, p), info, lang, thumb, url, selector,
+                post_caption=_post_text(info, gallery_caption), platform=platform)
         else:
             # تک‌عکسیِ گالری یا حالتِ نادرِ دیگر → کارتِ جدا برای هرکدام + حذفِ لنگرگاه
+            failed_n = 0
             for p, info, thumb in paths:
                 # ابعاد/مدت/کاور را خودِ _spawn از فایل کامل می‌کند (_media_meta)
-                await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
-                             _kind_from_info(info, p), info, lang, thumb_path=thumb,
-                             post_caption=_post_text(info, gallery_caption),
-                             platform=platform,
-                             # تک‌فایلِ گالری (ریلز/عکسِ تکی) هم کش شود
-                             url=url if len(paths) == 1 else None, selector=selector)
+                err = await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
+                                   _kind_from_info(info, p), info, lang, thumb_path=thumb,
+                                   post_caption=_post_text(info, gallery_caption),
+                                   platform=platform,
+                                   # تک‌فایلِ گالری (ریلز/عکسِ تکی) هم کش شود
+                                   url=url if len(paths) == 1 else None, selector=selector)
+                if err:
+                    failed_n, deliver_err = failed_n + 1, err
+            if failed_n and len(paths) > 1:
+                deliver_err = f"{failed_n}/{len(paths)} not sent: {deliver_err}"
+
+        if deliver_err:
+            # ارسال به کاربر شکست خورد. دانلود انجام شد ولی کاربر چیزی (یا همه‌چیز)
+            # نگرفت — پس نه `ok` ثبت می‌شود نه پیامِ وضعیت بی‌صدا پاک می‌شود.
+            await _metric(redis, platform, ok=False)
+            await _edit(bot, chat_id, status_mid,
+                        t(lang, "dl_failed") + f"\n<code>{escape(deliver_err[:280])}</code>")
+            return
+        if not (engine != "gallerydl" and len(paths) == 1):
             try:
                 await bot.delete_message(chat_id, status_mid)  # کارت‌ها جایگزینش شدند
             except Exception:  # noqa: BLE001
@@ -1547,6 +1607,15 @@ async def run_download(ctx: dict, payload: dict) -> None:
         await _metric(redis, platform, ok=True)
         await ck.note_exit(redis, settings.node_id, platform, ok=True)
     finally:
+        # تورِ ایمنیِ تیکر: شاخه‌های شناخته‌شده خودشان `_stop_ticker()` می‌زنند،
+        # ولی هرچه از آن‌ها فرار کند — مهم‌ترینش `CancelledError`ِ `job_timeout` یا
+        # خاموشیِ ورکر که از کنارِ `except Exception` رد می‌شود — تیکر را تا ابد
+        # زنده می‌گذاشت و کاربر «در حال دانلود…» را روی جابِ مرده می‌دید.
+        # عمداً **بدونِ await**: این‌جا لغوِ خودِ جاب در جریان است و `P.stop_task`
+        # آن را دوباره raise می‌کند، که بقیهٔ همین `finally` (آزادکردنِ اسلات،
+        # حذفِ workdir) را قطع می‌کرد. لغوِ تسک در دورِ بعدیِ حلقه اعمال می‌شود.
+        if ticker is not None and not ticker.done():
+            ticker.cancel()
         if beat is not None:
             beat.cancel()
             try:
