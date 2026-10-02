@@ -88,6 +88,12 @@ _CAP = "tests/test_caption_html.py"
 _COV = "tests/test_audio_cover.py"
 _ORP = "tests/test_probe_orphan.py"
 _HYG = "tests/test_repo_hygiene.py"
+_DFN = "tests/test_direct_filename.py"
+_DLC = "tests/test_cache_poison.py"
+_GWI = "tests/test_gateway_inline.py"
+_WGK = "tests/test_wg_pubkey.py"
+_ARB = "tests/test_archive_bomb.py"
+_SIC = "tests/test_safety_image_cap.py"
 _PAL = "tests/test_panel_path_is_alive.py"
 _CHR = "tests/panel/test_security_characterization.py"
 _SEC = "tests/panel/test_security_headers.py"
@@ -2355,6 +2361,44 @@ CASES: list[dict] = [
      "new": '_CSS = "body{background:#fff}"',
      "target": _TPF,
      "expect": "test_the_stylesheet_that_ships_is_the_file_on_disk"},
+    # ── فاز ۱: شش رفعِ امنیتی (بحرانی/بالا) ──────────────────────────
+    {"name": "phase1 downloader filename escape",
+     "path": "app/downloader.py",
+     "old": "    name = (name or \"\").strip().strip('\"')\n    for _ in range(3):                        # تا decodeِ تثبیت‌شده (double-encoding)\n        dec = unquote(name)\n        if dec == name:\n            break\n        name = dec\n    name = name.replace(\"\\\\\", \"/\").split(\"/\")[-1]     # حالا جداکردنِ مسیر امن است\n    name = re.sub(r'[\\x00-\\x1f<>:\"|?*/\\\\]+', \"\", name).strip(\" .\")",
+     "new": "    name = unquote((name or \"\").strip().strip('\"').replace(\"\\\\\", \"/\").split(\"/\")[-1])\n    name = re.sub(r'[\\x00-\\x1f<>:\"|?*]+', \"\", name).strip(\" .\")",
+     "target": _DFN,
+     "expect": "test_disposition_filename_is_never_a_path[abs-star]"},
+    {"name": "phase1 cache poison host gate",
+     "path": "app/dl_cache.py",
+     "old": "    plat = platform_of(u)\n    for prefix, platform, rx in ((\"yt\", \"youtube\", _YT_RE), (\"ig\", \"instagram\", _IG_RE),\n                                 (\"x\", \"twitter\", _X_RE), (\"tt\", \"tiktok\", _TT_RE)):\n        if plat != platform:\n            continue\n        m = rx.search(u)\n        if m:\n            return f\"{prefix}:{m.group(1)}\"",
+     "new": "    for prefix, rx in ((\"yt\", _YT_RE), (\"ig\", _IG_RE), (\"x\", _X_RE), (\"tt\", _TT_RE)):\n        m = rx.search(u)\n        if m:\n            return f\"{prefix}:{m.group(1)}\"",
+     "target": _DLC,
+     "expect": "test_foreign_host_does_not_collide_with_real_platform[https://attacker.example/promo.bin?r=youtu.be/dQw4w9WgXcQ-https://youtu.be/dQw4w9WgXcQ]"},
+    {"name": "phase1 gateway inline-safe gate",
+     "path": "app/gateway.py",
+     "old": "    disp = \"inline\" if (inline and _is_inline_safe(mime)) else \"attachment\"",
+     "new": "    disp = \"inline\" if inline else \"attachment\"",
+     "target": _GWI,
+     "expect": "test_stream_forces_attachment_and_sets_security_headers[text/html-True]"},
+    {"name": "phase1 wg peer pubkey guard",
+     "path": "app/nodes.py",
+     "old": "    return \"\".join(peer_block(pk, ip) for pk, ip in sorted(peers) if valid_pubkey(pk))",
+     "new": "    return \"\".join(peer_block(pk, ip) for pk, ip in sorted(peers) if pk)",
+     "target": _WGK,
+     "expect": "test_render_peers_drops_injected_key"},
+    {"name": "phase1 archive bomb in-flight cap",
+     "path": "app/processing.py",
+     "old": "                if _dir_size(exdir) > max_bytes:        # از بودجه رد شد → بکُش",
+     "new": "                if False:        # sabotage",
+     "target": _ARB,
+     "expect": "test_extraction_is_killed_when_it_exceeds_the_cap"},
+    {"name": "phase1 safety image size cap",
+     "path": "app/safety.py",
+     "old": "    if kind == \"image\" or path.lower().endswith(_IMAGE_EXTS):\n        wd = workdir or os.path.dirname(path) or \".\"\n        dims = _image_dims(path)\n        if dims and dims[0] * dims[1] > _MAX_SCAN_PIXELS:",
+     "new": "    if kind == \"image\" or path.lower().endswith(_IMAGE_EXTS):\n        wd = workdir or os.path.dirname(path) or \".\"\n        dims = None\n        if dims and dims[0] * dims[1] > _MAX_SCAN_PIXELS:",
+     "target": _SIC,
+     "expect": "test_huge_image_is_never_handed_raw_to_the_detector"},
+
 ]
 
 

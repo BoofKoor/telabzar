@@ -66,7 +66,16 @@ _DROP_PARAMS = {
 def _cache_url(url: str) -> str:
     """URL → شناسهٔ محتواییِ پایدار (برای کلیدِ کش)."""
     u = (url or "").strip()
-    for prefix, rx in (("yt", _YT_RE), ("ig", _IG_RE), ("x", _X_RE), ("tt", _TT_RE)):
+    # **گیتِ هاست باربر است:** الگوها با `search` هرجای URL جور می‌شوند، پس بدونِ
+    # این گیت یک هاستِ ناشناخته مثلِ `attacker.example/x?r=youtu.be/<id>` همان
+    # کلیدِ ویدیوی واقعی را می‌گرفت و فایلِ مهاجم به‌جای آن سرو می‌شد (مسمومیتِ
+    # کشِ بین‌کاربری، کشِ بی‌انقضا). هر الگو فقط وقتی اعمال می‌شود که `platform_of`
+    # (هاست‌محور) همان پلتفرم را بدهد.
+    plat = platform_of(u)
+    for prefix, platform, rx in (("yt", "youtube", _YT_RE), ("ig", "instagram", _IG_RE),
+                                 ("x", "twitter", _X_RE), ("tt", "tiktok", _TT_RE)):
+        if plat != platform:
+            continue
         m = rx.search(u)
         if m:
             return f"{prefix}:{m.group(1)}"

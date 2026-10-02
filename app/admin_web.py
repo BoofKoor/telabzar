@@ -1869,7 +1869,9 @@ async def node_join(request: web.Request) -> web.Response:
     # نصب‌کننده روی خطای گذرا — توکن را می‌سوزاند، و نودِ واقعی بعدش
     # «invalid or used token» می‌گیرد بی‌آنکه بفهمد چرا. مصرف باید آخرین کاری
     # باشد که پیش از پذیرش انجام می‌شود، نه اولین.
-    if not pubkey or len(pubkey) > 64:
+    # کلیدِ عمومی مستقیم در `wg0.conf` می‌نشیند، پس فرمتِ دقیق اجباری است —
+    # یک مقدارِ حاویِ خطِ جدید می‌توانست خط/دستور به کانفیگِ WG تزریق کند.
+    if not node_mod.valid_pubkey(pubkey):
         return web.json_response({"error": "missing pubkey"}, status=400)
     payload = await node_mod.consume_join_token(request.app["redis"], token)
     if payload is None:

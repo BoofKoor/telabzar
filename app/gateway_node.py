@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import ssl
 
 import aiohttp
@@ -29,7 +30,13 @@ log = logging.getLogger("telabzar.gateway_node")
 _COPY_RESP = (
     "Content-Type", "Content-Length", "Content-Range", "Accept-Ranges",
     "Content-Disposition", "Cache-Control", "ETag", "Last-Modified", "Expires", "Vary",
+    # هدرهای امنیتیِ گیت‌وی باید به کلاینت برسند، وگرنه نودِ استریم محتوای کاربر را
+    # بدونِ nosniff/CSP سرو می‌کند و رفعِ گیت‌وی روی این مسیر بی‌اثر می‌شود.
+    "X-Content-Type-Options", "Content-Security-Policy",
 )
+# token از مسیرِ گیت‌وی می‌آید (`secrets.token_urlsafe`): فقط این الفبا مجاز است،
+# تا مقدارِ decode‌شده نتواند به upstream مسیر/کوئری تزریق کند.
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # هدرهای درخواست که به upstream فوروارد می‌شوند (مهم‌ترینش Range برای seek).
 _COPY_REQ = ("Range", "If-Range", "If-None-Match", "If-Modified-Since", "Accept-Encoding")
 _CHUNK = 64 * 1024
@@ -42,7 +49,7 @@ def _upstream() -> str:
 async def _forward(request: web.Request, prefix: str) -> web.StreamResponse:
     """درخواست را به `{upstream}{prefix}{token}` فوروارد و پاسخ را استریم می‌کند."""
     token = request.match_info.get("token", "")
-    if not token or len(token) > 64:
+    if not _TOKEN_RE.match(token):
         raise web.HTTPNotFound()
     url = f"{_upstream()}{prefix}{token}"
     fwd = {h: request.headers[h] for h in _COPY_REQ if h in request.headers}

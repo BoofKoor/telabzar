@@ -299,8 +299,11 @@ async def _join(panel, token: str, self_name: str) -> str:
 
     import app.admin_web as aw
     from app.models import Node
+    import base64
+    import os
+    pubkey = base64.b64encode(os.urandom(32)).decode()   # کلیدِ WGِ معتبر (اعتبارسنجی اجباری شد)
     r = await panel.client.post("/node/join",
-                                json={"token": token, "pubkey": "k" * 20, "name": self_name})
+                                json={"token": token, "pubkey": pubkey, "name": self_name})
     assert r.status == 200, await r.text()
     async with aw.Sessionmaker() as s:
         rows = (await s.execute(select(Node))).scalars().all()

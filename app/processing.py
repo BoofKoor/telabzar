@@ -1060,6 +1060,55 @@ async def archive_list(path: str) -> list[tuple[str, int]]:
     return entries
 
 
+def _dir_size(d: str) -> int:
+    """مجموعِ حجمِ فایل‌های روی دیسکِ یک درخت (بدونِ دنبال‌کردنِ symlink)."""
+    total = 0
+    for root, _dirs, names in os.walk(d):
+        for n in names:
+            try:
+                total += os.lstat(os.path.join(root, n)).st_size
+            except OSError:
+                pass
+    return total
+
+
+async def _extract_capped(path: str, exdir: str, max_bytes: int) -> None:
+    """`7z x` را اجرا می‌کند و اگر حجمِ روی دیسک از `max_bytes` رد کرد، می‌کُشدش.
+
+    سقفِ **حین استخراج** تنها محافظِ واقعیِ بمبِ آرشیو است: فهرستِ `7z l`
+    ناقص/قابلِ‌جعل است (در `.7z`ِ solid فایل‌های بعدِ اولی ستونِ حجمِ خالی دارند
+    و از پارس رد می‌شوند؛ حجمِ `.gz` از تریلری می‌آید که مهاجم می‌نویسد)، پس چکِ
+    پیش از استخراج صرفاً یک خروجِ زودهنگامِ ارزان است نه مرز. این‌جا بایتِ
+    واقعیِ نوشته‌شده شمرده می‌شود.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        SEVENZ, "x", path, f"-o{exdir}", "-y", "-bd", "-bb0",
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        while True:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=0.5)
+                break                                   # تمام شد
+            except asyncio.TimeoutError:
+                if _dir_size(exdir) > max_bytes:        # از بودجه رد شد → بکُش
+                    kill_orphan(proc)
+                    raise RuntimeError(
+                        f"extracted size exceeds {max_bytes // (1024 * 1024)}MB")
+        if _dir_size(exdir) > max_bytes:                # یک چکِ پایانی
+            raise RuntimeError(f"extracted size exceeds {max_bytes // (1024 * 1024)}MB")
+        if proc.returncode != 0:
+            err = b""
+            try:
+                err = (await proc.stderr.read()) if proc.stderr else b""
+            except Exception:  # noqa: BLE001
+                pass
+            raise RuntimeError(f"extract failed: {err.decode('utf-8', 'ignore')[:200]}")
+    except BaseException:
+        kill_orphan(proc)                               # لغو/تایم‌اوت: یتیم نگذار
+        raise
+
+
 async def archive_extract(path: str, outdir: str, max_files: int, max_bytes: int) -> list[str]:
     """با محافظِ پایه: قبل از استخراج، حجم/تعدادِ اعلام‌شده را چک می‌کند."""
     entries = await archive_list(path)
@@ -1075,13 +1124,14 @@ async def archive_extract(path: str, outdir: str, max_files: int, max_bytes: int
 
     exdir = os.path.join(outdir, "ex")
     os.makedirs(exdir, exist_ok=True)
-    await _run([SEVENZ, "x", path, f"-o{exdir}", "-y", "-bd", "-bb0"], timeout=300)
+    # سقفِ **حین استخراج** (مرزِ واقعی) — چکِ بالا فقط خروجِ زودهنگام بود.
+    await _extract_capped(path, exdir, max_bytes)
 
     # مرزِ مسیر، نه پیشوندِ رشته‌ای: `startswith(real_ex)` برای `<outdir>/exfil`
     # هم صادق است چون پیشوندِ `<outdir>/ex` را دارد. با افزودنِ جداکننده مرز واقعی
     # سنجیده می‌شود. (استخراج قبلاً انجام شده، پس این فیلترِ فهرستِ خروجی است نه
     # جلوگیری از نوشتن — امروز `7z x` خودش `../`، symlink و مسیرِ مطلق را خنثی
-    # می‌کند و `tests/test_archive_extract.py` همان رفتار را پین کرده است.)
+    # می‌کند و `tests/test_phase2a.py` همان رفتار را پین کرده است.)
     real_ex = os.path.realpath(exdir)
     inside = real_ex + os.sep
     files: list[str] = []

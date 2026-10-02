@@ -60,15 +60,35 @@ async def _resolve(request: web.Request, token: str) -> tuple[str, str | None, s
     return path, file.mime, name
 
 
+# فقط این انواع inline سرو می‌شوند؛ هرچیزِ دیگر (از جمله text/html و
+# image/svg+xml که اسکریپت اجرا می‌کنند) به attachment اجبار می‌شود. گیت‌وی و پنل
+# روی یک دامنه‌اند (پورتِ متفاوت = همان site)، پس یک فایلِ HTMLِ inline یعنی
+# اجرای اسکریپت روی مبدأی که کوکیِ نشستِ پنل را هم می‌بیند. mimeِ خالی هم
+# attachment می‌شود (نوعِ ناشناخته sniff نشود).
+_INLINE_PREFIXES = ("video/", "audio/", "image/")
+_INLINE_DENY = {"image/svg+xml", "image/svg"}
+
+
+def _is_inline_safe(mime: str | None) -> bool:
+    m = (mime or "").split(";")[0].strip().lower()
+    if not m or m in _INLINE_DENY:
+        return False
+    return m.startswith(_INLINE_PREFIXES)
+
+
 async def _serve(request: web.Request, *, inline: bool) -> web.StreamResponse:
     token = request.match_info.get("token", "")
     if not token or len(token) > 64:
         raise web.HTTPNotFound()
     path, mime, name = await _resolve(request, token)
-    disp = "inline" if inline else "attachment"
+    # inline فقط برای انواعِ امن؛ بقیه حتی روی مسیرِ /s/ هم attachment می‌شوند.
+    disp = "inline" if (inline and _is_inline_safe(mime)) else "attachment"
     # RFC 5987 برای نام‌های غیر-ASCII (فارسی)
     headers = {"Content-Disposition": f"{disp}; filename*=UTF-8''{quote(name)}",
-               "Cache-Control": "private, max-age=600"}
+               "Cache-Control": "private, max-age=600",
+               "X-Content-Type-Options": "nosniff",
+               # محتوای کاربر؛ اجرای هر اسکریپت/جاسازیِ مبدأ-متقاطع ممنوع.
+               "Content-Security-Policy": "sandbox; default-src 'none'"}
     resp = web.FileResponse(path, headers=headers)  # FileResponse خودش Range را می‌فهمد
     if mime:
         resp.content_type = mime

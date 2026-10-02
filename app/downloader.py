@@ -1336,9 +1336,23 @@ _CD_PLAIN_RE = re.compile(r'filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)', re
 
 
 def _safe_name(name: str) -> str:
-    """نامِ فایلِ امن: بدونِ مسیر، بدونِ کاراکترِ کنترلی، با سقفِ طول."""
-    name = unquote((name or "").strip().strip('"').replace("\\", "/").split("/")[-1])
-    name = re.sub(r'[\x00-\x1f<>:"|?*]+', "", name).strip(" .")
+    """نامِ فایلِ امن: اول decode، بعد حذفِ مسیر، بدونِ کاراکترِ کنترلی، با سقفِ طول.
+
+    **ترتیب باربر است:** `unquote` باید **پیش از** جداکردنِ مسیر انجام شود. فرمِ
+    قبلی اول `split("/")[-1]` می‌زد و بعد unquote می‌کرد، پس `%2F`/`%5C` از split
+    رد می‌شدند و بعد به `/`/`\\` باز می‌شدند و یک مسیرِ مطلق می‌ساختند — که در
+    `os.path.join(workdir, name)` کلِ workdir را دور می‌انداخت (نوشتنِ فایل بیرونِ
+    پوشهٔ کار، با محتوای سرورِ مخرب). پاسِ تکراریِ unquote double-encoding
+    (`%252f`) را هم می‌بندد، و `/`/`\\` در regexِ پایانی تورِ دومِ حذفِ جداکننده است.
+    """
+    name = (name or "").strip().strip('"')
+    for _ in range(3):                        # تا decodeِ تثبیت‌شده (double-encoding)
+        dec = unquote(name)
+        if dec == name:
+            break
+        name = dec
+    name = name.replace("\\", "/").split("/")[-1]     # حالا جداکردنِ مسیر امن است
+    name = re.sub(r'[\x00-\x1f<>:"|?*/\\]+', "", name).strip(" .")
     if len(name) > 120:                       # پسوند را نگه دار، تنه را کوتاه کن
         stem, ext = os.path.splitext(name)
         name = stem[:120 - len(ext)] + ext
@@ -1469,7 +1483,12 @@ async def download_direct(url: str, workdir: str, opts: dict | None = None,
             if max_bytes and total > max_bytes:
                 raise DirectTooLarge(total, max_bytes)
             name = direct_filename(str(resp.url), cd, ct)
-            out = os.path.join(workdir, name)
+            # تورِ دومِ مهار: حتی اگر نامْ جداکننده‌ای از قلم انداخته باشد، خروجی
+            # باید قطعاً داخلِ workdir بنشیند (دفاع در عمق برای فرارِ مسیر).
+            base = os.path.basename(name).strip(" .") or "download"
+            out = os.path.join(workdir, base)
+            if not os.path.realpath(out).startswith(os.path.realpath(workdir) + os.sep):
+                raise RuntimeError("unsafe output path")
             got, last_pct = 0, -1
             with open(out, "wb") as fh:
                 async for chunk in resp.content.iter_chunked(_DIRECT_CHUNK):

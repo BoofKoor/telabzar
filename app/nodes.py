@@ -20,6 +20,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 
@@ -98,6 +99,18 @@ async def make_join_token(redis, role: str, ttl: int = 1800, name: str = "") -> 
     except Exception as exc:  # noqa: BLE001
         log.warning("join token store failed: %s", exc)
     return f"{body}.{sig}"
+
+
+# کلیدِ عمومیِ WireGuard = base64 از ۳۲ بایت = دقیقاً ۴۴ کاراکتر با `=` پایانی.
+# اعتبارسنجیِ سخت‌گیر لازم است چون این مقدار مستقیم در `wg0.conf` می‌نشیند
+# (`render_peers`)؛ یک مقدارِ حاویِ خطِ جدید می‌تواند خطِ `[Interface]`/`PostUp`
+# تزریق کند و چون کانفیگ سرِ boot با `wg-quick` بالا می‌آید، به اجرای فرمان برسد.
+_PUBKEY_RE = re.compile(r"^[A-Za-z0-9+/]{43}=$")
+
+
+def valid_pubkey(pubkey: str) -> bool:
+    """آیا این یک کلیدِ عمومیِ WireGuardِ معتبر است (بدونِ کاراکترِ تزریقی)؟"""
+    return bool(_PUBKEY_RE.match(pubkey or ""))
 
 
 def _parse_token(token: str) -> dict | None:
@@ -260,8 +273,11 @@ def render_peers(peers: list[tuple[str, str]]) -> str:
 
     مبنایِ همگام‌سازیِ **اعلانی**: هاست‌ساید `wg-sync` این خروجی را به [Interface]ِ ثابتِ
     مستر می‌چسباند و `wg syncconf` می‌زند — پس افزودن/حذفِ نود از پنل خودکار روی تونل
-    اعمال می‌شود و self-healing است. خالص/تست‌پذیر (ترتیبِ پایدار)."""
-    return "".join(peer_block(pk, ip) for pk, ip in sorted(peers))
+    اعمال می‌شود و self-healing است. خالص/تست‌پذیر (ترتیبِ پایدار).
+
+    کلیدِ نامعتبر **کنار گذاشته می‌شود** (تورِ دوم در برابرِ ردیفی که پیش از
+    اعتبارسنجیِ ورودی در DB نشسته باشد؛ وگرنه یک خطِ تزریقی به `wg0.conf` می‌رسید)."""
+    return "".join(peer_block(pk, ip) for pk, ip in sorted(peers) if valid_pubkey(pk))
 
 
 def _syncconf() -> None:

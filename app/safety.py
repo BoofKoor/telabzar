@@ -230,6 +230,50 @@ def _detect_sync(paths: list[str], threshold: float) -> tuple[float, str]:
     return best, label
 
 
+# بالاتر از این تعدادِ پیکسل، تصویر مستقیم به NudeNet/OpenCV داده نمی‌شود، چون
+# `cv2.imread` کلِ تصویر را decode می‌کند و بعد NudeNet کپیِ padded می‌سازد — یک
+# PNGِ ۱٫۲مگابایتیِ ۲۰۰۰۰² حدود ۳٫۵ گیگ RAM می‌گیرد و آلبومِ چنین فایل‌هایی روی
+# `max_jobs` ورکر را OOM می‌کند. تا این سقف مستقیم decode می‌شود (~۱۰۰MB)، بالاتر
+# اول با Pillow کوچک می‌شود، و اگر آن‌قدر بزرگ باشد که Pillow هم نتواند امن
+# decodeش کند، اسکن رد می‌شود (fail-open، هم‌راستا با طراحیِ فیلتر).
+_MAX_SCAN_PIXELS = 12_000_000     # ~۱۲ مگاپیکسل
+
+
+def _image_dims(path: str) -> tuple[int, int] | None:
+    """ابعادِ تصویر از هدر (بدونِ decodeِ کامل). None اگر Pillow نبود/خطا داد."""
+    try:
+        from PIL import Image
+    except Exception:  # noqa: BLE001 — Pillow در این محیط نیست
+        return None
+    try:
+        with Image.open(path) as im:
+            return int(im.width), int(im.height)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _downscale_image(path: str, workdir: str) -> str | None:
+    """تصویرِ بزرگ را به ≤۱۲۸۰px کوچک و در یک فایلِ موقت ذخیره می‌کند.
+
+    None اگر Pillow نبود یا تصویر آن‌قدر بزرگ باشد که decodeِ امن ممکن نباشد
+    (گاردِ bombِ خودِ Pillow raise می‌کند) — آن‌وقت فراخواننده اسکن را رد می‌کند.
+    """
+    try:
+        from PIL import Image, ImageOps
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((1280, 1280))
+            dst = os.path.join(workdir, f"nsfw-sc-{secrets.token_hex(3)}.jpg")
+            im.convert("RGB").save(dst, "JPEG", quality=85)
+            return dst
+    except Exception as exc:  # noqa: BLE001 — از جمله DecompressionBombError
+        log.warning("image downscale failed (%s) — scan skipped", str(exc)[:120])
+        return None
+
+
 async def _video_frames(path: str, workdir: str, count: int) -> list[str]:
     """چند فریمِ پخش‌شده در طولِ ویدیو (نه فقط ابتدا — تیزرِ سالم رایج است)."""
     from . import processing as P
@@ -266,7 +310,19 @@ async def scan_file(path: str, kind: str, threshold: float = 0.55,
     if not available():
         return False, 0.0, ""
     if kind == "image" or path.lower().endswith(_IMAGE_EXTS):
-        targets, tmp = [path], []
+        wd = workdir or os.path.dirname(path) or "."
+        dims = _image_dims(path)
+        if dims and dims[0] * dims[1] > _MAX_SCAN_PIXELS:
+            # بزرگ‌تر از آن که مستقیم decode شود: اول کوچکش کن، وگرنه رد کن.
+            small = _downscale_image(path, wd)
+            if small:
+                targets, tmp = [small], [small]
+            else:
+                log.warning("image too large to scan safely (%dx%d) — skipped",
+                            dims[0], dims[1])
+                return False, 0.0, ""          # fail-open
+        else:
+            targets, tmp = [path], []
     else:
         wd = workdir or os.path.dirname(path) or "."
         tmp = await _video_frames(path, wd, frames)
