@@ -21,8 +21,13 @@
     <div class=row><label>{{ e.who }}<small>گزارش‌شده سرِ استارتِ ورکر</small></label>
       <span class="mono">gallery-dl {{ e['gallery-dl'] or '—' }} · yt-dlp {{ e['yt-dlp'] or '—' }}</span></div>
   {% endfor %}
+  {# `telabzar update` به‌تنهایی موتور را ارتقا **نمی‌دهد**: لایهٔ pipِ ایمیج تا
+     وقتی `requirements-worker-dl.txt` عوض نشود از کشِ داکر می‌آید — پس موتورها
+     عمداً پین‌اند و ارتقا یعنی بالا بردنِ پین (`tests/test_ytdlp_pins.py`). #}
   <div class=hint>{{ I.ico('alert', '12px') }}وقتی یک پلتفرم «پاسخِ نامعتبر» می‌دهد، اول این‌جا را ببین.
-    اگر موتور قدیمی است روی مستر <span class=mono>telabzar update</span> بزن و روی نود
-    <span class=mono>node/update.sh</span> — وگرنه سشن باید عوض شود.</div>
+    اگر موتور قدیمی است، پینش را در <span class=mono>requirements-worker-dl.txt</span> بالا ببر
+    و بعد روی مستر <span class=mono>telabzar update</span> و روی نود
+    <span class=mono>node/update.sh</span> — <span class=mono>telabzar update</span> به‌تنهایی
+    ارتقا نمی‌دهد. وگرنه سشن باید عوض شود.</div>
   {% else %}<div class=empty>{{ pt('h.no_engine') }}</div>{% endif %}
 </div></div>

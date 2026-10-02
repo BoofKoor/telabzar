@@ -3,9 +3,15 @@
 -r requirements.txt
 Pillow>=10,<12             # processing.py در import لازمش دارد (ابعادِ عکس)
 clamd>=1.0,<2              # importِ تنبل؛ سبک است، برای اطمینان
-yt-dlp[default]            # موتورِ اصلی + yt-dlp-ejs (رانتایمِ JS)
+# yt-dlp و پلاگینِ pot **عمداً پین‌اند**، نه برای ثبات بلکه برای اینکه ارتقا
+# واقعاً اتفاق بیفتد: Docker لایهٔ `pip install` را تا وقتی همین فایل عوض نشود از
+# کش برمی‌دارد، پس یک نسخهٔ بازِ «همیشه آخرین» در عمل روی نسخهٔ روزِ اولین build
+# یخ می‌زد (`telabzar update` ارتقایش نمی‌داد). ارتقا = عوض‌کردنِ همین عدد + یک PR.
+# نسخهٔ `requirements-dev.txt` و تگِ ایمیجِ `bgutil-pot-provider` در compose باید
+# همین‌ها باشند — `tests/test_ytdlp_pins.py` گارد است.
+yt-dlp[default]==2026.8.19           # موتورِ اصلی + yt-dlp-ejs (رانتایمِ JS)
 gallery-dl                 # گالری/کاروسلِ عکس
-bgutil-ytdlp-pot-provider  # پلاگینِ PO Token یوتیوب
+bgutil-ytdlp-pot-provider==2.0.0     # پلاگینِ PO Token یوتیوب (هم‌نسخهٔ سرورش در compose)
 aiohttp                    # Spotify Web API + Cobalt (aiogram هم می‌آورد؛ صریح برای اطمینان)
 aiohttp_socks>=0.10,<1     # پروکسیِ socks برای موتورِ `direct` (aiohttp خودش نمی‌فهمد)
 PySocks>=1.7,<2            # socks برای gallery-dl: روی requests است و بدونِ این
