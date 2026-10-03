@@ -14,7 +14,16 @@
 """
 from __future__ import annotations
 
+import base64
+import os
+
 import pytest
+
+
+def _wgkey() -> str:
+    """کلیدِ عمومیِ WireGuardِ معتبر (base64 از ۳۲ بایت). از ۲۰۲۶ اعتبارسنجیِ
+    فرمتِ کلید اجباری شد، پس pubkeyِ ساختگیِ قبلی (`"k"*44`) دیگر پذیرفته نمی‌شود."""
+    return base64.b64encode(os.urandom(32)).decode()
 
 
 # ── A-1: مشتقِ کلیدِ سشن — **رفع شد ۲۰۲۶-۰۸-۱۷** ───────────────────────────
@@ -221,7 +230,7 @@ async def test_an_unauthenticated_caller_can_still_redeem_a_valid_token(panel, j
     یک اندپوینتِ توکن‌گیت‌شدهٔ متعارف است.
     """
     resp = await panel.client.post("/node/join",             # ← بدونِ کوکی
-                                   json={"token": join_token, "pubkey": "k" * 44})
+                                   json={"token": join_token, "pubkey": _wgkey()})
     assert resp.status == 200
     cfg = await resp.json()
     assert "services" in cfg and cfg["services"]
@@ -230,14 +239,14 @@ async def test_an_unauthenticated_caller_can_still_redeem_a_valid_token(panel, j
 async def test_a_forged_join_token_is_rejected(panel, no_wireguard):
     """کنترل: توکن امضا دارد؛ ساختگی‌اش رد می‌شود. بعد از رفع هم باید سبز بماند."""
     resp = await panel.client.post("/node/join",
-                                   json={"token": "not.a.real.token", "pubkey": "k" * 44})
+                                   json={"token": "not.a.real.token", "pubkey": _wgkey()})
     assert resp.status == 403
 
 
 async def test_a_join_token_cannot_be_replayed(panel, join_token):
     """کنترل: توکن یک‌بارمصرف است. بعد از رفع هم باید سبز بماند."""
-    first = await panel.client.post("/node/join", json={"token": join_token, "pubkey": "a" * 44})
-    second = await panel.client.post("/node/join", json={"token": join_token, "pubkey": "b" * 44})
+    first = await panel.client.post("/node/join", json={"token": join_token, "pubkey": _wgkey()})
+    second = await panel.client.post("/node/join", json={"token": join_token, "pubkey": _wgkey()})
     assert first.status == 200
     assert second.status == 403
 
@@ -249,7 +258,7 @@ async def test_a_malformed_join_does_not_burn_the_token(panel, join_token):
     bad = await panel.client.post("/node/join", json={"token": join_token})  # بدونِ pubkey
     assert bad.status == 400
 
-    retry = await panel.client.post("/node/join", json={"token": join_token, "pubkey": "c" * 44})
+    retry = await panel.client.post("/node/join", json={"token": join_token, "pubkey": _wgkey()})
     assert retry.status == 200, (
         "توکن باید بعد از یک درخواستِ ناقص هنوز معتبر باشد.")
 
@@ -262,7 +271,7 @@ async def test_an_oversized_pubkey_also_leaves_the_token_usable(panel, join_toke
     bad = await panel.client.post("/node/join",
                                   json={"token": join_token, "pubkey": "x" * 65})
     assert bad.status == 400
-    retry = await panel.client.post("/node/join", json={"token": join_token, "pubkey": "d" * 44})
+    retry = await panel.client.post("/node/join", json={"token": join_token, "pubkey": _wgkey()})
     assert retry.status == 200
 
 
@@ -275,7 +284,7 @@ async def test_an_invalid_token_is_still_rejected_before_anything_is_created(pan
 
     from app.models import Node as _Node
     resp = await panel.client.post("/node/join",
-                                   json={"token": "bad.token", "pubkey": "e" * 44})
+                                   json={"token": "bad.token", "pubkey": _wgkey()})
     assert resp.status == 403
     async with panel.aw.Sessionmaker() as s:
         rows = (await s.execute(_select(_Node))).scalars().all()

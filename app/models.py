@@ -61,6 +61,8 @@ class File(Base):
     changelog: Mapped[list | None] = mapped_column(JSON, default=list)
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # متادیتای فعلیِ صوت
     dl_token: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    #: آخرین باری که مالک لینکِ عمومی را خواست — مبدأِ انقضای `dl_link_days`.
+    dl_token_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cover_id: Mapped[str | None] = mapped_column(String(256), nullable=True)  # کاورِ ویدیو
     source: Mapped[str | None] = mapped_column(String(16), nullable=True)  # None/tg=آپلود · dl=دانلودی
     # متنِ اصلیِ پستِ مبدأ (کپشنِ اینستاگرام، عنوان/توضیحِ یوتیوب) — خامِ **بدونِ HTML**؛

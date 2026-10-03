@@ -19,7 +19,7 @@ from aiogram.types import (
     Message,
 )
 
-from .filetypes import human_size
+from .filetypes import human_size, mime_from_name
 from .i18n import t
 from .keyboards import collapsed_kb, file_card_kb
 
@@ -182,6 +182,21 @@ def message_media_id(msg: Message) -> tuple[str | None, str | None]:
         if obj is not None:
             return obj.file_id, obj.file_unique_id
     return None, None
+
+
+def message_media_mime(msg: Message, name: str | None = None) -> str | None:
+    """mimeِ رسانه‌ای که تلگرام واقعاً نگه داشته؛ اگر نداد، از نامِ فایل.
+
+    همان بایت‌هایی که گیت‌وی از `file_id` سرو می‌کند، پس mimeِ همین پیام درست‌ترین
+    است. عکس mime ندارد و تلگرام همیشه JPEG ذخیره‌اش می‌کند.
+    """
+    if getattr(msg, "photo", None):
+        return "image/jpeg"
+    for attr in ("document", "video", "audio", "animation", "voice", "video_note"):
+        obj = getattr(msg, attr, None)
+        if obj is not None and getattr(obj, "mime_type", None):
+            return obj.mime_type
+    return mime_from_name(name)
 
 
 def _media_arg(file: File, path: str | None):

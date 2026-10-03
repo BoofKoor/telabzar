@@ -195,7 +195,7 @@ def delivered(monkeypatch):
 
     async def _album(bot, chat_id, owner_id, media_paths, caption, lang):
         out.append(("album", list(media_paths), caption))
-        return []
+        return [], None          # (آیتم‌های رسیده, خطا) — همان قراردادِ `_deliver_album`
 
     monkeypatch.setattr(TD, "_spawn", _spawn)
     monkeypatch.setattr(TD, "_deliver_rich_post", _rich)
@@ -359,8 +359,9 @@ async def test_the_aggregate_cap_stops_a_greedy_carousel(
 
     await _run(bot, redis, CAROUSEL)
 
-    wd = wired / "dl-iga00001"
-    assert not (wd / IGA.ANON_DIR).exists(), "فایلِ نیمه‌کاره نباید بماند"
+    # پوشهٔ کار به‌ازای جاب است (`dl-<ref>-<توکن>`)؛ glob، وگرنه مسیرِ ثابتِ قدیمی
+    # هرگز وجود ندارد و این ادعا بی‌صدا همیشه‌سبز می‌شود.
+    assert not list(wired.glob(f"dl-iga00001*/{IGA.ANON_DIR}")), "فایلِ نیمه‌کاره نباید بماند"
     assert await _counter(redis, "fetch_failed") == "1"
     assert await _counter(redis, "ok") is None, "پاسِ ناشناس نباید موفق شمرده شود"
     assert spy["pick"] == 1, "باید به مسیرِ کوکی افتاده باشد"
@@ -563,7 +564,7 @@ async def test_cancel_during_the_anonymous_pass_says_cancelled(
     assert bot.edits and bot.edits[-1] == t("fa", "cancelled"), bot.edits[-3:]
     assert delivered == [], "لغو نباید چیزی تحویل بدهد"
     assert spy["pick"] == 0, f"لغو نباید کوکی خرج کند: {dict(spy)}"
-    assert not (wired / "dl-iga00001" / IGA.ANON_DIR).exists()
+    assert not list(wired.glob(f"dl-iga00001*/{IGA.ANON_DIR}"))
 
 
 # ── ۱۱) فیلترِ ایمنی روی مسیرِ ناشناس هم اعمال می‌شود ─────────────

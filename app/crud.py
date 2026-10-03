@@ -1,6 +1,8 @@
 """عملیاتِ سادهٔ پایگاه‌داده."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +34,23 @@ async def get_file_by_ref(session: AsyncSession, ref: str,
     result = await session.execute(
         select(File).where(File.ref == ref, File.owner_id == user.id))
     return result.scalar_one_or_none()
+
+
+def link_expired(token_at: datetime | None, days: int, now: datetime | None = None) -> bool:
+    """آیا لینکِ عمومیِ ساخته‌شده در `token_at` با عمرِ `days` روز گذشته است؟
+
+    `days <= 0` یعنی بی‌انقضا (قراردادِ «۰ = خاموش»). مهرِ **غایب** منقضی حساب
+    می‌شود — مهاجرت به هر توکنِ قدیمی یک پنجرهٔ تازه داده و `op_link` همیشه مهر
+    می‌زند، پس `None` فقط یعنی «ردیفی که هرگز از مسیرِ درست نگذشته». SQLite (تست)
+    datetimeِ بی‌منطقه برمی‌گرداند؛ آن UTC خوانده می‌شود تا مقایسه نترکد.
+    """
+    if days <= 0:
+        return False
+    if token_at is None:
+        return True
+    if token_at.tzinfo is None:
+        token_at = token_at.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) - token_at > timedelta(days=days)
 
 
 async def get_owned_job(session: AsyncSession, job_id: int,

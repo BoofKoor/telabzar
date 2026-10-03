@@ -10,6 +10,7 @@ import json
 import logging
 import secrets
 from datetime import datetime, timezone
+from html import escape
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
@@ -17,7 +18,7 @@ from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import cookies as ck_pool
-from .. import dl_cache, nodes, probe_stats, safety, settings_store
+from .. import counters, dl_cache, nodes, probe_stats, safety, settings_store
 from ..callbacks import Dl
 from ..config import settings
 from ..downloader import (
@@ -92,8 +93,13 @@ async def _precheck(pool: ArqRedis, uid: int, lang: str) -> str | None:
                 return t(lang, "dl_daily_limit")
         except Exception:  # noqa: BLE001
             pass
+    return await _mb_block(pool, uid, lang)
+
+
+async def _mb_block(pool: ArqRedis, uid: int, lang: str) -> str | None:
+    """سقفِ حجمِ روزانه — فقط‌خواندنی، چون شمارنده‌اش را ورکر **بعد از** دانلود پر می‌کند."""
     mb_cap = await settings_store.get_int("dl_daily_mb", settings.dl_daily_mb)
-    if mb_cap > 0:  # سقفِ حجمِ روزانه (شمارندهٔ dlq:mb توسطِ ورکر پر می‌شود)
+    if mb_cap > 0:
         try:
             raw = await pool.get(f"dlq:mb:{uid}:{_today()}")
             if isinstance(raw, bytes):
@@ -105,17 +111,37 @@ async def _precheck(pool: ArqRedis, uid: int, lang: str) -> str | None:
     return None
 
 
-async def _charge(pool: ArqRedis, uid: int) -> None:
-    """شمارشِ یک دانلودِ منظور‌شده + ستِ کول‌داون."""
+async def _reserve(pool: ArqRedis, uid: int, lang: str) -> str | None:
+    """چک و شارژ در **یک** گام اتمی. پیامِ ردکردن، یا None یعنی «رزرو شد».
+
+    تا فاز ۲ِ ممیزی این دو کار جدا بودند: `_precheck` فقط **می‌خواند** و
+    `_charge` چند `await` بعد (DNS، فیلترِ محتوا، کش، پاسخ به کاربر) **می‌نوشت**.
+    پس چند لینکِ هم‌زمان — یک پیامِ چندلینکی، یا چند پیامِ پشتِ‌هم که aiogram
+    موازی هندل می‌کند — همه از چکِ «امروز به سقف رسیده؟» و «در کول‌داون است؟»
+    رد می‌شدند و بعد همه شارژ می‌شدند: سقفِ روزانه و کول‌داون هر دو دورزدنی.
+
+    حالا خودِ عملِ Redis تصمیم می‌گیرد: کول‌داون با `SET NX` (فقط یکی برنده
+    می‌شود) و شمارش با `INCR` و برگرداندن روی رد. خطای Redis → مجاز (مثلِ قبل):
+    سقف نباید دانلود را بشکند.
+    """
+    block = await _mb_block(pool, uid, lang)
+    if block:
+        return block
+    cd = await settings_store.get_int("dl_cooldown_sec", settings.dl_cooldown_sec)
+    cnt = await settings_store.get_int("dl_daily_count", settings.dl_daily_count)
+    cd_key, cnt_key = f"dlq:cd:{uid}", f"dlq:cnt:{uid}:{_today()}"
     try:
-        k = f"dlq:cnt:{uid}:{_today()}"
-        await pool.incr(k)
-        await pool.expire(k, 90000)
-        cd = await settings_store.get_int("dl_cooldown_sec", settings.dl_cooldown_sec)
-        if cd > 0:
-            await pool.set(f"dlq:cd:{uid}", "1", ex=cd)
+        if cd > 0 and not await pool.set(cd_key, "1", ex=cd, nx=True):
+            return t(lang, "dl_cooldown")
+        n = await counters.incr_window(pool, cnt_key, 90000)
+        if cnt > 0 and n > cnt:
+            await pool.decr(cnt_key)          # رد شد → شارژ برگردد
+            if cd > 0:
+                await pool.delete(cd_key)     # کول‌داونِ همین درخواستِ ردشده
+            return t(lang, "dl_daily_limit")
     except Exception:  # noqa: BLE001
         pass
+    return None
 
 
 async def _reject(message: Message, arq_pool: ArqRedis, user: User | None, lang: str,
@@ -124,7 +150,7 @@ async def _reject(message: Message, arq_pool: ArqRedis, user: User | None, lang:
     await message.reply(t(lang, "nsfw_blocked"))
     banned = await safety.report_block(message.bot, arq_pool,
                                        user.tg_user_id if user else 0, why, pol,
-                                       detail=f"لینک: <code>{(message.text or '')[:80]}</code>")
+                                       detail=f"لینک: <code>{escape((message.text or '')[:80])}</code>")
     if banned:
         await message.answer(t(lang, "nsfw_user_blocked"))
 
@@ -199,16 +225,19 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
         url = target
     uid = user.tg_user_id if user else 0
     owner_id = user.id if user else 0
-    block = await _precheck(arq_pool, uid, lang)
+    engine = engine_for(url, platform)
+    ux = await _resolve_ux(platform)
+    quick = not (ux == "probe" and engine == "ytdlp")
+    # quick همین‌جا **رزرو** می‌کند (چک + شارژِ اتمی). probe فقط چک می‌کند و
+    # شارژ به انتخابِ کیفیت (`on_dl_pick`) می‌رود — که بی‌شارژ ماندنِ خودِ فازِ
+    # probe همان حفرهٔ ثبت‌شده در §۷ است و تصمیمش جداست.
+    block = await (_reserve if quick else _precheck)(arq_pool, uid, lang)
     if block:
         await message.reply(block)
         return
 
     # همان لحظه‌ی دریافت، تشخیص را به کاربر نشان بده (استوریِ اینستاگرام/ویدیوی یوتیوب/…)
     detected = t(lang, "dl_detected", what=describe_link(url, platform, lang))
-    engine = engine_for(url, platform)
-    ux = await _resolve_ux(platform)
-    quick = not (ux == "probe" and engine == "ytdlp")
     # پلتفرمِ صوتی → صوتِ تمیز (mp3)، نه «best» که برای منبعِ فقط-صوت گیجش می‌کند
     quick_sel = "audio" if platform in AUDIO_PLATFORMS else "best"
 
@@ -217,7 +246,8 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
     if quick and await settings_store.get_bool("dl_cache_enabled", settings.dl_cache_enabled):
         cache = await dl_cache.get_cached(session, url, quick_sel)
         if cache is not None:
-            await _charge(arq_pool, uid)
+            # شارژ از قبل رزرو شده. پیش از این این‌جا یک‌بار و پایین‌تر سرِ enqueue
+            # یک‌بار **دیگر** شارژ می‌شد، پس `file_id`ِ باطلِ کش دو سهم می‌خورد.
             # لینک را نگه‌دار و روی همان ریپلای بده (به‌جای حذفِ پیامِ کاربر)
             status = await message.reply(detected)
             if await dl_cache.deliver_from_cache(message.bot, session, message.chat.id, owner_id,
@@ -245,8 +275,7 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
             "owner_id": owner_id, "tg_user_id": uid}
 
     dlq = await _dl_queue(arq_pool, platform)
-    if quick:  # quick-grab: بهترین کیفیت (صوت برای پلتفرمِ صوتی)
-        await _charge(arq_pool, uid)
+    if quick:  # quick-grab: بهترین کیفیت (صوت برای پلتفرمِ صوتی) — از قبل رزرو شده
         await arq_pool.enqueue_job(
             "run_download", {**base, "phase": "fetch", "selector": quick_sel}, _queue_name=dlq)
     else:
@@ -292,7 +321,7 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
         return
     ctx = json.loads(raw)
     uid = ctx.get("tg_user_id", 0)
-    block = await _precheck(arq_pool, uid, lang)
+    block = await _reserve(arq_pool, uid, lang)       # چک + شارژ، اتمی
     if block:
         await cq.answer(block, show_alert=True)
         return
@@ -301,15 +330,13 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
     if await settings_store.get_bool("dl_cache_enabled", settings.dl_cache_enabled):
         cache = await dl_cache.get_cached(session, ctx["url"], sel)
         if cache is not None:
-            await _charge(arq_pool, uid)
             await cq.answer()
             if await dl_cache.deliver_from_cache(cq.message.bot, session, cq.message.chat.id,
                                                  ctx["owner_id"], cache, lang,
                                                  anchor_mid=cq.message.message_id):
                 return
-            # file_id باطل بود → ادامه بده و واقعاً دانلود کن
+            # file_id باطل بود → ادامه بده و واقعاً دانلود کن (بدونِ شارژِ دوم)
 
-    await _charge(arq_pool, uid)
     payload = {"ref": ref, "chat_id": cq.message.chat.id, "status_mid": cq.message.message_id,
                "lang": lang, "url": ctx["url"], "platform": ctx["platform"],
                "engine": ctx["engine"], "owner_id": ctx["owner_id"], "tg_user_id": uid,

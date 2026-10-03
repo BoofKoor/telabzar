@@ -22,6 +22,9 @@ import os
 import re
 import secrets
 import threading
+import time
+import unicodedata
+from html import escape as _html_escape
 from urllib.parse import unquote, urlparse
 
 log = logging.getLogger("telabzar.safety")
@@ -52,11 +55,11 @@ ADULT_TLDS: tuple[str, ...] = (".xxx", ".porn", ".sex", ".adult", ".sexy", ".cam
 #   anal→analysis/analytics/canal، cum→cumbria/document، cock→cocktail/peacock،
 #   dick→dickens، hardcore→hardcoregaming101.
 STRONG_TOKENS: tuple[str, ...] = (
-    "porn", "xxx", "xnxx", "xvideos", "xhamster", "hentai", "nsfw", "onlyfans",
+    "porn", "xnxx", "xvideos", "xhamster", "hentai", "nsfw", "onlyfans",
     "brazzers", "javhd", "rule34", "camgirl", "sexcam", "sexchat", "sexvideo",
-    "milf", "blowjob", "creampie", "cumshot", "handjob", "gangbang",
-    "bukkake", "deepthroat", "bdsm", "nudes", "nudity", "boobs",
-    "fuck", "erotic", "striptease", "stripcam", "18plus",
+    "blowjob", "creampie", "cumshot", "handjob", "gangbang",
+    "bukkake", "deepthroat", "bdsm", "nudes",
+    "striptease", "stripcam", "18plus",
     "پورن", "شهوانی",
 )
 WORD_TOKENS: frozenset[str] = frozenset({
@@ -74,6 +77,20 @@ HOST_TOKENS: frozenset[str] = frozenset({
     "escort", "escorts", "hookup", "hookups", "adultvideo", "adulttime",
     "adultfilm", "camsex", "livesex",
 })
+# زیررشته‌ای، ولی **فقط روی نامِ دامنه** — تا فاز ۴ این‌ها در `STRONG_TOKENS` بودند
+# و در متنِ آزاد محتوای کاملاً متعارف را مسدود می‌کردند (همه اجراشده):
+# «XXXTENTACION - SAD!» و فیلمِ «xXx: Return of Xander Cage» (xxx)، آلبومِ
+# «Erotica»ِ مدونا (erotic)، «FUCK YOU»ِ CeeLo Green و هر ویدیوی رپی که متنِ آهنگ
+# را در توضیحات دارد (fuck)، هشدارِ «contains nudity» زیرِ تریلرِ سینمایی
+# (nudity)، پادکستِ «Boobs and Bones» (boobs)، و «MILF Money»ِ Rick and Morty
+# (milf). **ردهٔ توکنِ کامل جواب نبود**: نیمی از این مثال‌ها خودشان توکنِ کامل‌اند
+# («FUCK YOU»، «xXx:»، «contains nudity»). در نامِ دامنه اما بی‌ابهام‌اند و
+# به‌هم‌چسبیده می‌آیند (`freexxxtube`, `milfhub`)، پس آن‌جا زیررشته‌ای می‌مانند.
+# هزینهٔ آگاهانه: عنوانِ یک پستِ بزرگسال از دامنهٔ ناشناس دیگر با این‌ها گرفته
+# نمی‌شود — لایهٔ دامنه، `age_limit`ِ yt-dlp و لایهٔ پیکسل هنوز پشتش هستند، در
+# حالی که مثبتِ کاذبِ متن کاربرِ سالم را مسدود می‌کرد (و با `safety_strikes`
+# روشن، بعد از چند آهنگ خودِ کاربر را).
+HOST_STRONG_TOKENS: tuple[str, ...] = ("xxx", "fuck", "erotic", "nudity", "boobs", "milf")
 _TOKEN_SPLIT = re.compile(r"[^0-9a-z؀-ۿ]+")
 
 
@@ -90,7 +107,7 @@ def _match(text: str, host: bool = False) -> str | None:
     low = (text or "").lower()
     if not low:
         return None
-    for s in STRONG_TOKENS:
+    for s in STRONG_TOKENS + (HOST_STRONG_TOKENS if host else ()):
         if s in low:
             return s
     words = WORD_TOKENS | HOST_TOKENS if host else WORD_TOKENS
@@ -98,17 +115,41 @@ def _match(text: str, host: bool = False) -> str | None:
     return sorted(hit)[0] if hit else None
 
 
+# جداکننده‌های برچسبِ دامنه که IDNA (و مرورگر/کتابخانهٔ اتصال) نقطه می‌خواند.
+# U+3002 را NFKC به نقطه نمی‌برد، پس صریح نگاشت می‌شود.
+_DOTS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
+
+
+def norm_host(host: str | None) -> str:
+    """یک شکلِ کانونیک برای هر نامِ دامنه، **پیش از هر مقایسه**.
+
+    همان نامی را برمی‌گرداند که اتصالِ واقعی به آن می‌رسد. سه دورزدن که پیش از
+    فاز ۴ از فیلترِ دامنه رد می‌شدند (اجراشده): نقطهٔ پایانی (`beeg.com.` — DNS آن
+    را همان دامنه می‌داند ولی `==`/`endswith` نه)، حروفِ fullwidth
+    (`ｃｈａｔｕｒｂａｔｅ.com` — کدکِ idna با nameprep به ASCII می‌بردش و اتصال
+    همان‌جا می‌رود)، و punycode (`xn--…` — تا کلیدواژهٔ فارسی روی نامِ IDN هم
+    کار کند، شکلِ یونیکد مقایسه می‌شود نه ASCII). `www.` هم همین‌جا برداشته
+    می‌شود تا فهرستِ پنل و URL یک شکل داشته باشند.
+    """
+    h = unicodedata.normalize("NFKC", host or "").translate(_DOTS).lower().strip().rstrip(".")
+    if "xn--" in h:
+        try:
+            h = h.encode("ascii").decode("idna").lower()
+        except (UnicodeError, ValueError):
+            pass                 # punycodeِ خراب: همان شکل بماند (برای مقایسه بی‌خطر)
+    return h[4:] if h.startswith("www.") else h
+
+
 def parse_domains(raw: str) -> frozenset[str]:
-    """متنِ پنل (خط/کاما/فاصله) → مجموعهٔ دامنه‌های نرمال‌شده."""
+    """متنِ پنل (خط/کاما/فاصله) → مجموعهٔ دامنه‌های نرمال‌شده — با همان `norm_host`ِ URL."""
     out = set()
-    for part in re.split(r"[\s,;]+", (raw or "").strip().lower()):
-        part = part.strip().strip(".")
+    for part in re.split(r"[\s,;]+", (raw or "").strip()):
+        part = part.strip()
         if not part:
             continue
         if "//" in part:                       # کاربر URL کامل چسبانده
-            part = (urlparse(part).hostname or "").lower()
-        if part.startswith("www."):
-            part = part[4:]
+            part = urlparse(part).hostname or ""
+        part = norm_host(part.strip("."))
         if part:
             out.add(part)
     return frozenset(out)
@@ -121,8 +162,7 @@ def _host_matches(host: str, domains: frozenset[str]) -> bool:
 def check_url(url: str, block: frozenset[str] = frozenset(),
               allow: frozenset[str] = frozenset()) -> str | None:
     """دلیلِ مسدودی یا None. `allow` بر همه‌چیز مقدم است (رفعِ مثبتِ کاذب)."""
-    host = (urlparse(url).hostname or "").lower()
-    host = host[4:] if host.startswith("www.") else host
+    host = norm_host(urlparse(url).hostname)
     if not host:
         return None
     if allow and _host_matches(host, allow):
@@ -230,6 +270,50 @@ def _detect_sync(paths: list[str], threshold: float) -> tuple[float, str]:
     return best, label
 
 
+# بالاتر از این تعدادِ پیکسل، تصویر مستقیم به NudeNet/OpenCV داده نمی‌شود، چون
+# `cv2.imread` کلِ تصویر را decode می‌کند و بعد NudeNet کپیِ padded می‌سازد — یک
+# PNGِ ۱٫۲مگابایتیِ ۲۰۰۰۰² حدود ۳٫۵ گیگ RAM می‌گیرد و آلبومِ چنین فایل‌هایی روی
+# `max_jobs` ورکر را OOM می‌کند. تا این سقف مستقیم decode می‌شود (~۱۰۰MB)، بالاتر
+# اول با Pillow کوچک می‌شود، و اگر آن‌قدر بزرگ باشد که Pillow هم نتواند امن
+# decodeش کند، اسکن رد می‌شود (fail-open، هم‌راستا با طراحیِ فیلتر).
+_MAX_SCAN_PIXELS = 12_000_000     # ~۱۲ مگاپیکسل
+
+
+def _image_dims(path: str) -> tuple[int, int] | None:
+    """ابعادِ تصویر از هدر (بدونِ decodeِ کامل). None اگر Pillow نبود/خطا داد."""
+    try:
+        from PIL import Image
+    except Exception:  # noqa: BLE001 — Pillow در این محیط نیست
+        return None
+    try:
+        with Image.open(path) as im:
+            return int(im.width), int(im.height)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _downscale_image(path: str, workdir: str) -> str | None:
+    """تصویرِ بزرگ را به ≤۱۲۸۰px کوچک و در یک فایلِ موقت ذخیره می‌کند.
+
+    None اگر Pillow نبود یا تصویر آن‌قدر بزرگ باشد که decodeِ امن ممکن نباشد
+    (گاردِ bombِ خودِ Pillow raise می‌کند) — آن‌وقت فراخواننده اسکن را رد می‌کند.
+    """
+    try:
+        from PIL import Image, ImageOps
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((1280, 1280))
+            dst = os.path.join(workdir, f"nsfw-sc-{secrets.token_hex(3)}.jpg")
+            im.convert("RGB").save(dst, "JPEG", quality=85)
+            return dst
+    except Exception as exc:  # noqa: BLE001 — از جمله DecompressionBombError
+        log.warning("image downscale failed (%s) — scan skipped", str(exc)[:120])
+        return None
+
+
 async def _video_frames(path: str, workdir: str, count: int) -> list[str]:
     """چند فریمِ پخش‌شده در طولِ ویدیو (نه فقط ابتدا — تیزرِ سالم رایج است)."""
     from . import processing as P
@@ -266,7 +350,19 @@ async def scan_file(path: str, kind: str, threshold: float = 0.55,
     if not available():
         return False, 0.0, ""
     if kind == "image" or path.lower().endswith(_IMAGE_EXTS):
-        targets, tmp = [path], []
+        wd = workdir or os.path.dirname(path) or "."
+        dims = _image_dims(path)
+        if dims and dims[0] * dims[1] > _MAX_SCAN_PIXELS:
+            # بزرگ‌تر از آن که مستقیم decode شود: اول کوچکش کن، وگرنه رد کن.
+            small = _downscale_image(path, wd)
+            if small:
+                targets, tmp = [small], [small]
+            else:
+                log.warning("image too large to scan safely (%dx%d) — skipped",
+                            dims[0], dims[1])
+                return False, 0.0, ""          # fail-open
+        else:
+            targets, tmp = [path], []
     else:
         wd = workdir or os.path.dirname(path) or "."
         tmp = await _video_frames(path, wd, frames)
@@ -323,18 +419,31 @@ async def load_policy() -> Policy:
 
 
 # ── شمارشِ تخلف (و مسدودسازیِ خودکارِ کاربرِ مصر) ────────────────
-_HIT = "nsfw:hit:"      # nsfw:hit:<tg_user_id> → شمارندهٔ ۳۰ روزه
+_HIT = "nsfw:hit:"      # قدیمی (رشته‌ای، تا فاز ۴) — فقط برای جمعِ صفحهٔ سلامت تا انقضا
+_STRIKES = "nsfw:strikes:"   # nsfw:strikes:<tg_user_id> → ZSETِ مهرِ زمانِ هر تخلف
+STRIKE_WINDOW = 30 * 86400
 
 
 async def note_block(redis, tg_user_id: int, policy: Policy) -> int:
     """یک تخلف را بشمار و تعدادِ کلِ اخیر را برگردان (۰ اگر Redis نبود)."""
     if redis is None or not tg_user_id:
         return 0
+    # **پنجرهٔ لغزانِ واقعی، نه شمارنده با TTLِ تمدیدشونده.** فرمِ قبلی `INCR` و
+    # بعد `EXPIRE 30d` روی **هر** تخلف بود، پس هر تخلفِ تازه عمرِ همهٔ قبلی‌ها را
+    # تمدید می‌کرد: کاربری که هر سه هفته یک مثبتِ کاذب می‌خورد شمارنده‌اش هرگز صفر
+    # نمی‌شد و با `safety_strikes` روشن سرانجام خودکار مسدود می‌شد — در حالی که
+    # گزارشِ ادمین «تخلف‌های ۳۰ روزِ اخیر» می‌نوشت. حالا هر تخلف مهرِ زمانِ خودش را
+    # دارد و فقط آن‌هایی شمرده می‌شوند که واقعاً در ۳۰ روزِ اخیرند.
     try:
-        k = _HIT + str(tg_user_id)
-        n = await redis.incr(k)
-        await redis.expire(k, 30 * 86400)
-        return int(n)
+        k = _STRIKES + str(tg_user_id)
+        now = time.time()
+        pipe = redis.pipeline()
+        pipe.zadd(k, {f"{now:.6f}:{secrets.token_hex(3)}": now})
+        pipe.zremrangebyscore(k, "-inf", now - STRIKE_WINDOW)
+        pipe.zcard(k)
+        pipe.expire(k, STRIKE_WINDOW)
+        res = await pipe.execute()
+        return int(res[2])
     except Exception:  # noqa: BLE001
         return 0
 
@@ -349,9 +458,12 @@ async def report_block(bot, redis, tg_user_id: int, reason: str, policy: Policy,
     n = await note_block(redis, tg_user_id, policy)
     if policy.notify and bot is not None:
         from .config import settings
+        # `reason` از ورودیِ کاربر ساخته می‌شود (`domain:<host>`؛ و `urlparse` در
+        # hostname کاراکترِ `<` را نگه می‌دارد)، پس escape لازم است. `detail` را
+        # فراخوان می‌سازد و مسئولِ escapeِ بخشِ کاربریِ آن است (هر چهار فراخوان).
         text = (f"🔞 <b>محتوای غیرمجاز مسدود شد</b>\n\n"
                 f"کاربر: <code>{tg_user_id}</code>\n"
-                f"دلیل: <code>{reason}</code>\n"
+                f"دلیل: <code>{_html_escape(reason)}</code>\n"
                 f"{detail}\n"
                 f"تخلف‌های ۳۰ روزِ اخیرِ این کاربر: <b>{n or '?'}</b>")
         for aid in settings.admin_id_set:
@@ -383,7 +495,10 @@ async def blocked_total(redis) -> int:
         return 0
     try:
         total = 0
-        async for k in redis.scan_iter(match=_HIT + "*", count=500):
+        cutoff = time.time() - STRIKE_WINDOW
+        async for k in redis.scan_iter(match=_STRIKES + "*", count=500):
+            total += int(await redis.zcount(k, cutoff, "+inf"))
+        async for k in redis.scan_iter(match=_HIT + "*", count=500):   # کلیدهای پیش از فاز ۴
             total += int(await redis.get(k) or 0)
         return total
     except Exception:  # noqa: BLE001

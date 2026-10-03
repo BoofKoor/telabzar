@@ -495,7 +495,14 @@ def _cleanup_cookie(tmp_path: str | None) -> None:
 
 # ── پرچم‌های مشترکِ yt-dlp (proxy / cookies / pot-provider) ─────
 def _common_flags(opts: dict) -> list[str]:
-    flags = ["--no-warnings", "--no-playlist"]
+    # `--no-playlist` فقط لینکی را می‌گیرد که **هم** ویدیو **هم** پلی‌لیست است
+    # (`watch?v=…&list=…`). لینکِ خالصِ پلی‌لیست/کانال/صفحه‌ای با چند ویدیو هنوز
+    # **همهٔ** آیتم‌ها را می‌کشید — اجراشده با yt-dlpِ واقعی روی صفحه‌ای با سه
+    # `<video>`: سه فایل — و سقفِ حجم (`--max-filesize`) به‌ازای **هر فایل** است، پس
+    # تا پرشدنِ دیسک چیزی جلویش نبود. `--playlist-items 1` یعنی «اولین آیتم»؛ روی
+    # لینکِ تک‌ویدیو بی‌اثر است. همین روی probe هم سوار است (`-J` بدونِ آن کلِ
+    # پلی‌لیست را استخراج می‌کرد، و probe کوکی دارد).
+    flags = ["--no-warnings", "--no-playlist", "--playlist-items", "1"]
     if opts.get("proxy"):
         flags += ["--proxy", opts["proxy"]]
     if opts.get("user_agent"):   # هویتِ سشن: همان UA که اکانت با آن شناخته می‌شود
@@ -546,6 +553,13 @@ def _carry_meta(data: dict) -> dict:
 
 def normalize_probe(data: dict) -> dict:
     """خروجیِ ‎-J را به {title, duration, kind, options[], + متادیتای ایمنی} تمیز می‌کند."""
+    # لینکِ پلی‌لیست با `--playlist-items 1` یک دیکشنریِ `_type=playlist` با **یک**
+    # entry می‌دهد که خودش `formats` ندارد؛ بدونِ بازکردن، منوی کیفیت خالی و متادیتای
+    # ایمنی (age_limit/…) مالِ پلی‌لیست بود نه ویدیویی که واقعاً دانلود می‌شود.
+    if data.get("_type") in ("playlist", "multi_video"):
+        first = next((e for e in (data.get("entries") or []) if isinstance(e, dict)), None)
+        if first is not None:
+            data = first
     duration = data.get("duration")
     formats = data.get("formats") or []
     # بیشترین tbr ویدیویی به‌ازای هر ارتفاع + یک صوتِ نماینده (برای تخمینِ merge)
@@ -778,6 +792,9 @@ async def _ffprobe_video(path: str) -> dict:
     return await _P.probe_media(path)
 
 
+_REMUX_TIMEOUT = 900   # ثانیه — remuxِ کپیِ استریم، حتی برای فایلِ چندگیگی
+
+
 async def _ensure_mp4(path: str) -> str:
     """اگر خروجی mp4 نیست، **فقط کانتینر** را به mp4 بازبسته‌بندی کن (بدونِ انکودِ مجدد).
 
@@ -792,12 +809,22 @@ async def _ensure_mp4(path: str) -> str:
     if not path or os.path.splitext(path)[1].lower() == ".mp4" or not os.path.exists(path):
         return path
     out = os.path.splitext(path)[0] + ".remux.mp4"
+    from . import processing as _P   # تنبل، مثلِ بقیهٔ این ماژول (وابستگیِ PIL)
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-i", path, "-c", "copy", "-movflags", "+faststart", out,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        await asyncio.wait_for(proc.wait(), timeout=900)
-    except Exception:  # noqa: BLE001
+        await asyncio.wait_for(proc.wait(), timeout=_REMUX_TIMEOUT)
+    except BaseException as exc:
+        # پنجمین زیرفرایندی که `kill_orphan` را لازم داشت و نداشت (فاز ۴): روی
+        # تایم‌اوت، `wait_for` فقط `proc.wait()` را لغو می‌کرد و ffmpeg می‌ماند؛ و
+        # `CancelledError` (لغوِ جاب/خاموشیِ ورکر) اصلاً از `except Exception` رد
+        # می‌شد. remuxِ یک فایلِ چندگیگی یعنی دقیقه‌ها I/Oِ دیسک برای جابی که مرده.
+        if proc is not None:
+            _P.kill_orphan(proc)
+        if not isinstance(exc, Exception):
+            raise
         proc = None
     if proc is not None and proc.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
         final = os.path.splitext(path)[0] + ".mp4"
@@ -1424,9 +1451,23 @@ _CD_PLAIN_RE = re.compile(r'filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)', re
 
 
 def _safe_name(name: str) -> str:
-    """نامِ فایلِ امن: بدونِ مسیر، بدونِ کاراکترِ کنترلی، با سقفِ طول."""
-    name = unquote((name or "").strip().strip('"').replace("\\", "/").split("/")[-1])
-    name = re.sub(r'[\x00-\x1f<>:"|?*]+', "", name).strip(" .")
+    """نامِ فایلِ امن: اول decode، بعد حذفِ مسیر، بدونِ کاراکترِ کنترلی، با سقفِ طول.
+
+    **ترتیب باربر است:** `unquote` باید **پیش از** جداکردنِ مسیر انجام شود. فرمِ
+    قبلی اول `split("/")[-1]` می‌زد و بعد unquote می‌کرد، پس `%2F`/`%5C` از split
+    رد می‌شدند و بعد به `/`/`\\` باز می‌شدند و یک مسیرِ مطلق می‌ساختند — که در
+    `os.path.join(workdir, name)` کلِ workdir را دور می‌انداخت (نوشتنِ فایل بیرونِ
+    پوشهٔ کار، با محتوای سرورِ مخرب). پاسِ تکراریِ unquote double-encoding
+    (`%252f`) را هم می‌بندد، و `/`/`\\` در regexِ پایانی تورِ دومِ حذفِ جداکننده است.
+    """
+    name = (name or "").strip().strip('"')
+    for _ in range(3):                        # تا decodeِ تثبیت‌شده (double-encoding)
+        dec = unquote(name)
+        if dec == name:
+            break
+        name = dec
+    name = name.replace("\\", "/").split("/")[-1]     # حالا جداکردنِ مسیر امن است
+    name = re.sub(r'[\x00-\x1f<>:"|?*/\\]+', "", name).strip(" .")
     if len(name) > 120:                       # پسوند را نگه دار، تنه را کوتاه کن
         stem, ext = os.path.splitext(name)
         name = stem[:120 - len(ext)] + ext
@@ -1557,7 +1598,12 @@ async def download_direct(url: str, workdir: str, opts: dict | None = None,
             if max_bytes and total > max_bytes:
                 raise DirectTooLarge(total, max_bytes)
             name = direct_filename(str(resp.url), cd, ct)
-            out = os.path.join(workdir, name)
+            # تورِ دومِ مهار: حتی اگر نامْ جداکننده‌ای از قلم انداخته باشد، خروجی
+            # باید قطعاً داخلِ workdir بنشیند (دفاع در عمق برای فرارِ مسیر).
+            base = os.path.basename(name).strip(" .") or "download"
+            out = os.path.join(workdir, base)
+            if not os.path.realpath(out).startswith(os.path.realpath(workdir) + os.sep):
+                raise RuntimeError("unsafe output path")
             got, last_pct = 0, -1
             with open(out, "wb") as fh:
                 async for chunk in resp.content.iter_chunked(_DIRECT_CHUNK):
@@ -2736,6 +2782,9 @@ def _gallery_caption(workdir: str) -> str | None:
     return None
 
 
+GALLERY_MAX_ITEMS = 20
+
+
 async def download_gallerydl(url: str, workdir: str, opts: dict,
                              progress=None, cancel=None) -> tuple[list[str], str | None]:
     """دانلودِ گالری/کاروسل با gallery-dl → (فهرستِ فایل‌ها, کپشنِ پست بدونِ هشتگ).
@@ -2750,7 +2799,11 @@ async def download_gallerydl(url: str, workdir: str, opts: dict,
     ck = _writable_cookie(opts.get("cookies"))
     outdir = os.path.join(workdir, "gl")
     os.makedirs(outdir, exist_ok=True)
-    cmd = [GALLERY_DL, "-D", outdir, "--write-metadata"]  # سایدکارِ .json برای کپشن
+    # `--range`: لینکِ پروفایل/بورد/مجموعه کلِ محتوا را می‌کشید (و با کوکیِ اکانت،
+    # یعنی همان الگوی مصرفی که سشن را می‌سوزاند). ۲۰ = سقفِ کاروسلِ اینستاگرام، پس
+    # هیچ پستِ واقعی‌ای کوتاه نمی‌شود.
+    cmd = [GALLERY_DL, "-D", outdir, "--write-metadata",  # سایدکارِ .json برای کپشن
+           "--range", f"1-{GALLERY_MAX_ITEMS}"]
     if opts.get("proxy"):
         cmd += ["--proxy", opts["proxy"]]
     if opts.get("user_agent"):   # هویتِ سشن: UAِ ثابتِ همان اکانت

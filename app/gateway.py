@@ -15,10 +15,13 @@ from urllib.parse import quote
 from aiohttp import web
 from sqlalchemy import select
 
+from . import settings_store
 from .bot import create_bot
 from .config import settings
+from .crud import link_expired
 from .db import Sessionmaker
-from .models import File
+from .filetypes import mime_from_name
+from .models import File, User
 
 log = logging.getLogger("telabzar.gateway")
 
@@ -29,9 +32,28 @@ _meta_cache: dict[str, tuple[float, str, str | None, str]] = {}
 
 
 async def _lookup(token: str) -> File | None:
+    """فایلِ این توکن — **فقط اگر** لینک هنوز معتبر باشد.
+
+    پیش از فاز ۴ توکن هرگز منقضی/باطل نمی‌شد: لینکی که یک‌بار جایی پخش شد برای
+    همیشه کار می‌کرد، حتی بعد از اینکه ادمین مالکش را **بلاک** کرد (یعنی بلاک‌کردن
+    توزیعِ محتوایی را که دلیلِ بلاک بود متوقف نمی‌کرد). حالا دو شرط، هر دو در همین
+    یک‌جا که هر درخواستِ `/dl` و `/s` از آن رد می‌شود:
+    مالکِ بلاک‌شده → ۴۰۴، و گذشتنِ `dl_link_days` از آخرین درخواستِ لینک → ۴۰۴.
+    کشِ `_META_TTL` (۱۲۰ ثانیه) کرانِ تأخیرِ هر دو است.
+    """
     async with Sessionmaker() as session:
-        result = await session.execute(select(File).where(File.dl_token == token))
-        return result.scalar_one_or_none()
+        row = (await session.execute(
+            select(File, User.is_blocked).join(User, User.id == File.owner_id)
+            .where(File.dl_token == token))).first()
+    if row is None:
+        return None
+    file, blocked = row
+    if blocked:
+        return None
+    days = await settings_store.get_int("dl_link_days", settings.dl_link_days)
+    if link_expired(file.dl_token_at, days):
+        return None
+    return file
 
 
 async def _resolve(request: web.Request, token: str) -> tuple[str, str | None, str]:
@@ -52,12 +74,32 @@ async def _resolve(request: web.Request, token: str) -> tuple[str, str | None, s
     if not path or not os.path.exists(path):
         raise web.HTTPNotFound()
     name = file.name or "file"
+    # ردیف‌های بی‌mime (هر فایلِ دانلودی/spawn تا فاز ۴) از فاز ۱ همیشه attachment
+    # می‌شدند، پس لینکِ `/s/`ِ ویدیوی دانلودی به‌جای پخش دانلود می‌شد. حدس از نام
+    # امن است چون نتیجه باز از `_is_inline_safe` رد می‌شود (`x.html` attachment می‌ماند).
+    mime = file.mime or mime_from_name(name)
     if len(_meta_cache) > 2048:  # پاک‌سازیِ ورودی‌های منقضی وقتی کش بزرگ شد
         for k, v in list(_meta_cache.items()):
             if v[0] <= now:
                 _meta_cache.pop(k, None)
-    _meta_cache[token] = (now + _META_TTL, path, file.mime, name)
-    return path, file.mime, name
+    _meta_cache[token] = (now + _META_TTL, path, mime, name)
+    return path, mime, name
+
+
+# فقط این انواع inline سرو می‌شوند؛ هرچیزِ دیگر (از جمله text/html و
+# image/svg+xml که اسکریپت اجرا می‌کنند) به attachment اجبار می‌شود. گیت‌وی و پنل
+# روی یک دامنه‌اند (پورتِ متفاوت = همان site)، پس یک فایلِ HTMLِ inline یعنی
+# اجرای اسکریپت روی مبدأی که کوکیِ نشستِ پنل را هم می‌بیند. mimeِ خالی هم
+# attachment می‌شود (نوعِ ناشناخته sniff نشود).
+_INLINE_PREFIXES = ("video/", "audio/", "image/")
+_INLINE_DENY = {"image/svg+xml", "image/svg"}
+
+
+def _is_inline_safe(mime: str | None) -> bool:
+    m = (mime or "").split(";")[0].strip().lower()
+    if not m or m in _INLINE_DENY:
+        return False
+    return m.startswith(_INLINE_PREFIXES)
 
 
 async def _serve(request: web.Request, *, inline: bool) -> web.StreamResponse:
@@ -65,10 +107,14 @@ async def _serve(request: web.Request, *, inline: bool) -> web.StreamResponse:
     if not token or len(token) > 64:
         raise web.HTTPNotFound()
     path, mime, name = await _resolve(request, token)
-    disp = "inline" if inline else "attachment"
+    # inline فقط برای انواعِ امن؛ بقیه حتی روی مسیرِ /s/ هم attachment می‌شوند.
+    disp = "inline" if (inline and _is_inline_safe(mime)) else "attachment"
     # RFC 5987 برای نام‌های غیر-ASCII (فارسی)
     headers = {"Content-Disposition": f"{disp}; filename*=UTF-8''{quote(name)}",
-               "Cache-Control": "private, max-age=600"}
+               "Cache-Control": "private, max-age=600",
+               "X-Content-Type-Options": "nosniff",
+               # محتوای کاربر؛ اجرای هر اسکریپت/جاسازیِ مبدأ-متقاطع ممنوع.
+               "Content-Security-Policy": "sandbox; default-src 'none'"}
     resp = web.FileResponse(path, headers=headers)  # FileResponse خودش Range را می‌فهمد
     if mime:
         resp.content_type = mime
@@ -115,6 +161,10 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # تا `dl_link_days`ِ پنل بدونِ ری‌استارت به این پروسه هم برسد (بدونِ store،
+    # `get_int` پیش‌فرضِ env را می‌دهد و تغییرِ پنل این‌جا دیده نمی‌شد). در `main`
+    # است نه `build_app`، چون تست‌ها `build_app` را می‌سازند و store سراسری است.
+    settings_store.init_store(settings.redis_url)
     ctx = _ssl_context()
     log.info("Gateway on :%s  (tls=%s, base=%s)",
              settings.gateway_port, bool(ctx), settings.public_base or "—")

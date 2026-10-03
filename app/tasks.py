@@ -25,7 +25,7 @@ from . import processing as P
 from . import settings_store
 from . import textstore
 from .cards import (
-    _quality_label, message_media_id, meta_editor_view, move_card_below, progress_note,
+    _quality_label, message_media_id, message_media_mime, meta_editor_view, move_card_below, progress_note,
     send_card, set_card_note, update_card,
 )
 from .config import settings
@@ -57,8 +57,19 @@ _PROGRESS_LABEL = {
 }
 
 
+_REAL_EXT = re.compile(r"\.[A-Za-z0-9]{1,5}")
+
+
 def _safe_stem(name: str | None, default: str = "file") -> str:
-    stem = Path(name or default).stem or default
+    """نامِ فایل بدونِ پسوند، امن برای مسیر.
+
+    فقط پسوندِ **واقعی** برداشته می‌شود. `Path.stem` هر چیزی بعد از آخرین نقطه
+    را پسوند می‌داند، پس عنوانِ بی‌پسوندی مثلِ «Mr. Brightside» یا «Track 01. Intro»
+    به «Mr»/«Track 01» کوتاه می‌شد.
+    """
+    name = os.path.basename(name or "") or default
+    base, ext = os.path.splitext(name)
+    stem = base if (base and _REAL_EXT.fullmatch(ext)) else name
     stem = re.sub(r"[^\w.\-]+", "_", stem)[:60]
     return stem or default
 
@@ -83,6 +94,22 @@ def _fail_note(lang: str, exc: Exception) -> str:
     if reason:
         note += f"\n<code>{escape(reason)}</code>"
     return note
+
+
+async def _card_below(bot: Bot, chat_id: int, card_mid: int, file: File, lang: str) -> None:
+    """کارت را زیرِ خروجی ببر؛ اگر نشد همان‌جا به‌روزش کن.
+
+    این گام بعد از تحویلِ **موفقِ** خروجی است و فقط آرایشِ چت است. پیش از فاز
+    ۲ِ ممیزی بی‌گارد صدا زده می‌شد: یک خطای شبکه در `send_card` از شاخهٔ `else`ِ
+    `run_op` بیرون می‌زد، `finally` جاب را با وضعیتِ **`running`** و
+    `finished_at`ِ ست‌شده commit می‌کرد، و کاربر کارتی بی‌منو داشت.
+    """
+    try:
+        await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
+    except Exception:  # noqa: BLE001
+        log.warning("moving the card below the output failed; updating in place",
+                    exc_info=True)
+        await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
 
 
 #: کلیدهای نتیجهٔ `_do_op` که بایتِ تازه‌ای به تلگرام می‌فرستند. هر کلیدِ دیگری
@@ -346,11 +373,11 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
                 cover_path = cp
         if not tags and not cover_path:
             raise RuntimeError("no metadata to write")
-        ext = os.path.splitext(file.name or "audio.mp3")[1] or ".mp3"
-        out = os.path.join(workdir, f"{stem}{ext}")
-        await P.write_audio_metadata(inpath, out, tags, cover_path=cover_path, cancel=cancel)
-        return {"path": out, "filename": f"{stem}{ext}", "label": t(lang, "cl_meta_edit"),
-                "kind": "audio", "new_meta": tags}
+        # پسوند را `write_audio_metadata` از کدکِ واقعی تعیین می‌کند، نه از نام.
+        out = await P.write_audio_metadata(inpath, os.path.join(workdir, stem), tags,
+                                           cover_path=cover_path, cancel=cancel)
+        return {"path": out, "filename": stem + os.path.splitext(out)[1],
+                "label": t(lang, "cl_meta_edit"), "kind": "audio", "new_meta": tags}
 
     if op == "to_pdf":
         src = os.path.join(workdir, os.path.basename(file.name or "input"))
@@ -443,7 +470,7 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
     if op == "transcribe":
         mode = "srt" if args.get("mode") == "srt" else "txt"
         model = await settings_store.get_str("whisper_model", settings.whisper_model)
-        text = (await P.transcribe_audio(inpath, model, mode)).strip()
+        text = (await P.transcribe_audio(inpath, model, mode, cancel=cancel)).strip()
         if not text:
             return {"note_only": True, "label": t(lang, "asr_empty")}
         if mode == "srt":  # زیرنویس همیشه به‌صورتِ فایلِ .srt
@@ -510,7 +537,7 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         # خروجی PNGِ شفاف است؛ به‌صورتِ «سند» تحویل می‌دهیم تا آلفا حفظ شود
         # (کارتِ عکس آن را به JPEG تخت می‌کرد).
         out = os.path.join(workdir, f"{stem}-nobg.png")
-        await P.remove_background(inpath, out)
+        await P.remove_background(inpath, out, cancel=cancel)
         return {"send_media": {"as": "document", "path": out, "filename": f"{stem}-nobg.png"},
                 "label": t(lang, "cl_bg_remove")}
 
@@ -685,6 +712,8 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     changelog=[],
                 )
                 await _refresh_media_meta(newf, p)  # مدت/ابعاد از خودِ فایل (وگرنه ۰:۰۰)
+                # ردیف **پیش از** ارسال commit می‌شود تا دکمه‌های کارتِ تازه از همان
+                # لحظه کار کنند (هندلرها با `ref` دنبالِ ردیف می‌گردند).
                 session.add(newf)
                 await session.commit()
                 try:
@@ -699,11 +728,21 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                         newf.file_id = fid
                     if fuid:
                         newf.file_unique_id = fuid
-                except Exception:  # noqa: BLE001
+                    newf.mime = message_media_mime(sent, newf.name)
+                except Exception as exc:  # noqa: BLE001
+                    # پیش از فاز ۲ِ ممیزی این‌جا فقط لاگ می‌شد و جاب `done` می‌گرفت،
+                    # برچسب در changelog می‌نشست و ردیفِ `files` با `file_id=""` یتیم
+                    # می‌ماند — موفقیتِ کاذب برای فایلی که هرگز نرسید.
                     log.exception("job %s spawn-card send failed", job_id)
-                file.changelog = list(file.changelog or []) + [res["label"]]
-                await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
-                job.status = "done"
+                    await session.delete(newf)
+                    job.status = "failed"
+                    job.error = str(exc)[:500]
+                    await set_card_note(bot, chat_id, card_mid, file, lang,
+                                        note=_fail_note(lang, exc), keyboard=True)
+                else:
+                    file.changelog = list(file.changelog or []) + [res["label"]]
+                    await set_card_note(bot, chat_id, card_mid, file, lang, keyboard=True)
+                    job.status = "done"
             elif res.get("editor") is not None:
                 # خواندنِ متادیتای فعلی → ذخیره روی فایل و رندرِ ویرایشگر درجا
                 file.meta = res["editor"]
@@ -726,33 +765,55 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                         await bot.send_photo(chat_id, src)
                     else:
                         await bot.send_document(chat_id, src)
-                    file.changelog = list(file.changelog or []) + [res["label"]]
-                    await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
-                    job.status = "done"
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ بدونِ بن‌بست
                     log.exception("job %s artifact delivery failed", job_id)
                     job.status = "failed"
                     job.error = str(exc)[:500]
                     await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
+                else:
+                    # جابه‌جاییِ کارت بیرونِ `try`: خروجی رسیده، پس شکستِ آرایشِ چت
+                    # نباید جاب را «ناموفق» بخواند.
+                    file.changelog = list(file.changelog or []) + [res["label"]]
+                    await _card_below(bot, chat_id, card_mid, file, lang)
+                    job.status = "done"
             elif res.get("files") is not None:
                 # خروجیِ چندفایلی (استخراج) → فایل‌ها بالا، کارتِ تازه پایین (چت تمیز)
+                # هر فایل جدا فرستاده می‌شود و شکستِ یکی بقیه را متوقف نمی‌کند؛ ولی
+                # جاب فقط وقتی `done` است که **همه** رسیده باشند. پیش از فاز ۲ِ ممیزی
+                # شکست‌ها فقط لاگ می‌شدند و جاب حتی با صفر فایلِ رسیده `done` می‌گرفت.
+                failed_n, last_exc = 0, None
                 for p in res["files"]:
                     try:
                         await bot.send_document(chat_id, FSInputFile(p, filename=os.path.basename(p)))
-                    except Exception:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001
+                        failed_n, last_exc = failed_n + 1, exc
                         log.warning("sending extracted file failed: %s", p)
-                file.changelog = list(file.changelog or []) + [res["label"]]
-                await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
-                job.status = "done"
+                if failed_n:
+                    total_n = len(res["files"])
+                    job.status = "failed"
+                    job.error = f"{failed_n} of {total_n} files not sent: {last_exc}"[:500]
+                    await set_card_note(
+                        bot, chat_id, card_mid, file, lang, keyboard=True,
+                        note=_fail_note(lang, RuntimeError(
+                            f"{failed_n}/{total_n} not sent: {last_exc}")))
+                else:
+                    file.changelog = list(file.changelog or []) + [res["label"]]
+                    await _card_below(bot, chat_id, card_mid, file, lang)
+                    job.status = "done"
             elif res.get("message") is not None:
                 # نتیجهٔ متنی (لیستِ آرشیو) → پیام بالا، کارتِ تازه پایین
                 try:
                     await bot.send_message(chat_id, res["message"])
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     log.warning("sending listing failed")
-                file.changelog = list(file.changelog or []) + [res["label"]]
-                await move_card_below(bot, chat_id, card_mid, file, lang, collapsed=False)
-                job.status = "done"
+                    job.status = "failed"
+                    job.error = str(exc)[:500]
+                    await set_card_note(bot, chat_id, card_mid, file, lang,
+                                        note=_fail_note(lang, exc), keyboard=True)
+                else:
+                    file.changelog = list(file.changelog or []) + [res["label"]]
+                    await _card_below(bot, chat_id, card_mid, file, lang)
+                    job.status = "done"
             elif res.get("note_only"):
                 # عملیاتِ بررسی (اسکن) → فقط لاگ + کپشن؛ رسانه دست‌نخورده، درجا
                 file.changelog = list(file.changelog or []) + [res["label"]]
@@ -761,7 +822,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             else:
                 # عملیاتِ رسانه‌ساز → فیلدهای فایل را عوض کن و کارت را درجا به‌روزرسانی کن
                 orig = (file.name, file.size, file.kind, list(file.changelog or []),
-                        file.width, file.height, file.duration)
+                        file.width, file.height, file.duration, file.mime)
                 outpath = res["path"]
                 file.name = res["filename"]
                 if res.get("kind"):
@@ -797,13 +858,16 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                         file.file_id = fid
                     if fuid:
                         file.file_unique_id = fuid
+                    # mime همان بایت‌های تازه: بدونِ این، گیت‌وی PDFِ تبدیل‌شده به TXT را
+                    # هنوز با `application/pdf` سرو می‌کرد (موردِ ۱۴).
+                    file.mime = message_media_mime(sent, file.name)
                     if res.get("new_meta"):  # متادیتای فعلی را با تگ‌های نوشته‌شده به‌روز کن
                         file.meta = {**(file.meta or {}), **res["new_meta"]}
                     job.status = "done"
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ فایل را برگردان
                     log.exception("job %s delivery failed", job_id)
                     (file.name, file.size, file.kind, file.changelog,
-                     file.width, file.height, file.duration) = orig
+                     file.width, file.height, file.duration, file.mime) = orig
                     job.status = "failed"
                     job.error = str(exc)[:500]
                     await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)

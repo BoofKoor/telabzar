@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import secrets
 import weakref
 from datetime import datetime, timezone
@@ -14,11 +15,11 @@ from aiogram.types import CallbackQuery, Message
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import nodes, settings_store
-from ..cards import card_caption, meta_editor_view, set_card_note, update_card
+from .. import counters, nodes, settings_store
+from ..cards import _fmt_dur, card_caption, meta_editor_view, set_card_note, update_card
 from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Spd, Tr, Wm
 from ..config import settings
-from ..crud import get_file_by_ref, get_owned_job
+from ..crud import get_file_by_ref, get_owned_job, link_expired
 from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
@@ -103,7 +104,15 @@ async def _max_mb() -> int:
 
 
 async def _too_large(size: int | None) -> bool:
-    return bool(size and size > (await _max_mb()) * 1024 * 1024)
+    """سقفِ ≤۰ یعنی **بی‌سقف** — همان قراردادِ تثبیت‌شدهٔ «۰ = خاموش» (`BOUNDS`).
+
+    پیش از فاز ۴ `max_file_mb = 0` از اعتبارسنجی رد می‌شد (کفِ `BOUNDS` صفر است)
+    و بعد این‌جا به `size > 0` تبدیل می‌شد: **هر** عملیاتی روی **هر** فایلی
+    «فایل بزرگ است (حداکثر 0 MB)» می‌گرفت. ادمینی که صفر را «بی‌سقف» خوانده بود
+    — مثلِ `vjoin_max_mb`، `ck_cap_*` و بقیه — کلِ ربات را بی‌صدا خاموش می‌کرد.
+    """
+    cap = await _max_mb()
+    return bool(size and cap > 0 and size > cap * 1024 * 1024)
 
 
 async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
@@ -114,19 +123,15 @@ async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
     rate = await settings_store.get_int("rate_per_min", settings.rate_per_min)
     quota = await settings_store.get_int("daily_op_quota", settings.daily_op_quota)
     if rate > 0:
-        rkey = f"rate:{user_id}"
-        r = await pool.incr(rkey)
-        if r == 1:
-            await pool.expire(rkey, 60)
+        # incr_window: TTL گم‌شده ترمیم می‌شود — وگرنه مرگِ بینِ INCR و EXPIRE
+        # این کلید را جاودان و کاربر را برای همیشه «زیادی سریع» می‌کرد.
+        r = await counters.incr_window(pool, f"rate:{user_id}", 60)
         if r > rate:
             return "rate"
 
     if quota > 0:
         day = datetime.now(timezone.utc).strftime("%Y%m%d")
-        qkey = f"quota:{user_id}:{day}"
-        q = await pool.incr(qkey)
-        if q == 1:
-            await pool.expire(qkey, 90000)  # ~۲۵ ساعت
+        q = await counters.incr_window(pool, f"quota:{user_id}:{day}", 90000)  # ~۲۵ ساعت
         if q > quota:
             return "quota"
     return None
@@ -204,9 +209,7 @@ async def _check_dl_op_budget(pool: ArqRedis, user_id: int, file, op: str) -> bo
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
     key = f"dlop:{user_id}:{day}"
     try:
-        used = await pool.incrby(key, minutes)  # INCRBY یک عددِ int می‌دهد (نه bytes)
-        if used == minutes:
-            await pool.expire(key, 90000)
+        used = await counters.incr_window(pool, key, 90000, minutes)
         if used > cap:
             await pool.decrby(key, minutes)  # ردشد → بازپرداخت تا بودجه دقیق بماند
             return True
@@ -316,7 +319,9 @@ def _parse_time(s: str) -> float | None:
         sec = parts[0] * 3600 + parts[1] * 60 + parts[2]
     else:
         return None
-    return sec if sec >= 0 else None
+    # `float()` «inf»/«1e999» را هم می‌پذیرد؛ بازهٔ `0-inf` بدونِ این گارد تا ffmpeg
+    # می‌رفت. `nan` از قبل با `>= 0` رد می‌شد.
+    return sec if sec >= 0 and math.isfinite(sec) else None
 
 
 def _parse_range(s: str) -> tuple[float, float] | None:
@@ -927,9 +932,15 @@ async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
     if not base:
         await cq.answer(t(lang, "link_unconfigured"), show_alert=True)
         return
-    if not file.dl_token:
+    # لینک از **آخرین** درخواستِ مالک `dl_link_days` روز عمر می‌کند. توکنِ منقضی
+    # عوض می‌شود (نه تمدید): هر کسی که نشانیِ قدیمی را از جایی گرفته بود، با تمدیدِ
+    # مالک دوباره دسترسی نمی‌گیرد.
+    days = await settings_store.get_int("dl_link_days", settings.dl_link_days)
+    now = datetime.now(timezone.utc)
+    if not file.dl_token or link_expired(file.dl_token_at, days, now):
         file.dl_token = secrets.token_urlsafe(18)[:24]
-        await session.commit()
+    file.dl_token_at = now
+    await session.commit()
     dl, stream = f"{base}/dl/{file.dl_token}", f"{base}/s/{file.dl_token}"
     try:
         await cq.message.edit_caption(
@@ -1096,6 +1107,15 @@ async def op_trim_recv(message: Message, state: FSMContext, session: AsyncSessio
     if rng is None:  # نامعتبر → همان‌جا بمان و دوباره بپرس
         await set_card_note(message.bot, card_chat, card_mid, file, lang,
                             note=t(lang, "trim_bad"), keyboard=cancel_kb(file.ref, lang))
+        return
+    if file.duration and rng[0] >= file.duration:
+        # بازه بعد از پایانِ فایل → ffmpeg بی‌خطا یک فایلِ **خالی** می‌ساخت و جاب
+        # «انجام شد» می‌گرفت. مدتِ تلگرام عددِ صحیح است، پس دمِ زیرِ یک‌ثانیه‌ای
+        # ممکن است این‌جا رد شود؛ چکِ دقیق (اعشاری) در `processing.trim_*` است و
+        # همان حالتی را می‌گیرد که مدتِ کارت نامعلوم است.
+        await set_card_note(message.bot, card_chat, card_mid, file, lang,
+                            note=t(lang, "trim_past_end", dur=_fmt_dur(file.duration)),
+                            keyboard=cancel_kb(file.ref, lang))
         return
     await state.clear()
     if user is not None:

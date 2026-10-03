@@ -415,7 +415,7 @@ async def test_the_probe_phase_still_costs_exactly_what_it_did(
         "note_spend هنوز صدا زده نمی‌شود — این رفع نشده و نباید بی‌صدا رفع شود"
     # ۲) از سقفِ هم‌زمانی رد شد
     assert await dl_active.count(redis) == 0, "dl_active هنوز شامل probe نیست"
-    # ۳) از `_charge` رد شد — همان حفرهٔ سهمیه
+    # ۳) از شارژِ سهمیه (`_reserve`) رد شد — همان حفرهٔ سهمیه
     assert await redis.exists(f"dlq:cnt:{payload['tg_user_id']}:{TD._today()}") == 0
     assert await redis.exists(f"dlq:cd:{payload['tg_user_id']}") == 0
     # ۴) و تنها کلیدهای تازه مالِ خودِ اندازه‌گیری‌اند
@@ -427,7 +427,7 @@ async def test_a_pick_still_charges_and_enqueues(redis, monkeypatch):
     """نیمهٔ دومِ همان تریپ‌وایر، از **مسیرِ کامل**: ctxِ زنده تا enqueue.
 
     تست‌های بالا عمداً روی مسیرِ منقضی می‌روند (فقط شمارنده را ادعا می‌کنند)؛
-    این یکی تا ته می‌رود تا ثابت کند افزودنِ شمارنده نه `_charge` را جابه‌جا
+    این یکی تا ته می‌رود تا ثابت کند افزودنِ شمارنده نه شارژِ سهمیه را جابه‌جا
     کرده نه جابِ fetch را.
     """
     jobs: list[dict] = []
@@ -446,7 +446,7 @@ async def test_a_pick_still_charges_and_enqueues(redis, monkeypatch):
 
     assert (await _counts(redis))[PS.PICK] == 1
     assert await redis.exists(f"dlq:cnt:42:{TD._today()}") == 1, \
-        "`_charge` نباید با افزودنِ شمارنده جابه‌جا شده باشد"
+        "شارژِ سهمیه (`_reserve`) نباید با افزودنِ شمارنده جابه‌جا شده باشد"
     assert [j["phase"] for j in jobs] == ["fetch"], "جابِ fetch باید مثلِ قبل صف شود"
     assert jobs[0]["selector"] == "720"
 

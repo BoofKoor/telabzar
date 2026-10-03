@@ -67,9 +67,15 @@ def _fmt(template: str, kwargs: dict) -> str | None:
     """فرمت با kwargs؛ None اگر شکست (تا بتوان به پیش‌فرض برگشت)."""
     if not kwargs:
         return template
+    # override‌های **ازپیش‌ذخیره‌شده** (پیش از فاز ۴ یا بستهٔ قدیمی) هنوز می‌توانند
+    # `{n.attr}`/`{n[i]}`/`{n:>200000000}` داشته باشند؛ اعتبارسنجیِ نوشتن به آن‌ها
+    # نمی‌رسد. پس این‌جا هم رد می‌شوند و `t()` به پیش‌فرض برمی‌گردد. و هر استثنا —
+    # نه فقط سه‌تای قبلی — `None` است: `TypeError`/`AttributeError` هندلر را می‌کشت.
+    if textstore.unsafe_placeholder(template):
+        return None
     try:
         return template.format(**kwargs)
-    except (KeyError, IndexError, ValueError):
+    except Exception:  # noqa: BLE001 — ربات هرگز به‌خاطرِ یک متن کرش نکند
         return None
 
 
