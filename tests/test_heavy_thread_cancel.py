@@ -30,8 +30,9 @@ from app.exceptions import ProcessingCancelled
 class Probe:
     """کارِ جایگزینِ thread: چند «قطعه»، هرکدام ۵۰ms، با شمارشِ هم‌زمانی."""
 
-    def __init__(self, segments: int = 40) -> None:
+    def __init__(self, segments: int = 40, honours_stop: bool = True) -> None:
         self.segments = segments
+        self.honours_stop = honours_stop
         self.live = 0
         self.max_live = 0
         self.done_segments: list[int] = []
@@ -46,7 +47,7 @@ class Probe:
         n = 0
         try:
             for _ in range(self.segments):
-                if stop is not None and stop.is_set():
+                if self.honours_stop and stop is not None and stop.is_set():
                     raise P._Stopped() if hasattr(P, "_Stopped") else RuntimeError("stopped")
                 time.sleep(0.05)
                 n += 1
@@ -76,9 +77,16 @@ def fresh_semaphores(monkeypatch):
 
 @pytest.mark.parametrize("op", sorted(OPS), ids=sorted(OPS))
 async def test_a_cancelled_job_keeps_the_slot_until_its_thread_ends(monkeypatch, op):
-    """لغوِ جاب (مثلِ `job_timeout`) نباید مدلِ دوم را کنارِ اولی راه بیندازد."""
+    """لغوِ جاب (مثلِ `job_timeout`) نباید مدلِ دوم را کنارِ اولی راه بیندازد.
+
+    کارِ thread این‌جا عمداً `stop` را **نمی‌پرسد**: rembg یک فراخوانیِ یکپارچه است و
+    Whisper هم حینِ بارگذاریِ مدل/VAD تا اولین قطعه نمی‌پرسد. نسخهٔ اولِ این تست
+    `stop` را می‌پرسید و thread ظرفِ ۵۰ms می‌ایستاد، پس سابوتاژِ «قفل را روی لغو آزاد
+    کن» پنجرهٔ هم‌پوشانی را به چند میلی‌ثانیه می‌رساند و **نگرفت** — دفترچهٔ سابوتاژ
+    گرفتش، نه بازخوانی. ادعای درست دربارهٔ threadی است که نمی‌تواند زود بایستد.
+    """
     fn_name, _sem, call = OPS[op]
-    probe = Probe(segments=20)
+    probe = Probe(segments=20, honours_stop=False)
     monkeypatch.setattr(P, fn_name, probe)
     first = asyncio.create_task(call())
     await asyncio.sleep(0.15)                              # thread واقعاً شروع کرده
