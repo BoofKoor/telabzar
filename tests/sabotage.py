@@ -2173,15 +2173,15 @@ CASES: list[dict] = [
 
     {"name": "panel: merge silently becomes replace",
      "path": "app/admin_web.py",
-     "old": "    await textstore.set_texts(code, rv.entries, replace=replace)",
-     "new": "    await textstore.set_texts(code, rv.entries, replace=True)",
+     "old": "    await textstore.set_texts(code, rv.overrides, replace=replace, clear=rv.defaulted)",
+     "new": "    await textstore.set_texts(code, rv.overrides, replace=True, clear=rv.defaulted)",
      "target": _LNG,
      "expect": "test_merge_leaves_the_keys_the_pack_does_not_mention"},
 
     {"name": "panel: replace silently becomes merge",
      "path": "app/admin_web.py",
-     "old": "    await textstore.set_texts(code, rv.entries, replace=replace)",
-     "new": "    await textstore.set_texts(code, rv.entries, replace=False)",
+     "old": "    await textstore.set_texts(code, rv.overrides, replace=replace, clear=rv.defaulted)",
+     "new": "    await textstore.set_texts(code, rv.overrides, replace=False, clear=rv.defaulted)",
      "target": _LNG,
      "expect": "test_replace_drops_the_keys_the_pack_does_not_mention"},
 
@@ -2536,7 +2536,7 @@ CASES: list[dict] = [
 
     {"name": "yt-auth: a private video counts against the exit again (probe)",
      "path": "app/tasks_download.py",
-     "old": ("            if kind not in _YT_NOT_ACCOUNT_KINDS:\n"
+     "old": ("            if not _says_nothing_about_exit(msg, kind):\n"
              "                # ویدیوی خصوصی/سنی دربارهٔ خروجی"),
      "new": ("            if True:\n"
              "                # ویدیوی خصوصی/سنی دربارهٔ خروجی"),
@@ -2580,7 +2580,7 @@ CASES: list[dict] = [
 
     {"name": "yt-auth: a private video counts against the exit again (fetch)",
      "path": "app/tasks_download.py",
-     "old": ("            if kind not in _YT_NOT_ACCOUNT_KINDS:\n"
+     "old": ("            if not _says_nothing_about_exit(msg, kind):\n"
              "                await ck.note_exit(redis, settings.node_id, platform, ok=False)\n"
              "            if exit_bad:"),
      "new": ("            if True:\n"
