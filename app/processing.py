@@ -144,7 +144,8 @@ def kill_orphan(proc) -> None:
 
     **مکانیزمِ یکتای «یتیم نگذار» برای هر چهار زیرفرایندِ پروژه** — ffmpeg در
     `_run`، و در `downloader`: `_run_dl` (دانلود)، `probe` (فازِ probe) و
-    `_yt_search_candidates` (مسیرِ تطبیقِ اسپاتیفای/اپل). مثلِ
+    `_yt_search_candidates` (مسیرِ تطبیقِ اسپاتیفای/اپل)؛ و از فاز ۴ remuxِ
+    `_ensure_mp4` هم، که پنجمین مسیر با همان باگ بود. مثلِ
     `start_cancel_watcher` عمداً یک پیاده‌سازی است: چهار کپیِ دست‌نویس از یک
     قاعدهٔ ایمنی سرانجام واگرا می‌شوند، و این‌جا از قبل واگرا شده بودند — دو تا
     رفع را گرفتند و دو تا نه.
@@ -301,7 +302,40 @@ def _upright(path: str) -> Image.Image:
     همان دو نسخهٔ دست‌نویسی که §۷ می‌گوید واگرا می‌شوند؛ گاردِ تستی هر
     `Image.open`ِ دیگری را در این ماژول می‌گیرد.
     """
-    return ImageOps.exif_transpose(Image.open(path))
+    return _to_8bit(ImageOps.exif_transpose(Image.open(path)))
+
+
+_SIXTEEN = ("I;16", "I;16L", "I;16B", "I;16N", "I")
+
+
+def _to_8bit(img: Image.Image) -> Image.Image:
+    """حالت‌هایی که هیچ مسیرِ ذخیره‌ای درست حملشان نمی‌کند، همین‌جا ۸ بیتی/RGB می‌شوند.
+
+    دو شکستِ اندازه‌گیری‌شده پیش از فاز ۴ (روی Pillowِ واقعی):
+    * **CMYK** (JPEGِ چاپی/فتوشاپ): `save(..., "PNG")` با «cannot write mode CMYK as
+      PNG» می‌ترکید — تبدیل به PNG و هر چرخش/اندازه‌ای که خروجیِ PNG داشت شکست.
+    * **۱۶ بیتی** (PNGِ خاکستریِ علمی/اسکنر، `I;16`): `convert("RGB")` مقدار را در
+      ۲۵۵ **می‌بُرد** نه مقیاس، پس خروجیِ JPEG تقریباً یکسره سفید بود. حالا با
+      بیشینهٔ واقعیِ بازه مقیاس می‌شود (۶۵۵۳۵ برای ۱۶ بیت؛ اگر تصویر فقط ۰..۲۵۵ را
+      استفاده کرده باشد دست‌نخورده می‌ماند).
+    """
+    if img.mode == "CMYK":
+        return img.convert("RGB")
+    if img.mode in _SIXTEEN:
+        img = img.convert("I")
+        hi = img.getextrema()[1] or 0
+        if hi > 255:
+            k = 255 / (65535 if hi <= 65535 else hi)
+            img = img.point(lambda v: v * k)
+        return img.convert("L")
+    return img
+
+
+def _alpha_of(img: Image.Image) -> Image.Image | None:
+    """کانالِ شفافیت اگر تصویر واقعاً دارد، وگرنه None."""
+    if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+        return img.convert("RGBA").getchannel("A")
+    return None
 
 
 def _compress_image_sync(inp: str, out: str) -> None:
@@ -370,10 +404,18 @@ async def rotate_image(inp: str, out: str, mode: str) -> None:
 
 
 def _enhance_image_sync(inp: str, out: str) -> None:
-    img = _upright(inp).convert("RGB")
+    # آلفا جدا نگه داشته و بعد برگردانده می‌شود: `convert("RGB")`ِ خالی شفافیت را
+    # دور می‌ریخت و پیکسل‌های شفاف (که RGBشان معمولاً صفر است) **سیاه** می‌شدند —
+    # «بهبود» روی یک لوگوی PNG پس‌زمینهٔ سیاه می‌ساخت. JPEG همچنان روی سفید مسطح
+    # می‌شود (`_save_image`).
+    src = _upright(inp)
+    alpha = _alpha_of(src)
+    img = src.convert("RGB")
     img = ImageOps.autocontrast(img, cutoff=1)
     img = ImageEnhance.Color(img).enhance(1.08)
     img = ImageEnhance.Sharpness(img).enhance(1.6)
+    if alpha is not None:
+        img.putalpha(alpha)
     _save_image(img, out)
 
 

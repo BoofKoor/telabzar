@@ -150,10 +150,23 @@ class Review:
     untranslated: list[str] = field(default_factory=list)
     changed: int = 0
     same: int = 0
+    #: کلیدهایی که مقدارشان **عیناً** پیش‌فرضِ کدِ همین زبان است — override نمی‌شوند.
+    defaulted: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return not self.errors
+
+    @property
+    def overrides(self) -> dict[str, str]:
+        """آنچه واقعاً باید در `text_overrides` نوشته شود.
+
+        مقدارِ برابر با پیش‌فرض نوشته نمی‌شود، وگرنه یک رفت‌وبرگشتِ ساده (export و
+        بعد import بی‌تغییر) ۲۱۴ ردیف می‌ساخت که پیش‌فرض را **منجمد** می‌کرد: هر
+        اصلاحِ بعدیِ `locales/*.py` دیگر به کاربر نمی‌رسید، چون override برنده است.
+        """
+        skip = set(self.defaulted)
+        return {k: v for k, v in self.entries.items() if k not in skip}
 
     @property
     def total(self) -> int:
@@ -175,6 +188,7 @@ def review(
     *,
     source_texts: dict[str, str],
     current: dict[str, str],
+    defaults: dict[str, str] | None = None,
 ) -> Review:
     """بسته را می‌سنجد. هیچ‌چیز نمی‌نویسد.
 
@@ -184,6 +198,9 @@ def review(
     برابرِ کاتالوگ آن‌وقت یک ترجمهٔ **درست** را رد می‌کرد.
 
     `current` = متنِ مؤثرِ زبانِ **مقصد** امروز، برای شمارشِ «چند تا عوض می‌شود».
+
+    `defaults` = پیش‌فرضِ **کدِ** زبانِ مقصد (`effective_texts(lang, {})`)؛ مقدارِ
+    برابر با آن در `defaulted` می‌رود نه در `overrides`.
     """
     lang = str(pack.get("lang") or "")
     rv = Review(lang=lang, name=str(pack.get("name") or lang),
@@ -200,6 +217,8 @@ def review(
             rv.errors.append((key, err))
             continue
         rv.entries[key] = value
+        if defaults is not None and value == defaults.get(key):
+            rv.defaulted.append(key)
         if value == src:
             rv.untranslated.append(key)
         if value == current.get(key):

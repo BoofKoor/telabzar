@@ -29,6 +29,11 @@ _MIGRATIONS = [
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS duration INTEGER",
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS dl_token VARCHAR(32)",
     "CREATE INDEX IF NOT EXISTS ix_files_dl_token ON files (dl_token)",
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS dl_token_at TIMESTAMPTZ",
+    # لینک‌های پیش از فاز ۴ مهرِ زمان ندارند؛ به‌جای «همه همین حالا منقضی» یک پنجرهٔ
+    # تازه از لحظهٔ استقرار می‌گیرند. idempotent: `op_link` همیشه مهر می‌زند، پس
+    # بعد از اجرای اول هیچ ردیفِ توکن‌داری NULL نمی‌ماند و اجراهای بعدی صفر ردیف‌اند.
+    "UPDATE files SET dl_token_at = now() WHERE dl_token IS NOT NULL AND dl_token_at IS NULL",
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS cover_id VARCHAR(256)",
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS source VARCHAR(16)",
     "ALTER TABLE files ADD COLUMN IF NOT EXISTS post_caption TEXT",

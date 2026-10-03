@@ -40,6 +40,34 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # هدرهای درخواست که به upstream فوروارد می‌شوند (مهم‌ترینش Range برای seek).
 _COPY_REQ = ("Range", "If-Range", "If-None-Match", "If-Modified-Since", "Accept-Encoding")
 _CHUNK = 64 * 1024
+# **سقفِ استخرِ اتصالِ upstream: هیچ.** پیش‌فرضِ aiohttp `limit=100` است و هر
+# استریمِ زنده یک اتصال را تا **پایانِ استریم** نگه می‌دارد، پس صد و یکمین بیننده
+# در صفِ استخر می‌ماند تا `connect=15` بگذرد و بعد 502 می‌گرفت — بی‌آنکه مستر
+# اصلاً تحت فشار باشد. پروکسی نباید سقفی تنگ‌تر از سروری که جلویش نشسته بگذارد:
+# تعدادِ اتصالِ upstream همیشه برابرِ تعدادِ درخواستِ زندهٔ همین سرور است.
+_UPSTREAM_LIMIT = 0
+# کلاینتی که این‌قدر ثانیه **هیچ** بایتی نخواند رها می‌شود. بدونِ این، یک کلاینتِ
+# متوقف (یا مهاجمی که فقط سوکت باز می‌کند و نمی‌خواند) `resp.write` را برای
+# همیشه معلق و اتصالِ upstream را برای همیشه اشغال نگه می‌داشت؛ `sock_read`
+# فقط سمتِ upstream را می‌پاید، نه کلاینت را. پخش‌کنندهٔ ویدیو با بافرِ پر هم
+# مکث می‌کند، پس عدد سخاوتمندانه است — دربارهٔ «مرده»، نه «کند».
+_CLIENT_STALL = 120
+
+
+async def _send(resp: web.StreamResponse, chunk: bytes) -> bool:
+    """یک تکه به کلاینت؛ False یعنی کلاینت `_CLIENT_STALL` ثانیه نخواند."""
+    try:
+        await asyncio.wait_for(resp.write(chunk), _CLIENT_STALL)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+def _drop(request: web.Request) -> None:
+    """`abort` نه `close`: `close` منتظرِ خالی‌شدنِ بافری می‌ماند که کلاینت هرگز نمی‌خواند."""
+    tr = request.transport
+    if tr is not None:
+        tr.abort()
 
 
 def _upstream() -> str:
@@ -64,7 +92,10 @@ async def _forward(request: web.Request, prefix: str) -> web.StreamResponse:
             await resp.prepare(request)
             if request.method != "HEAD":
                 async for chunk in up.content.iter_chunked(_CHUNK):
-                    await resp.write(chunk)
+                    if not await _send(resp, chunk):
+                        log.info("client stalled %ss on %s; dropping it", _CLIENT_STALL, token)
+                        _drop(request)
+                        return resp   # خروج از `async with` اتصالِ upstream را می‌بندد
             await resp.write_eof()
             return resp
     except web.HTTPException:
@@ -106,7 +137,9 @@ async def _heartbeat(app: web.Application) -> None:
 
 async def _on_start(app: web.Application) -> None:
     timeout = aiohttp.ClientTimeout(total=None, connect=15, sock_read=120)
-    app["client"] = aiohttp.ClientSession(timeout=timeout)
+    app["client"] = aiohttp.ClientSession(
+        timeout=timeout,
+        connector=aiohttp.TCPConnector(limit=_UPSTREAM_LIMIT, limit_per_host=0))
     app["state"] = {"inflight": 0}
     if settings.node_role:  # این پروسه یک نود است → heartbeat بزن
         app["hb"] = asyncio.create_task(_heartbeat(app))

@@ -1,6 +1,8 @@
 """تشخیصِ نوعِ فایل از پیامِ تلگرام."""
 from __future__ import annotations
 
+import mimetypes
+import os
 from dataclasses import dataclass
 
 from aiogram.types import Message
@@ -120,6 +122,30 @@ _EXT_BY_MIME = {
 }
 _EXT_BY_KIND = {"image": ".jpg", "video": ".mp4", "audio": ".mp3",
                 "document": ".bin", "archive": ".zip", "app": ".bin"}
+
+
+# پسوند → mime برای فایل‌هایی که **خودمان** می‌سازیم یا می‌کشیم. صریح، نه فقط
+# `mimetypes`: آن جدول از `/etc/mime.types`ِ میزبان پر می‌شود و روی ایمیجِ slim
+# ممکن است `.mkv`/`.opus`/`.m4a` را نشناسد — و mimeِ خالی در گیت‌وی یعنی attachment.
+_MIME_BY_EXT = {
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".mkv": "video/x-matroska",
+    ".webm": "video/webm", ".mov": "video/quicktime", ".gif": "image/gif",
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+    ".flac": "audio/flac", ".wav": "audio/x-wav",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
+    ".pdf": "application/pdf", ".txt": "text/plain", ".srt": "text/plain",
+    ".zip": "application/zip",
+}
+
+
+def mime_from_name(name: str | None) -> str | None:
+    """mimeِ فایل از پسوندِ نامش؛ `None` اگر ناشناخته بود.
+
+    فقط برای نام‌هایی که سیستم ساخته یا ردیف‌های قدیمیِ بی‌mime — گیت‌وی هرچه این
+    بدهد را باز از فهرستِ امنِ inline رد می‌کند، پس نامِ «x.html» هم attachment می‌ماند.
+    """
+    ext = os.path.splitext(name or "")[1].lower()
+    return _MIME_BY_EXT.get(ext) or (mimetypes.guess_type(name or "")[0] if ext else None)
 
 
 def suggested_name(name: str | None, kind: str, mime: str | None, idx: int = 1) -> str:

@@ -27,6 +27,7 @@ from aiogram.types import InputMediaPhoto, InputMediaVideo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .cards import message_media_id, send_card, update_card
+from .filetypes import mime_from_name
 # `_MATCH_PLATFORMS` تنها منبعِ «هدف را ما انتخاب می‌کنیم» است (`downloader.py:53`)
 # و `engine_for` هم از همان می‌خواند — فهرستِ دومی این‌جا ساخته نمی‌شود، وگرنه دو
 # کپیِ دست‌نویس واگرا می‌شدند. حلقهٔ import نیست: `downloader` هیچ ارجاعی به
@@ -201,6 +202,12 @@ async def get_cached(session: AsyncSession, url: str, selector: str) -> Download
 
 
 async def _upsert(session: AsyncSession, url: str, selector: str, **vals) -> None:
+    # **عمداً پشتِ `dl_cache_enabled` نیست** (بررسی‌شده در فاز ۴، نه فراموش‌شده): آن
+    # کلید فقط *تحویلِ آنی* را خاموش می‌کند (`routers/download.py`). نوشتن ادامه
+    # می‌دهد چون همین نوشتن است که ردیفِ کهنه (کپشنِ قدیمی، file_idِ مرده) را با
+    # دانلودِ تازه **بازنویسی** می‌کند — پس «موقتاً خاموش کن تا رفع را ببینی» (§۷)
+    # بعد از روشن‌کردنِ دوباره نسخهٔ تازه را سرو می‌کند نه کهنه را. گیت‌کردنِ نوشتن
+    # یعنی همان ردیف‌های کهنه بعد از روشن‌شدن دوباره زنده شوند.
     key = cache_key(url, selector)
     row = await session.get(DownloadCache, key)
     if row is None:
@@ -286,7 +293,7 @@ async def deliver_from_cache(bot: Bot, session: AsyncSession, chat_id: int, owne
     f = File(
         ref=secrets.token_urlsafe(6)[:8], owner_id=owner_id,
         file_unique_id=cache.file_unique_id or "", file_id=cache.file_id,
-        kind=cache.kind, mime=None, name=cache.name, size=cache.size,
+        kind=cache.kind, mime=mime_from_name(cache.name), name=cache.name, size=cache.size,
         width=cache.width, height=cache.height, duration=cache.duration,
         changelog=[], source="dl", post_caption=cache.post_caption, platform=cache.platform,
     )

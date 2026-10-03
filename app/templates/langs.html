@@ -25,6 +25,8 @@
         {% if replace %}و با «جایگزینیِ کامل» <b>پاک</b> می‌شود{% else %}و دست‌نخورده می‌ماند{% endif %}.
         {% if rv.untranslated %}<br><b>{{rv.untranslated|length}}</b> کلید عیناً همان متنِ مبدأ است
         (ترجمه‌نشده).{% endif %}
+        {% if rv.defaulted %}<br><b>{{rv.defaulted|length}}</b> کلید عیناً متنِ پیش‌فرضِ ربات است و
+        override نمی‌شود — اصلاح‌های بعدیِ ربات به آن‌ها هم می‌رسد.{% endif %}
       </div>
       {% if confirm == 'ask' %}
       <div class=errbox>این زبانِ <b>پیش‌فرضِ</b> ربات است. با تأیید، <b>{{rv.changed}}</b> متنِ زندهٔ

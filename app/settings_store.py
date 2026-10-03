@@ -25,6 +25,11 @@ log = logging.getLogger("telabzar.settings")
 
 _PREFIX = "cfg:"
 _MISSING = "\x00"  # نشانهٔ negative-cache: «در DB نیست → از پیش‌فرضِ env استفاده کن»
+# عمرِ هر کلیدِ کش. کش فقط بهینه‌سازی است و DB حقیقت؛ بدونِ انقضا، هر نوشتنِ
+# ازدست‌رفته (Redis لحظه‌ای پایین، یا رقابتِ پایینِ `get`) کهنگیِ **دائمی** می‌ساخت.
+# یک ساعت یعنی بدترین کهنگی کران‌دار است و هزینه‌اش یک SELECT به‌ازای هر کلید در
+# ساعت (کش بینِ همهٔ پروسه‌ها مشترک است، پس ضربدرِ تعدادِ پروسه نمی‌شود).
+_CACHE_TTL = 3600
 
 # کلیدهای قابلِ‌تنظیم از پنل → (نوع, پیش‌فرضِ env). مرجعِ /admin و اعتبارسنجی.
 # همگام با docs/ADMIN_PANEL.md.
@@ -39,6 +44,7 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "compress_tiny_height": ("int", settings.compress_tiny_height),
     "vjoin_max_mb": ("int", settings.vjoin_max_mb),
     "stream_base": ("str", settings.stream_base),   # نودِ استریم: پایهٔ عمومیِ لینک‌ها
+    "dl_link_days": ("int", settings.dl_link_days),  # عمرِ لینکِ عمومی (روز) · ۰ = بی‌انقضا
     "cookie_alert_min": ("int", settings.cookie_alert_min),  # آستانهٔ هشدارِ کوکی
     # ── سهمیه و سرعت‌گیرِ استخرِ سشن (app/cookies.py:Limits) ──
     "ck_cap_instagram": ("int", settings.ck_cap_instagram),
@@ -269,8 +275,15 @@ class SettingsStore:
         val = row.value if row is not None else None
         if val is None and key in _RENAMED:
             return await self._migrate_renamed(key)
+        # **پرکردن با `NX`، نه نوشتنِ بی‌قید.** بینِ SELECTِ بالا و این خط چند
+        # await فاصله است؛ اگر همین وسط پنل `set()`/`reset()` زده باشد، کش از قبل
+        # مقدارِ **تازه‌تر** را دارد و نوشتنِ بی‌قید آن را با نتیجهٔ کهنهٔ این
+        # SELECT بازنویسی می‌کرد — و چون کلید انقضا نداشت، تنظیمِ ادمین برای همیشه
+        # دفن می‌شد (پنل «ذخیره شد» می‌گفت و هیچ پروسه‌ای نمی‌دیدش). نویسنده‌ها
+        # بی‌قید می‌نویسند، پس همیشه برنده‌اند؛ خواننده فقط جای خالی را پر می‌کند.
         try:
-            await self.r.set(_PREFIX + key, _MISSING if val is None else val)
+            await self.r.set(_PREFIX + key, _MISSING if val is None else val,
+                             nx=True, ex=_CACHE_TTL)
         except Exception:  # noqa: BLE001  — کشِ Redis اختیاری است
             pass
         return val
@@ -345,7 +358,7 @@ class SettingsStore:
                 await s.execute(sa_update(Setting).where(Setting.key == key).values(value=value))
                 await s.commit()
         try:
-            await self.r.set(_PREFIX + key, value)  # همهٔ پروسه‌ها فوراً می‌بینند
+            await self.r.set(_PREFIX + key, value, ex=_CACHE_TTL)  # همهٔ پروسه‌ها فوراً می‌بینند
         except Exception:  # noqa: BLE001
             pass
 
@@ -356,7 +369,7 @@ class SettingsStore:
                 await s.delete(row)
                 await s.commit()
         try:
-            await self.r.set(_PREFIX + key, _MISSING)
+            await self.r.set(_PREFIX + key, _MISSING, ex=_CACHE_TTL)
         except Exception:  # noqa: BLE001
             pass
 

@@ -196,6 +196,7 @@ GROUPS = [
     ]),
     ("لینک و استریم", [
         ("stream_base", "پایهٔ لینک (نودِ استریم)", "خالی = دامنهٔ مستر · مثل https://cdn.example.com"),
+        ("dl_link_days", "عمرِ لینکِ عمومی (روز)", "از آخرین درخواستِ لینک · ۰ = بی‌انقضا"),
     ]),
 ]
 
@@ -422,7 +423,16 @@ def _safe_back(value: str) -> str:
 
     `//evil.example` یک URLِ **پروتکل‌نسبی** است و مرورگر بیرون می‌بردش، پس
     شرطِ «با `/` شروع می‌شود» به‌تنهایی open-redirect را نمی‌بندد.
+
+    **و هیچ کاراکترِ کنترلی/فاصله‌ای پذیرفته نمی‌شود** (فاز ۴): پارسرِ URLِ
+    مرورگر (WHATWG) پیش از هر چیز tab و خطِ جدید را از **وسطِ** URL حذف می‌کند،
+    پس `to=/%09/evil.example` از هر سه شرطِ بالا رد می‌شد (با `/` شروع می‌شود،
+    `//` نیست، `\\` ندارد) و مرورگر آن را `//evil.example` می‌خواند — ریدایرکتِ
+    باز روی صفحه‌ای که **لاگین نمی‌خواهد**. مسیرهای خودِ پنل هیچ‌کدام این
+    کاراکترها را ندارند، پس رد کردنِ کامل هزینه‌ای ندارد.
     """
+    if any(c <= " " or c == "\x7f" for c in value):
+        return "/"
     if value.startswith("/") and not value.startswith("//") and "\\" not in value:
         return value
     return "/"
@@ -1731,7 +1741,8 @@ async def langs_import(request: web.Request) -> web.Response:
     rv = langpack.review(
         pack,
         source_texts=langpack.effective_texts(source, textstore.lang_texts(source)),
-        current=langpack.effective_texts(code, textstore.lang_texts(code)))
+        current=langpack.effective_texts(code, textstore.lang_texts(code)),
+        defaults=langpack.effective_texts(code, {}))
     rv.name = name
     if not rv.ok:
         return await _langs_render(request, review=rv, raw=raw, replace=replace)
@@ -1744,7 +1755,7 @@ async def langs_import(request: web.Request) -> web.Response:
 
     if code not in BUILTIN_NAMES:
         await textstore.add_language(code, name)
-    await textstore.set_texts(code, rv.entries, replace=replace)
+    await textstore.set_texts(code, rv.overrides, replace=replace, clear=rv.defaulted)
     raise _result("/langs", ok="i")
 
 

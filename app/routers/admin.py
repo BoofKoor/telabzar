@@ -174,7 +174,8 @@ async def cookie_action(cq: CallbackQuery, callback_data: Ck, is_admin: bool,
         await arq_pool.set(_CK_WAIT + str(cq.from_user.id), name, ex=1800)
         await cq.message.answer(
             f"📋 متنِ کوکیِ تازهٔ «{label}» را همین‌جا بفرست.\n"
-            f"<i>Netscape یا JSONِ Cookie-Editor — هر دو قبول است. ۳۰ دقیقه وقت داری.</i>")
+            f"<i>Netscape یا JSONِ Cookie-Editor — هر دو قبول است. ۳۰ دقیقه وقت داری.</i>\n"
+            f"<i>اگر بلندتر از ۴۰۹۶ کاراکتر است، به‌صورتِ فایلِ ‎.txt‎ بفرست.</i>")
         await cq.answer()
         return
 
@@ -191,18 +192,21 @@ async def cookie_action(cq: CallbackQuery, callback_data: Ck, is_admin: bool,
         pass
 
 
-@router.message(F.text.len() > 60)
-async def cookie_paste(message: Message, is_admin: bool, arq_pool: ArqRedis) -> None:
-    """متنِ بلندی که ادمین بعد از زدنِ «کوکیِ تازه می‌فرستم» می‌فرستد = همان کوکی.
+#: سقفِ طولِ یک پیامِ تلگرام، به واحدِ **UTF-16** (همان چیزی که تلگرام می‌شمارد).
+#: کلاینت متنِ بلندتر را خودش به چند پیام می‌شکند، پس پیامی که دقیقاً به این سقف
+#: رسیده تقریباً همیشه **تکهٔ اولِ** یک پیستِ بریده است.
+_TG_TEXT_MAX = 4096
+_COOKIE_FILE_MAX = 512 * 1024          # همان سقفِ `_normalize_cookie_text`
 
-    فیلترِ طولِ ۶۰ کاراکتر جلوی گرفتنِ پیام‌های عادی را می‌گیرد، و اگر انتظاری ثبت
-    نشده باشد این هندلر عبور می‌کند تا مسیرهای بعدی (لینک/فایل) کارِ خودشان را بکنند.
-    """
+
+async def _waiting_for(message: Message, is_admin: bool, arq_pool: ArqRedis) -> str | None:
     waiting = await arq_pool.get(_CK_WAIT + str(message.from_user.id)) if is_admin else None
-    name = waiting if isinstance(waiting, str) else (waiting.decode() if waiting else None)
-    if not name:
-        raise SkipHandler
-    text, err = ck._normalize_cookie_text(message.text)
+    return waiting if isinstance(waiting, str) else (waiting.decode() if waiting else None)
+
+
+async def _apply_cookie(message: Message, arq_pool: ArqRedis, name: str, raw: str) -> None:
+    """مسیرِ مشترکِ پیست و فایل: اعتبارسنجی → ذخیره → بازگشت به چرخش."""
+    text, err = ck._normalize_cookie_text(raw)
     if err:
         await message.reply(f"⚠️ {err}")
         return
@@ -220,3 +224,42 @@ async def cookie_paste(message: Message, is_admin: bool, arq_pool: ArqRedis) -> 
     await arq_pool.delete(f"ckcheck:{name}")             # هشدارِ بعدی دوباره مجاز
     await message.reply(f"✅ کوکیِ «{escape(str(meta.get('label') or name))}» به‌روز شد "
                         f"و اکانت دوباره واردِ چرخش شد.")
+
+
+@router.message(F.text.len() > 60)
+async def cookie_paste(message: Message, is_admin: bool, arq_pool: ArqRedis) -> None:
+    """متنِ بلندی که ادمین بعد از زدنِ «کوکیِ تازه می‌فرستم» می‌فرستد = همان کوکی.
+
+    فیلترِ طولِ ۶۰ کاراکتر جلوی گرفتنِ پیام‌های عادی را می‌گیرد، و اگر انتظاری ثبت
+    نشده باشد این هندلر عبور می‌کند تا مسیرهای بعدی (لینک/فایل) کارِ خودشان را بکنند.
+
+    **پیامی که به سقفِ تلگرام رسیده ذخیره نمی‌شود** (فاز ۴). خروجیِ Cookie-Editor
+    برای یک اکانتِ یوتیوب/اینستاگرام به‌راحتی از ۴۰۹۶ کاراکتر رد می‌شود؛ کلاینت آن
+    را چند پیام می‌کند و این هندلر فقط تکهٔ اول را می‌دید. اگر کوکیِ کلیدی در همان
+    تکه بود، `_check_required` رد می‌شد و ربات «✅ دوباره واردِ چرخش شد» می‌گفت —
+    برای کوکی‌ای که نصفش جا مانده و اولین دانلود با آن شکست می‌خورد. انتظار باقی
+    می‌ماند تا ادمین همان را به‌صورتِ فایل بفرستد (`cookie_file`).
+    """
+    name = await _waiting_for(message, is_admin, arq_pool)
+    if not name:
+        raise SkipHandler
+    if len(message.text.encode("utf-16-le")) // 2 >= _TG_TEXT_MAX:
+        await message.reply(
+            "⚠️ این پیام به سقفِ ۴۰۹۶ کاراکترِ تلگرام رسیده و به احتمالِ زیاد بریده شده "
+            "— ذخیره نشد. همان کوکی را به‌صورتِ فایلِ ‎.txt‎ بفرست.")
+        return
+    await _apply_cookie(message, arq_pool, name, message.text)
+
+
+@router.message(F.document)
+async def cookie_file(message: Message, is_admin: bool, arq_pool: ArqRedis) -> None:
+    """کوکی به‌صورتِ فایل — تنها راهِ کوکیِ بلندتر از سقفِ یک پیام."""
+    name = await _waiting_for(message, is_admin, arq_pool)
+    if not name:
+        raise SkipHandler
+    if (message.document.file_size or 0) > _COOKIE_FILE_MAX:
+        await message.reply("⚠️ فایل برای کوکی خیلی بزرگ است.")
+        return
+    buf = await message.bot.download(message.document)
+    raw = buf.read().decode("utf-8", errors="replace") if buf is not None else ""
+    await _apply_cookie(message, arq_pool, name, raw)

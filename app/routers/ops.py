@@ -19,7 +19,7 @@ from .. import counters, nodes, settings_store
 from ..cards import _fmt_dur, card_caption, meta_editor_view, set_card_note, update_card
 from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Spd, Tr, Wm
 from ..config import settings
-from ..crud import get_file_by_ref, get_owned_job
+from ..crud import get_file_by_ref, get_owned_job, link_expired
 from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
@@ -104,7 +104,15 @@ async def _max_mb() -> int:
 
 
 async def _too_large(size: int | None) -> bool:
-    return bool(size and size > (await _max_mb()) * 1024 * 1024)
+    """سقفِ ≤۰ یعنی **بی‌سقف** — همان قراردادِ تثبیت‌شدهٔ «۰ = خاموش» (`BOUNDS`).
+
+    پیش از فاز ۴ `max_file_mb = 0` از اعتبارسنجی رد می‌شد (کفِ `BOUNDS` صفر است)
+    و بعد این‌جا به `size > 0` تبدیل می‌شد: **هر** عملیاتی روی **هر** فایلی
+    «فایل بزرگ است (حداکثر 0 MB)» می‌گرفت. ادمینی که صفر را «بی‌سقف» خوانده بود
+    — مثلِ `vjoin_max_mb`، `ck_cap_*` و بقیه — کلِ ربات را بی‌صدا خاموش می‌کرد.
+    """
+    cap = await _max_mb()
+    return bool(size and cap > 0 and size > cap * 1024 * 1024)
 
 
 async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
@@ -924,9 +932,15 @@ async def op_link(cq: CallbackQuery, callback_data: Act, session: AsyncSession, 
     if not base:
         await cq.answer(t(lang, "link_unconfigured"), show_alert=True)
         return
-    if not file.dl_token:
+    # لینک از **آخرین** درخواستِ مالک `dl_link_days` روز عمر می‌کند. توکنِ منقضی
+    # عوض می‌شود (نه تمدید): هر کسی که نشانیِ قدیمی را از جایی گرفته بود، با تمدیدِ
+    # مالک دوباره دسترسی نمی‌گیرد.
+    days = await settings_store.get_int("dl_link_days", settings.dl_link_days)
+    now = datetime.now(timezone.utc)
+    if not file.dl_token or link_expired(file.dl_token_at, days, now):
         file.dl_token = secrets.token_urlsafe(18)[:24]
-        await session.commit()
+    file.dl_token_at = now
+    await session.commit()
     dl, stream = f"{base}/dl/{file.dl_token}", f"{base}/s/{file.dl_token}"
     try:
         await cq.message.edit_caption(

@@ -10,6 +10,7 @@ import json
 import logging
 import secrets
 from datetime import datetime, timezone
+from html import escape
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
@@ -149,7 +150,7 @@ async def _reject(message: Message, arq_pool: ArqRedis, user: User | None, lang:
     await message.reply(t(lang, "nsfw_blocked"))
     banned = await safety.report_block(message.bot, arq_pool,
                                        user.tg_user_id if user else 0, why, pol,
-                                       detail=f"لینک: <code>{(message.text or '')[:80]}</code>")
+                                       detail=f"لینک: <code>{escape((message.text or '')[:80])}</code>")
     if banned:
         await message.answer(t(lang, "nsfw_user_blocked"))
 

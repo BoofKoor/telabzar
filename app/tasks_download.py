@@ -38,7 +38,7 @@ from . import processing as P
 from . import safety
 from . import settings_store
 from . import textstore
-from .cards import message_media_id, progress_note, send_card, update_card
+from .cards import message_media_id, message_media_mime, progress_note, send_card, update_card
 from .config import settings
 from .db import Sessionmaker
 from .i18n import t
@@ -163,6 +163,18 @@ def _content_error(msg: str) -> bool:
     """آیا مشکل از خودِ لینک است؟ (آن‌وقت امتحانِ اکانتِ بعدی بی‌فایده است)"""
     low = (msg or "").lower()
     return any(h in low for h in _CONTENT_HINTS)
+
+
+def _says_nothing_about_exit(msg: str, kind: str | None) -> bool:
+    """آیا این شکست هیچ شاهدی دربارهٔ خودِ خروجی (IP) نیست؟
+
+    ۴۰۴/خصوصی/حذف‌شده — و نوع‌های محتواییِ یوتیوب — ثابت می‌کنند درخواست **به
+    پلتفرم رسید** و جوابِ قطعی گرفت، یعنی خروجی کار می‌کند. پیش از فاز ۴ این
+    قاعده (که `_resolve_blame` از فاز ۲ داشت) به `note_exit` نرسیده بود: سه لینکِ
+    حذف‌شدهٔ اینستاگرام روی خروجیِ سالم، کارتِ «🌐 خروجی‌ها» را به «IPِ این خروجی
+    مسدود است — تعویضِ سشن کمکی نمی‌کند» می‌برد. یک تعریف، دو محلِ فراخوانی.
+    """
+    return kind in _YT_NOT_ACCOUNT_KINDS or _content_error(msg)
 
 
 def _anon_first(platform: str) -> bool:
@@ -788,6 +800,7 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
             f.file_id = fid
         if fuid:
             f.file_unique_id = fuid
+        f.mime = message_media_mime(sent, f.name)
         await s.commit()
         # کش بهینه‌سازی است: شکستش نباید تحویلِ انجام‌شده را «ناموفق» بخواند.
         if url and f.file_id:
@@ -841,6 +854,7 @@ async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int
             f.file_id = fid
         if fuid:
             f.file_unique_id = fuid
+        f.mime = message_media_mime(sent, f.name)
         await s.commit()
         try:
             await dl_cache.put_cached(s, url, selector, f,  # دفعهٔ بعد آنی
@@ -1048,7 +1062,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 return
             await _metric(redis, platform, ok=False)
             await PS.note(redis, PS.FAIL)
-            if kind not in _YT_NOT_ACCOUNT_KINDS:
+            if not _says_nothing_about_exit(msg, kind):
                 # ویدیوی خصوصی/سنی دربارهٔ خروجی چیزی نمی‌گوید؛ شمردنش آمارِ
                 # «IPِ این خروجی مسدود است» را آلوده می‌کرد.
                 await ck.note_exit(redis, settings.node_id, platform, ok=False)
@@ -1436,7 +1450,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
             # شکستِ واقعیِ شبکه‌ای (نه ردِ سیاستی) → به حسابِ همین خروجی. اگر همهٔ
             # اکانت‌ها روی یک خروجی بیفتند، مقصر IP است نه سشن‌ها. ویدیوی خصوصی/سنی
             # دربارهٔ خروجی چیزی نمی‌گوید، پس شمرده نمی‌شود.
-            if kind not in _YT_NOT_ACCOUNT_KINDS:
+            if not _says_nothing_about_exit(msg, kind):
                 await ck.note_exit(redis, settings.node_id, platform, ok=False)
             if exit_bad:
                 # پیامِ «کوکی ست کن» این‌جا دروغ است — کوکی‌ها سالم‌اند، IP مقصر است

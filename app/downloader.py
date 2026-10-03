@@ -792,6 +792,9 @@ async def _ffprobe_video(path: str) -> dict:
     return await _P.probe_media(path)
 
 
+_REMUX_TIMEOUT = 900   # ثانیه — remuxِ کپیِ استریم، حتی برای فایلِ چندگیگی
+
+
 async def _ensure_mp4(path: str) -> str:
     """اگر خروجی mp4 نیست، **فقط کانتینر** را به mp4 بازبسته‌بندی کن (بدونِ انکودِ مجدد).
 
@@ -806,12 +809,22 @@ async def _ensure_mp4(path: str) -> str:
     if not path or os.path.splitext(path)[1].lower() == ".mp4" or not os.path.exists(path):
         return path
     out = os.path.splitext(path)[0] + ".remux.mp4"
+    from . import processing as _P   # تنبل، مثلِ بقیهٔ این ماژول (وابستگیِ PIL)
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-i", path, "-c", "copy", "-movflags", "+faststart", out,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        await asyncio.wait_for(proc.wait(), timeout=900)
-    except Exception:  # noqa: BLE001
+        await asyncio.wait_for(proc.wait(), timeout=_REMUX_TIMEOUT)
+    except BaseException as exc:
+        # پنجمین زیرفرایندی که `kill_orphan` را لازم داشت و نداشت (فاز ۴): روی
+        # تایم‌اوت، `wait_for` فقط `proc.wait()` را لغو می‌کرد و ffmpeg می‌ماند؛ و
+        # `CancelledError` (لغوِ جاب/خاموشیِ ورکر) اصلاً از `except Exception` رد
+        # می‌شد. remuxِ یک فایلِ چندگیگی یعنی دقیقه‌ها I/Oِ دیسک برای جابی که مرده.
+        if proc is not None:
+            _P.kill_orphan(proc)
+        if not isinstance(exc, Exception):
+            raise
         proc = None
     if proc is not None and proc.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
         final = os.path.splitext(path)[0] + ".mp4"

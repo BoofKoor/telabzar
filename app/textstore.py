@@ -11,8 +11,10 @@
 """
 from __future__ import annotations
 
+import functools
 import logging
 import string
+from collections.abc import Iterable
 from html.parser import HTMLParser
 
 from sqlalchemy import delete as sa_delete, select
@@ -157,14 +159,16 @@ def lang_texts(lang: str) -> dict[str, str]:
     return {k: v for (lg, k), v in _overrides.items() if lg == lang}
 
 
-async def set_texts(lang: str, mapping: dict[str, str], *, replace: bool = False) -> None:
+async def set_texts(lang: str, mapping: dict[str, str], *, replace: bool = False,
+                    clear: Iterable[str] = ()) -> None:
     """چند کلید را در **یک تراکنش** می‌نویسد و **یک‌بار** نسخه را bump می‌کند.
 
     `set_text` را در حلقه صدا نزن: هر فراخوانی یک commit و یک `INCR txtver` و
     یک لودِ کاملِ DB است، پس یک importِ ۲۱۴کلیدی می‌شد ۲۱۴ بارگذاریِ کامل.
 
     `replace=True` یعنی این زبان **فقط** همین mapping را داشته باشد (ردیف‌های
-    دیگرش پاک می‌شوند)؛ پیش‌فرض ادغام است. شکلِ delete-then-insert عمداً همان
+    دیگرش پاک می‌شوند)؛ پیش‌فرض ادغام است. `clear` = کلیدهایی که در حالتِ ادغام
+    override‌شان **حذف** شود (بسته آن‌ها را به پیش‌فرض برگردانده). شکلِ delete-then-insert عمداً همان
     شکلِ `set_menu_layout` است — یک تراکنش، پس اتمیک و last-writer-wins.
     """
     async with Sessionmaker() as s:
@@ -176,6 +180,10 @@ async def set_texts(lang: str, mapping: dict[str, str], *, replace: bool = False
             rows = (await s.execute(select(TextOverride).where(
                 TextOverride.lang == lang))).scalars().all()
             existing = {r.key: r for r in rows}
+            for key in clear:
+                row = existing.pop(key, None)
+                if row is not None:
+                    await s.delete(row)
             for key, value in mapping.items():
                 row = existing.get(key)
                 if row is None:
@@ -278,6 +286,31 @@ async def reset_menu_layout(kind: str) -> None:
 
 
 # ── اعتبارسنجی (خالص، تست‌پذیر) ─────────────────────────────────
+@functools.lru_cache(maxsize=4096)
+def unsafe_placeholder(text: str) -> str | None:
+    """اولین placeholderی که **فقط یک نام** نیست، وگرنه None.
+
+    `str.format` بیش از جایگذاری است، و متنِ override از پنل یا از **بستهٔ زبانِ
+    import‌شده** (یعنی خروجیِ یک مترجمِ ماشینی) می‌آید. پیش از فاز ۴ `_fields` فقط
+    نامِ ریشه را می‌دید (`n.__class__` → `n`)، پس سه شکل از اعتبارسنجی رد می‌شد:
+    `{n.__class__}` (نشتِ ساختارِ داخلی به کاربر)، `{n[0]}` (روی عدد `TypeError`
+    که `t()` نمی‌گرفت → هندلر می‌ترکید)، و `{n:>200000000}` (هر بار ۲۰۰ مگابایت
+    حافظه، روی پیامی که به هر کاربر می‌رسد). هیچ متنِ کاتالوگی spec/conversion/
+    دسترسیِ صفت ندارد (اندازه‌گیری‌شده روی fa و en)، پس قاعده ساده و بسته است:
+    فقط `{نام}`. کش‌شده چون `i18n._fmt` آن را روی هر override در مسیرِ داغ می‌پرسد.
+    """
+    try:
+        parts = list(_FORMATTER.parse(text))
+    except ValueError:
+        return "{"
+    for _lit, field, spec, conv in parts:
+        if field is None:
+            continue
+        if not field.isidentifier() or spec or conv:
+            return "{" + field + (f"!{conv}" if conv else "") + (f":{spec}" if spec else "") + "}"
+    return None
+
+
 def _fields(text: str) -> set[str]:
     """نامِ placeholderهای {name} در متن (بدونِ index/attr)."""
     out: set[str] = set()
@@ -350,6 +383,9 @@ def validate(default_text: str, value: str, *, require_all_placeholders: bool = 
         vfields = _fields(value)
     except ValueError:
         return "نحوِ placeholder نادرست است ({ } را بررسی کن)."
+    bad = unsafe_placeholder(value)
+    if bad:
+        return f"placeholder فقط به شکلِ {{نام}} مجاز است، بدونِ «.» «[ ]» «:» «!» — {bad}"
     dfields = _fields(default_text)
     extra = vfields - dfields
     if extra:

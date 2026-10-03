@@ -25,7 +25,7 @@ from . import processing as P
 from . import settings_store
 from . import textstore
 from .cards import (
-    _quality_label, message_media_id, meta_editor_view, move_card_below, progress_note,
+    _quality_label, message_media_id, message_media_mime, meta_editor_view, move_card_below, progress_note,
     send_card, set_card_note, update_card,
 )
 from .config import settings
@@ -728,6 +728,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                         newf.file_id = fid
                     if fuid:
                         newf.file_unique_id = fuid
+                    newf.mime = message_media_mime(sent, newf.name)
                 except Exception as exc:  # noqa: BLE001
                     # پیش از فاز ۲ِ ممیزی این‌جا فقط لاگ می‌شد و جاب `done` می‌گرفت،
                     # برچسب در changelog می‌نشست و ردیفِ `files` با `file_id=""` یتیم
@@ -821,7 +822,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             else:
                 # عملیاتِ رسانه‌ساز → فیلدهای فایل را عوض کن و کارت را درجا به‌روزرسانی کن
                 orig = (file.name, file.size, file.kind, list(file.changelog or []),
-                        file.width, file.height, file.duration)
+                        file.width, file.height, file.duration, file.mime)
                 outpath = res["path"]
                 file.name = res["filename"]
                 if res.get("kind"):
@@ -857,13 +858,16 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                         file.file_id = fid
                     if fuid:
                         file.file_unique_id = fuid
+                    # mime همان بایت‌های تازه: بدونِ این، گیت‌وی PDFِ تبدیل‌شده به TXT را
+                    # هنوز با `application/pdf` سرو می‌کرد (موردِ ۱۴).
+                    file.mime = message_media_mime(sent, file.name)
                     if res.get("new_meta"):  # متادیتای فعلی را با تگ‌های نوشته‌شده به‌روز کن
                         file.meta = {**(file.meta or {}), **res["new_meta"]}
                     job.status = "done"
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ فایل را برگردان
                     log.exception("job %s delivery failed", job_id)
                     (file.name, file.size, file.kind, file.changelog,
-                     file.width, file.height, file.duration) = orig
+                     file.width, file.height, file.duration, file.mime) = orig
                     job.status = "failed"
                     job.error = str(exc)[:500]
                     await set_card_note(bot, chat_id, card_mid, file, lang, note=_fail_note(lang, exc), keyboard=True)
