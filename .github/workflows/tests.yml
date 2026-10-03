@@ -75,19 +75,22 @@ jobs:
       # یک دقیقه است؛ بدترین حالتِ سه تلاش ≈ ۱۲ دقیقه، پس زیرِ ۱۵ِ job می‌ماند و
       # شکست به‌شکلِ قرمزِ خوانا درمی‌آید نه «cancelled». `dpkg --configure -a`
       # پیش از تلاشِ بعد، نصبِ نیمه‌کارهٔ تلاشِ کشته‌شده را جمع می‌کند.
+      # `unrar-free` در همین گام (فاز ۳، موردِ ۲۵): RAR حالا از آن رد می‌شود و
+      # `tests/test_rar_extract.py` با `needs_unrar` گیت شده — بدونِ نصب، همان
+      # تله‌ای می‌شد که `needs_7z` از آن ترسیده بود: تستی که هیچ‌جا نمی‌دود.
       - name: install ffmpeg
         run: |
           apt_opts="-qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           for attempt in 1 2 3; do
             if sudo timeout -k 10 60 apt-get $apt_opts update \
-               && sudo timeout -k 10 180 apt-get $apt_opts install -y ffmpeg; then
+               && sudo timeout -k 10 180 apt-get $apt_opts install -y ffmpeg unrar-free; then
               exit 0
             fi
             echo "::warning::apt attempt $attempt failed or timed out; retrying"
             sudo dpkg --configure -a || true
             sleep 10
           done
-          echo "::error::ffmpeg could not be installed after 3 attempts"
+          echo "::error::ffmpeg/unrar-free could not be installed after 3 attempts"
           exit 1
 
       # به READMEی رانر تکیه نمی‌کنیم: خودِ اجرا باید حضورِ ffmpeg را ثابت کند،
@@ -112,6 +115,9 @@ jobs:
       # بی‌pipe نوشته شده تا کدِ خروج مالِ خودِ 7z بماند، نه مالِ `head`.
       - name: prove 7z is present
         run: 7z i
+
+      - name: prove unrar-free is present
+        run: unrar-free --version
 
       # نگهبانِ «مارکر دوباره بی‌اثر نشود» عمداً **گامِ CI نیست**: با صفر تستِ
       # نشان‌دار، `pytest -m ffmpeg` همه را deselect می‌کند و با کدِ **صفر** خارج

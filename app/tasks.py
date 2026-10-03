@@ -57,8 +57,19 @@ _PROGRESS_LABEL = {
 }
 
 
+_REAL_EXT = re.compile(r"\.[A-Za-z0-9]{1,5}")
+
+
 def _safe_stem(name: str | None, default: str = "file") -> str:
-    stem = Path(name or default).stem or default
+    """نامِ فایل بدونِ پسوند، امن برای مسیر.
+
+    فقط پسوندِ **واقعی** برداشته می‌شود. `Path.stem` هر چیزی بعد از آخرین نقطه
+    را پسوند می‌داند، پس عنوانِ بی‌پسوندی مثلِ «Mr. Brightside» یا «Track 01. Intro»
+    به «Mr»/«Track 01» کوتاه می‌شد.
+    """
+    name = os.path.basename(name or "") or default
+    base, ext = os.path.splitext(name)
+    stem = base if (base and _REAL_EXT.fullmatch(ext)) else name
     stem = re.sub(r"[^\w.\-]+", "_", stem)[:60]
     return stem or default
 
@@ -362,11 +373,11 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
                 cover_path = cp
         if not tags and not cover_path:
             raise RuntimeError("no metadata to write")
-        ext = os.path.splitext(file.name or "audio.mp3")[1] or ".mp3"
-        out = os.path.join(workdir, f"{stem}{ext}")
-        await P.write_audio_metadata(inpath, out, tags, cover_path=cover_path, cancel=cancel)
-        return {"path": out, "filename": f"{stem}{ext}", "label": t(lang, "cl_meta_edit"),
-                "kind": "audio", "new_meta": tags}
+        # پسوند را `write_audio_metadata` از کدکِ واقعی تعیین می‌کند، نه از نام.
+        out = await P.write_audio_metadata(inpath, os.path.join(workdir, stem), tags,
+                                           cover_path=cover_path, cancel=cancel)
+        return {"path": out, "filename": stem + os.path.splitext(out)[1],
+                "label": t(lang, "cl_meta_edit"), "kind": "audio", "new_meta": tags}
 
     if op == "to_pdf":
         src = os.path.join(workdir, os.path.basename(file.name or "input"))
@@ -459,7 +470,7 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
     if op == "transcribe":
         mode = "srt" if args.get("mode") == "srt" else "txt"
         model = await settings_store.get_str("whisper_model", settings.whisper_model)
-        text = (await P.transcribe_audio(inpath, model, mode)).strip()
+        text = (await P.transcribe_audio(inpath, model, mode, cancel=cancel)).strip()
         if not text:
             return {"note_only": True, "label": t(lang, "asr_empty")}
         if mode == "srt":  # زیرنویس همیشه به‌صورتِ فایلِ .srt
@@ -526,7 +537,7 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         # خروجی PNGِ شفاف است؛ به‌صورتِ «سند» تحویل می‌دهیم تا آلفا حفظ شود
         # (کارتِ عکس آن را به JPEG تخت می‌کرد).
         out = os.path.join(workdir, f"{stem}-nobg.png")
-        await P.remove_background(inpath, out)
+        await P.remove_background(inpath, out, cancel=cancel)
         return {"send_media": {"as": "document", "path": out, "filename": f"{stem}-nobg.png"},
                 "label": t(lang, "cl_bg_remove")}
 

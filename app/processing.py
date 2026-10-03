@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import math
 import os
+import re
+import threading
 import zipfile
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
@@ -55,6 +58,22 @@ def _video_encoder_args(kbps: int | None, crf: int, encoder: str | None = None,
         a += ["-crf", str(crf + 6)]
     return a
 SEVENZ = "7z"
+# 7-Zipِ دبیان/اوبونتو (`+dfsg`) کدک‌های RAR را به‌خاطرِ مجوزِ unRAR ندارد: فهرستِ
+# سرآیند را می‌خواند ولی هر عضوِ فشرده را با «Unsupported Method» رد می‌کند —
+# یعنی تقریباً هر RARِ واقعی. `unrar-free` (روی libarchive) در ایمیجِ ورکر بود و
+# صدا زده نمی‌شد.
+UNRAR = "unrar-free"
+_RAR_MAGIC = b"Rar!\x1a\x07"
+
+# هر ویدیویی که برای **تحویل** دوباره رمزگذاری می‌شود: 4:2:0ِ ۸بیتی با ابعادِ زوج.
+# بدونِ `format=yuv420p`، ffmpeg فرمتِ پیکسلِ منبع را نگه می‌دارد، پس HEVCِ ۱۰بیتیِ
+# آیفون یا انیمه بعد از برش/تبدیل H.264ِ «High 10» می‌شد (و webm، VP9ِ Profile 2)
+# که بیشترِ پخش‌کننده‌ها — از جمله خودِ تلگرامِ موبایل — نمی‌خوانندش. `-pix_fmt`ِ
+# خالی کافی نیست: libx264 روی 4:2:0 با عرض/ارتفاعِ فرد خطا می‌دهد («width not
+# divisible by 2») در حالی که منبعِ ۴:۴:۴ِ فرد پیش از این رفع انکود می‌شد؛ پس
+# `scale` یک پیکسلِ اضافه را می‌اندازد. `compress_video` همین را از راهِ
+# `_video_encoder_args` (و `scale=-2:h`) دارد و `concat_videos` در `vf`ِ خودش.
+_DELIVERY_VF = "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"
 
 # فونت‌های کاندید برای واترمارکِ متنی (اولی فارسی/عربی، آخری فالبکِ لاتین)
 _FONT_CANDIDATES = (
@@ -255,7 +274,10 @@ async def _run(cmd: list[str], timeout: float = 1800, progress=None, duration: f
         lines = [ln for ln in (err or b"").decode("utf-8", "ignore").splitlines() if ln.strip()]
         detail = " | ".join(lines[-3:]) if lines else "no stderr"
         # کدِ منفی = kill با سیگنال (‎-9 ≈ OOM killer — کمبودِ RAM)
-        raise RuntimeError(f"ffmpeg failed (code {proc.returncode}): " + detail)
+        # نامِ ابزارِ واقعی، نه «ffmpeg» برای همه: `_run` فرمانِ pdftotext/pdftoppm/
+        # pdfunite را هم اجرا می‌کند و کاربر برای PDFِ خراب «ffmpeg failed» می‌دید.
+        tool = os.path.basename(cmd[0]) or "process"
+        raise RuntimeError(f"{tool} failed (code {proc.returncode}): " + detail)
 
 
 # ── تصویر (Pillow) ─────────────────────────────────────────────
@@ -268,12 +290,26 @@ def _flatten_rgb(img: Image.Image) -> Image.Image:
     return img.convert("RGB")
 
 
+def _upright(path: str) -> Image.Image:
+    """تصویر با چرخشِ EXIF اعمال‌شده — تنها درِ ورودیِ Pillow در این ماژول.
+
+    دوربینِ موبایل پیکسل‌ها را به همان جهتِ سنسور ذخیره می‌کند و جهتِ درست را فقط
+    در تگِ `Orientation` می‌نویسد. ذخیرهٔ دوبارهٔ Pillow آن تگ را **نمی‌برد**، پس
+    بدونِ اعمالِ آن پیش از ذخیره، عکسِ عمودی بعد از فشرده‌سازی/تبدیل کج می‌شد
+    (اندازه‌گیری‌شده: ۴۰×۲۰ به‌جای ۲۰×۴۰). `resize`/`rotate`/`enhance` از قبل
+    `exif_transpose` داشتند و `compress`/`convert`/`bg_remove`/لوگوی واترمارک نه —
+    همان دو نسخهٔ دست‌نویسی که §۷ می‌گوید واگرا می‌شوند؛ گاردِ تستی هر
+    `Image.open`ِ دیگری را در این ماژول می‌گیرد.
+    """
+    return ImageOps.exif_transpose(Image.open(path))
+
+
 def _compress_image_sync(inp: str, out: str) -> None:
-    _flatten_rgb(Image.open(inp)).save(out, "JPEG", quality=70, optimize=True)
+    _flatten_rgb(_upright(inp)).save(out, "JPEG", quality=70, optimize=True)
 
 
 def _convert_image_sync(inp: str, out: str, fmt: str) -> None:
-    img = Image.open(inp)
+    img = _upright(inp)
     fmt = fmt.lower()
     if fmt in ("jpg", "jpeg"):
         _flatten_rgb(img).save(out, "JPEG", quality=90, optimize=True)
@@ -306,7 +342,7 @@ def _save_image(img: Image.Image, out: str) -> None:
 
 
 def _resize_image_sync(inp: str, out: str, target) -> int:
-    img = ImageOps.exif_transpose(Image.open(inp))
+    img = _upright(inp)
     w, h = img.size
     nw = max(1, w // 2) if target == "half" else int(target)
     nw = min(nw, w)  # هرگز بزرگ‌نمایی نکن
@@ -324,7 +360,7 @@ _ROTATE = {"cw": Image.ROTATE_270, "ccw": Image.ROTATE_90, "180": Image.ROTATE_1
 
 
 def _rotate_image_sync(inp: str, out: str, mode: str) -> None:
-    img = ImageOps.exif_transpose(Image.open(inp))
+    img = _upright(inp)
     img = ImageOps.mirror(img) if mode == "mirror" else img.transpose(_ROTATE.get(mode, Image.ROTATE_270))
     _save_image(img, out)
 
@@ -334,7 +370,7 @@ async def rotate_image(inp: str, out: str, mode: str) -> None:
 
 
 def _enhance_image_sync(inp: str, out: str) -> None:
-    img = ImageOps.exif_transpose(Image.open(inp)).convert("RGB")
+    img = _upright(inp).convert("RGB")
     img = ImageOps.autocontrast(img, cutoff=1)
     img = ImageEnhance.Color(img).enhance(1.08)
     img = ImageEnhance.Sharpness(img).enhance(1.6)
@@ -347,8 +383,8 @@ async def enhance_image(inp: str, out: str) -> None:
 
 
 def _watermark_image_sync(inp: str, out: str, wm_path: str, position: str, is_logo: bool) -> None:
-    base = ImageOps.exif_transpose(Image.open(inp)).convert("RGBA")
-    wm = Image.open(wm_path).convert("RGBA")
+    base = _upright(inp).convert("RGBA")
+    wm = _upright(wm_path).convert("RGBA")
     if is_logo:  # لوگو را کوچک/استاندارد کن + کمی محو (شفاف)
         tw = max(48, base.width // 7)
         th = max(1, round(wm.height * tw / wm.width))
@@ -370,7 +406,7 @@ async def watermark_image(inp: str, out: str, wm_path: str, position: str, is_lo
 def _images_to_pdf_sync(paths: list[str], out: str, max_side: int = 2000) -> None:
     pages: list[Image.Image] = []
     for p in paths:
-        img = _flatten_rgb(ImageOps.exif_transpose(Image.open(p)))
+        img = _flatten_rgb(_upright(p))
         if max(img.size) > max_side:  # صفحاتِ خیلی بزرگ را کوچک کن (مصرفِ حافظه)
             r = max_side / max(img.size)
             img = img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))), Image.LANCZOS)
@@ -409,7 +445,7 @@ async def ocr_image(inp: str, workdir: str, langs: str = "fas+eng") -> str:
     """متنِ تصویر را می‌خواند؛ اگر بستهٔ فارسی نبود، به انگلیسیِ تنها برمی‌گردد."""
     png = os.path.join(workdir, "_ocr_in.png")
     await asyncio.to_thread(
-        lambda: ImageOps.exif_transpose(Image.open(inp)).convert("RGB").save(png, "PNG")
+        lambda: _upright(inp).convert("RGB").save(png, "PNG")
     )
     try:
         return await _tesseract(png, langs)
@@ -417,21 +453,77 @@ async def ocr_image(inp: str, workdir: str, langs: str = "fas+eng") -> str:
         return await _tesseract(png, "eng")
 
 
+# ── کارِ سنگینِ درون‌پروسه‌ای (Whisper/rembg) ─────────────────────
+# این دو مدل در **thread** اجرا می‌شوند نه زیرفرایند (تا مدلِ بارگذاری‌شده کش
+# بماند)، و thread را نمی‌شود کشت. پیش از فاز ۳ `async with sem: await to_thread()`
+# بود: لغوِ جاب (`job_timeout`، خاموشی، یا لغو در صف) فقط `await` را رها می‌کرد،
+# پس `async with` قفل را **آزاد** می‌کرد در حالی که thread هنوز می‌دوید — جابِ
+# بعدی Whisperِ دوم را کنارش راه می‌انداخت (همان RAMی که قفل برای نگه‌داشتنش بود)
+# و دکمهٔ لغو هم چون هیچ‌کس `cancel` را نمی‌پرسید بی‌اثر بود.
+#
+# حالا قفل به **پایانِ خودِ thread** گره خورده (callbackِ `concurrent.futures`)،
+# نه به `await`، و `stop` یک `threading.Event` است که کارِ thread بینِ قطعه‌ها
+# می‌پرسد. Whisper قطعه‌به‌قطعه تولید می‌کند (`segments` یک generator است) پس
+# لغو در مرزِ قطعهٔ بعدی اثر می‌کند؛ rembg یک فراخوانیِ یکپارچه است و قفل را تا
+# پایانِ همان فراخوانی نگه می‌دارد — کوتاه است و مهم این است که دوتا نشوند.
+_HEAVY_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="heavy")
+
+
+class _Stopped(Exception):
+    """thread به `stop` رسید و کارش را نیمه‌کاره رها کرد."""
+
+
+async def _exclusive(sem: asyncio.Semaphore, fn, *args, cancel=None):
+    """`fn(*args, stop)` را در thread اجرا می‌کند و `sem` را تا **پایانِ thread** نگه می‌دارد."""
+    loop = asyncio.get_running_loop()
+    stop = threading.Event()
+    await sem.acquire()
+    try:
+        cf = _HEAVY_POOL.submit(fn, *args, stop)
+    except BaseException:
+        sem.release()
+        raise
+
+    def _release(_f) -> None:
+        try:
+            loop.call_soon_threadsafe(sem.release)
+        except RuntimeError:          # لوپ بسته شده (خاموشیِ ورکر) — قفلی نمانده که مهم باشد
+            pass
+
+    cf.add_done_callback(_release)
+    fut = asyncio.wrap_future(cf)
+    try:
+        while True:
+            done, _ = await asyncio.wait({fut}, timeout=_CANCEL_POLL)
+            if done:
+                return fut.result()
+            if cancel is not None and await cancel():
+                stop.set()
+                raise ProcessingCancelled()
+    except BaseException:
+        stop.set()                    # لغوِ جاب هم thread را در مرزِ بعدی متوقف کند
+        # نتیجهٔ رهاشده را «خوانده» علامت بزن، وگرنه asyncio برای `_Stopped`ِ بعدی
+        # «Future exception was never retrieved» در لاگ می‌نویسد.
+        fut.add_done_callback(lambda f: f.cancelled() or f.exception())
+        raise
+
+
 # ── حذفِ پس‌زمینه (rembg؛ RAM‌بر → قفلِ هم‌زمانیِ ۱) ────────────
 _BG_SEM = asyncio.Semaphore(1)
 
 
-def _remove_bg_sync(inp: str, out: str) -> None:
+def _remove_bg_sync(inp: str, out: str, stop: threading.Event | None = None) -> None:
     from rembg import remove  # ورودِ تنبل: فقط ورکر این وابستگی را دارد
 
-    with Image.open(inp) as im:
-        res = remove(im.convert("RGBA"))
+    res = remove(_upright(inp).convert("RGBA"))
+    if stop is not None and stop.is_set():
+        raise _Stopped()              # لغو شد — نتیجه‌ای که کسی منتظرش نیست را ننویس
     res.save(out, "PNG")
 
 
-async def remove_background(inp: str, out: str) -> None:
-    async with _BG_SEM:  # هم‌زمان فقط یکی (مصرفِ حافظهٔ مدل بالاست)
-        await asyncio.to_thread(_remove_bg_sync, inp, out)
+async def remove_background(inp: str, out: str, cancel=None) -> None:
+    # هم‌زمان فقط یکی (مصرفِ حافظهٔ مدل بالاست) — تا پایانِ **thread**، نه تا لغو.
+    await _exclusive(_BG_SEM, _remove_bg_sync, inp, out, cancel=cancel)
     if not os.path.exists(out):
         raise RuntimeError("background removal produced no output")
 
@@ -449,7 +541,8 @@ def _srt_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def _transcribe_sync(inp: str, model_size: str, mode: str) -> str:
+def _transcribe_sync(inp: str, model_size: str, mode: str,
+                     stop: threading.Event | None = None) -> str:
     from faster_whisper import WhisperModel  # ورودِ تنبل: فقط ورکر این وابستگی را دارد
 
     model = _WHISPER_MODELS.get(model_size)
@@ -457,18 +550,24 @@ def _transcribe_sync(inp: str, model_size: str, mode: str) -> str:
         model = WhisperModel(model_size, device="cpu", compute_type="int8")
         _WHISPER_MODELS[model_size] = model
     segments, _info = model.transcribe(inp, vad_filter=True)  # تشخیصِ خودکارِ زبان
+    done: list = []
+    for seg in segments:              # generator: کارِ واقعی همین‌جا قطعه‌به‌قطعه است
+        if stop is not None and stop.is_set():
+            raise _Stopped()
+        done.append(seg)
     if mode == "srt":
         lines: list[str] = []
-        for i, seg in enumerate(segments, 1):
+        for i, seg in enumerate(done, 1):
             lines += [str(i), f"{_srt_ts(seg.start)} --> {_srt_ts(seg.end)}", seg.text.strip(), ""]
         return "\n".join(lines)
-    return " ".join(seg.text.strip() for seg in segments).strip()
+    return " ".join(seg.text.strip() for seg in done).strip()
 
 
-async def transcribe_audio(inp: str, model_size: str = "base", mode: str = "txt") -> str:
+async def transcribe_audio(inp: str, model_size: str = "base", mode: str = "txt",
+                           cancel=None) -> str:
     """متنِ گفتارِ صوت را برمی‌گرداند (mode=txt) یا زیرنویسِ SRT (mode=srt)."""
-    async with _ASR_SEM:  # رونویسیِ هم‌زمان فقط یکی
-        return await asyncio.to_thread(_transcribe_sync, inp, model_size, mode)
+    # رونویسیِ هم‌زمان فقط یکی — تا پایانِ **thread** (`_exclusive`).
+    return await _exclusive(_ASR_SEM, _transcribe_sync, inp, model_size, mode, cancel=cancel)
 
 
 # ── صوت (ffmpeg) ───────────────────────────────────────────────
@@ -503,9 +602,39 @@ async def extract_audio(inp: str, out: str, fmt: str = "mp3", progress=None, dur
         raise RuntimeError("no audio track extracted")
 
 
+async def _media_seconds(path: str) -> float | None:
+    """مدتِ **اعشاری** از ffprobe؛ `None` اگر خوانده نشد (آن‌وقت چکی نمی‌شود)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFPROBE, "-v", "error", "-show_entries", "format=duration",
+            "-of", "csv=p=0", path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate()
+        val = float((out or b"").decode("utf-8", "ignore").strip())
+    except Exception:  # noqa: BLE001
+        return None
+    return val if val > 0 and math.isfinite(val) else None
+
+
+async def _check_trim_range(inp: str, start: float) -> None:
+    """برشی که بعد از پایانِ فایل شروع شود خطاست، نه «فایلِ خالی».
+
+    ffmpeg روی `-ss` بیرون از فایل با کدِ صفر خارج می‌شود و یک کانتینرِ **بی‌محتوا**
+    می‌نویسد (اندازه‌گیری‌شده: ۲۶۲ بایت برای mp4، ۶۷۱ برای mp3)، پس `os.path.exists`
+    صادق بود و جاب «انجام شد» می‌گرفت. چکِ خروجی ممکن نیست — همان فایلِ خالی گاهی
+    ۰٫۰۱۸ ثانیه primingِ AAC دارد و از یک برشِ واقعیِ کوتاه جدا نمی‌شود — پس **ورودی**
+    سنجیده می‌شود. روترِ برش همین را با مدتِ (صحیحِ) تلگرام زودتر و به زبانِ کاربر
+    می‌گوید؛ این‌جا تورِ دقیق برای وقتی است که مدتِ کارت نامعلوم است.
+    """
+    total = await _media_seconds(inp)
+    if total is not None and start >= total:
+        raise RuntimeError(f"trim range starts after the end of the file ({total:.1f}s)")
+
+
 async def trim_audio(inp: str, out: str, start: float, end: float,
                      progress=None, cancel=None) -> None:
     """برشِ بازهٔ [start, end] از صوت (خروجیِ mp3)."""
+    await _check_trim_range(inp, start)
     await _run([FFMPEG, "-y", "-ss", f"{start}", "-to", f"{end}", "-i", inp,
                 "-vn", "-c:a", "libmp3lame", "-b:a", "192k", out],
                progress=progress, duration=max(0.1, end - start), cancel=cancel)
@@ -660,7 +789,9 @@ async def compress_video_tiny(inp: str, out: str, duration: float | None = None,
 
 
 async def convert_video(inp: str, out: str, fmt: str, progress=None, duration=None, cancel=None) -> None:
-    args = [FFMPEG, "-y", "-i", inp]
+    # `vf` برای **هر** فرمت، نه فقط mp4: mkv همان libx264ِ پیش‌فرض را می‌گیرد و
+    # webm همان VP9 را — هر دو با منبعِ ۱۰بیتی خروجیِ ۱۰بیتی می‌دادند.
+    args = [FFMPEG, "-y", "-i", inp, "-vf", _DELIVERY_VF]
     if fmt.lower() == "mp4":
         args += [
             "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
@@ -791,6 +922,7 @@ async def watermark_video(inp: str, out: str, wm: str, position: str, scale_w: i
         fc = f"[1:v]scale={scale_w}:-1{fade}[wm];[0:v][wm]overlay={pos}"
     else:        # PNGِ متنی از قبل اندازه‌شده/محو است
         fc = f"[0:v][1:v]overlay={pos}"
+    fc += f",{_DELIVERY_VF}"
     await _run([
         FFMPEG, "-y", "-i", inp, "-i", wm, "-filter_complex", fc,
         "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
@@ -880,8 +1012,9 @@ async def trim_video(inp: str, out: str, start: float, end: float,
     یعنی «تا ثانیهٔ end از خروجی» نه «تا ثانیهٔ end از منبع» — برشِ [۳،۷] به‌جای
     ۴ ثانیه، ۷ ثانیه می‌دهد.
     """
+    await _check_trim_range(inp, start)
     await _run([
-        FFMPEG, "-y", "-ss", f"{start}", "-to", f"{end}", "-i", inp,
+        FFMPEG, "-y", "-ss", f"{start}", "-to", f"{end}", "-i", inp, "-vf", _DELIVERY_VF,
         "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
         "-c:a", "aac", "-movflags", "+faststart", out,
     ], progress=progress, duration=max(0.1, end - start), cancel=cancel)
@@ -943,25 +1076,86 @@ async def make_zip_many(members: list[tuple[str, str]], out: str) -> None:
     await asyncio.to_thread(_zip_many_sync, members, out)
 
 
-# ── نوشتنِ متادیتای صوت + کاور (ffmpeg؛ بدونِ رمزگذاریِ دوباره) ──
-async def write_audio_metadata(inp: str, out: str, tags: dict[str, str],
-                               cover_path: str | None = None, cancel=None) -> None:
+# ── نوشتنِ متادیتای صوت + کاور (ffmpeg؛ تا جای ممکن بدونِ رمزگذاریِ دوباره) ──
+# کدک → (پسوندِ ظرفی که آن کدک را بی‌تغییر نگه می‌دارد، آیا کاور می‌پذیرد).
+# ظرف از **کدکِ واقعی** انتخاب می‌شود نه از نامِ فایل: پیش از فاز ۳ پسوند از
+# `file.name` می‌آمد و `-c copy` می‌خورد، پس voice noteِ بی‌نام (Opus) و AACِ
+# بی‌نام به `.mp3` کپی می‌شدند («Exactly one MP3 audio stream is required»)، و نامی
+# مثلِ «Mr. Brightside» پسوندِ «. Brightside» می‌ساخت که ffmpeg برایش ظرفی پیدا
+# نمی‌کند — هر سه اجراشده.
+_META_CONTAINER: dict[str, tuple[str, bool]] = {
+    "mp3": (".mp3", True),
+    "aac": (".m4a", True),
+    "alac": (".m4a", True),
+    "flac": (".flac", True),
+    "opus": (".ogg", False),     # ظرفِ ogg کاورِ تصویری نمی‌پذیرد
+    "vorbis": (".ogg", False),
+}
+
+
+async def _audio_codec(path: str) -> str | None:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFPROBE, "-v", "error", "-select_streams", "a:0",
+            "-show_entries", "stream=codec_name", "-of", "csv=p=0", path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate()
+    except Exception:  # noqa: BLE001
+        return None
+    return (out or b"").decode("utf-8", "ignore").strip().lower() or None
+
+
+async def _meta_plan(inp: str, want_cover: bool) -> tuple[str, list[str] | None]:
+    """(پسوندِ خروجی، آرگومانِ رمزگذاریِ صوت یا `None` = کپیِ بی‌تغییر).
+
+    رمزگذاریِ دوباره فقط وقتی است که کپی ممکن نیست: کدکِ ناشناخته، یا کاوری که
+    ظرفِ آن کدک نمی‌پذیرد. منبعِ بی‌اتلاف (PCM) به flac می‌رود نه mp3، چون
+    «ویرایشِ تگ» نباید بی‌صدا کیفیت را کم کند.
+    """
+    codec = await _audio_codec(inp)
+    if codec in _META_CONTAINER:
+        ext, holds_cover = _META_CONTAINER[codec]
+        if holds_cover or not want_cover:
+            return ext, None
+    if codec and codec.startswith("pcm_"):
+        if not want_cover:
+            return ".wav", None
+        return ".flac", ["-c:a", "flac"]
+    return ".mp3", ["-c:a", "libmp3lame", "-b:a", "192k"]
+
+
+async def write_audio_metadata(inp: str, out_base: str, tags: dict[str, str],
+                               cover_path: str | None = None, cancel=None) -> str:
+    """تگ (و کاور) را می‌نویسد و **مسیرِ نهایی** را برمی‌گرداند.
+
+    `out_base` مسیرِ بی‌پسوند است؛ پسوند را `_meta_plan` از کدک تعیین می‌کند، پس
+    فراخوان نمی‌تواند دوباره پسوند را از نام حدس بزند. اگر مسیرِ نهایی همان ورودی
+    باشد، `.tagged` می‌گیرد — ffmpeg با `-y` روی فایلی که هم‌زمان می‌خواند می‌نویسد.
+    """
+    ext, encode = await _meta_plan(inp, bool(cover_path))
+    out = out_base + ext
+    if os.path.abspath(out) == os.path.abspath(inp):
+        out = out_base + ".tagged" + ext
     args = [FFMPEG, "-y", "-i", inp]
     if cover_path:
         # صوت از ورودیِ ۰، کاورِ جدید از ورودیِ ۱ (کاورِ قبلی دراپ می‌شود)
-        args += [
-            "-i", cover_path, "-map", "0:a", "-map", "1:0", "-c", "copy",
-            "-id3v2_version", "3", "-disposition:v", "attached_pic",
-            "-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)",
-        ]
+        args += ["-i", cover_path, "-map", "0:a:0", "-map", "1:0"]
+        args += [*encode, "-c:v", "copy"] if encode else ["-c", "copy"]
+        args += ["-disposition:v", "attached_pic",
+                 "-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)"]
+    elif encode:
+        args += ["-map", "0:a:0", *encode]
     else:
         args += ["-map", "0", "-c", "copy"]
+    if ext == ".mp3":
+        args += ["-id3v2_version", "3"]
     for key, val in tags.items():
         args += ["-metadata", f"{key}={val}"]
     args.append(out)
     await _run(args, cancel=cancel)
     if not os.path.exists(out):
         raise RuntimeError("metadata write produced no output")
+    return out
 
 
 # ── تبدیلِ سند با LibreOffice headless (به PDF / DOCX / …) ──────
@@ -1033,8 +1227,46 @@ async def pdf_merge(inputs: list[str], out: str) -> None:
 
 
 # ── آرشیو (7-Zip) ──────────────────────────────────────────────
+def _is_rar(path: str) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(len(_RAR_MAGIC)) == _RAR_MAGIC
+    except OSError:
+        return False
+
+
+def _parse_unrar_list(text: str) -> list[tuple[str, int]]:
+    """خروجیِ `unrar-free -t`: خطِ نام (با یک فاصلهٔ آغازین) و زیرش خطِ «حجم تاریخ
+    زمان ویژگی». پوشه‌ها ویژگیِ `D` دارند و حذف می‌شوند."""
+    lines = text.splitlines()
+    seps = [i for i, ln in enumerate(lines) if ln.startswith("-----")]
+    if len(seps) < 2:
+        return []
+    entries: list[tuple[str, int]] = []
+    name: str | None = None
+    for ln in lines[seps[0] + 1:seps[1]]:
+        m = re.fullmatch(r"\s+(\d+)\s+\S+\s+\S+\s+(\S+)\s*", ln)
+        if m and name is not None:
+            if "D" not in m.group(2):
+                entries.append((name, int(m.group(1))))
+            name = None
+        elif ln.strip():
+            name = ln[1:] if ln.startswith(" ") else ln
+    return entries
+
+
 async def archive_list(path: str) -> list[tuple[str, int]]:
     """(name, uncompressed_size) برای هر عضو (پوشه‌ها حذف)."""
+    if _is_rar(path):
+        proc = await asyncio.create_subprocess_exec(
+            UNRAR, "-t", path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, err = await proc.communicate()
+        entries = _parse_unrar_list(out.decode("utf-8", "ignore"))
+        if proc.returncode != 0 or not entries:
+            why = err.decode("utf-8", "ignore").strip().splitlines()[-1:] or ["cannot read archive"]
+            raise RuntimeError(f"cannot read RAR archive: {why[0][:160]}")
+        return entries
     proc = await asyncio.create_subprocess_exec(
         SEVENZ, "l", "-ba", path,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
@@ -1081,9 +1313,16 @@ async def _extract_capped(path: str, exdir: str, max_bytes: int) -> None:
     پیش از استخراج صرفاً یک خروجِ زودهنگامِ ارزان است نه مرز. این‌جا بایتِ
     واقعیِ نوشته‌شده شمرده می‌شود.
     """
+    if _is_rar(path):
+        # همان سقف و همان kill، فقط ابزارِ دیگر. `unrar-free` نامِ `..`دار را رد
+        # می‌کند، مسیرِ مطلق را زیرِ مقصد می‌نشاند و symlink نمی‌سازد —
+        # `tests/test_rar_extract.py` همین را پین می‌کند، مثلِ پینِ 7z در فاز ۲الف.
+        cmd = [UNRAR, "-x", "-f", path, exdir.rstrip(os.sep) + os.sep]
+    else:
+        cmd = [SEVENZ, "x", path, f"-o{exdir}", "-y", "-bd", "-bb0"]
+    os.makedirs(exdir, exist_ok=True)
     proc = await asyncio.create_subprocess_exec(
-        SEVENZ, "x", path, f"-o{exdir}", "-y", "-bd", "-bb0",
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
     )
     try:
         while True:

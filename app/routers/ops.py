@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import secrets
 import weakref
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import counters, nodes, settings_store
-from ..cards import card_caption, meta_editor_view, set_card_note, update_card
+from ..cards import _fmt_dur, card_caption, meta_editor_view, set_card_note, update_card
 from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Spd, Tr, Wm
 from ..config import settings
 from ..crud import get_file_by_ref, get_owned_job
@@ -310,7 +311,9 @@ def _parse_time(s: str) -> float | None:
         sec = parts[0] * 3600 + parts[1] * 60 + parts[2]
     else:
         return None
-    return sec if sec >= 0 else None
+    # `float()` «inf»/«1e999» را هم می‌پذیرد؛ بازهٔ `0-inf` بدونِ این گارد تا ffmpeg
+    # می‌رفت. `nan` از قبل با `>= 0` رد می‌شد.
+    return sec if sec >= 0 and math.isfinite(sec) else None
 
 
 def _parse_range(s: str) -> tuple[float, float] | None:
@@ -1090,6 +1093,15 @@ async def op_trim_recv(message: Message, state: FSMContext, session: AsyncSessio
     if rng is None:  # نامعتبر → همان‌جا بمان و دوباره بپرس
         await set_card_note(message.bot, card_chat, card_mid, file, lang,
                             note=t(lang, "trim_bad"), keyboard=cancel_kb(file.ref, lang))
+        return
+    if file.duration and rng[0] >= file.duration:
+        # بازه بعد از پایانِ فایل → ffmpeg بی‌خطا یک فایلِ **خالی** می‌ساخت و جاب
+        # «انجام شد» می‌گرفت. مدتِ تلگرام عددِ صحیح است، پس دمِ زیرِ یک‌ثانیه‌ای
+        # ممکن است این‌جا رد شود؛ چکِ دقیق (اعشاری) در `processing.trim_*` است و
+        # همان حالتی را می‌گیرد که مدتِ کارت نامعلوم است.
+        await set_card_note(message.bot, card_chat, card_mid, file, lang,
+                            note=t(lang, "trim_past_end", dur=_fmt_dur(file.duration)),
+                            keyboard=cancel_kb(file.ref, lang))
         return
     await state.clear()
     if user is not None:

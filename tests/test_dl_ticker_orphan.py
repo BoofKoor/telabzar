@@ -107,4 +107,5 @@ async def test_the_cancelled_job_still_frees_its_slot(hang_ytdlp, payload, redis
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(job, 10)
     assert await dl_active.count(redis) == 0
-    assert not os.path.exists(os.path.join(TD.settings.work_dir, f"dl-{payload['ref']}"))
+    import glob
+    assert not glob.glob(os.path.join(TD.settings.work_dir, f"dl-{payload['ref']}*"))

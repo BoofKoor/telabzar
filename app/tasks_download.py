@@ -874,11 +874,10 @@ async def _apply_match_meta(
             out.append((path, info, thumb))
             continue
         stem = _SP_NAME_RE.sub("_", f"{sp.get('artist', '')} - {sp.get('title', '')}".strip(" -"))[:100] or "track"
-        newp = os.path.join(os.path.dirname(path), stem + os.path.splitext(path)[1])
-        if os.path.abspath(newp) == os.path.abspath(path):
-            newp = os.path.join(os.path.dirname(path), stem + ".sp" + os.path.splitext(path)[1])
         try:
-            await P.write_audio_metadata(path, newp, tags, cover_path=sp.get("cover_path"))
+            # پسوند و برخورد با مسیرِ ورودی را خودِ `write_audio_metadata` حل می‌کند.
+            newp = await P.write_audio_metadata(path, os.path.join(os.path.dirname(path), stem),
+                                                tags, cover_path=sp.get("cover_path"))
             out.append((newp, info, thumb))
         except Exception:  # noqa: BLE001
             log.warning("spotify meta write failed for %s", path)
@@ -914,7 +913,12 @@ async def run_download(ctx: dict, payload: dict) -> None:
     phase = payload["phase"]
     selector = payload.get("selector", "best")
     owner_id = payload["owner_id"]
-    workdir = os.path.join(settings.work_dir, f"dl-{ref}")
+    # پوشهٔ کار به‌ازای **جاب**، نه `ref`. یک منوی کیفیت می‌تواند چند pick بدهد
+    # (`on_dl_pick` هر بار یک جابِ تازه با همان `ref` صف می‌کند) و با پوشهٔ مشترک،
+    # `finally`ِ جابِ زودتر تمام‌شده فایل‌های جابِ دیگر را وسطِ کار پاک می‌کرد —
+    # همین‌طور پاک‌سازیِ بینِ دو تلاشِ حلقهٔ کوکی. پیشوندِ `dl-{ref}-` می‌ماند تا
+    # پوشه از روی لاگ/دیسک هنوز به لینک گره بخورد.
+    workdir = os.path.join(settings.work_dir, f"dl-{ref}-{secrets.token_hex(4)}")
 
     async def _cancelled() -> bool:
         if redis is None:

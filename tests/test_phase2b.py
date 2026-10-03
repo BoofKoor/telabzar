@@ -155,7 +155,16 @@ async def test_mute_and_metadata_accept_cancel():
     from app import tasks
     src = inspect.getsource(tasks._do_op)
     assert "P.mute_video(inpath, out, cancel=cancel)" in src
-    assert "cancel=cancel)" in src[src.index("write_audio_metadata"):][:120]
+    # با AST، نه پنجرهٔ ۱۲۰ کاراکتری: فاز ۳ آرگومان‌های این فراخوانی را بلندتر
+    # کرد و پنجرهٔ متنی بی‌آنکه ادعا عوض شده باشد قرمز شد.
+    import ast
+    calls = [n for n in ast.walk(ast.parse(src.lstrip()))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "write_audio_metadata"]
+    assert calls, "فراخوانِ write_audio_metadata در _do_op پیدا نشد"
+    for c in calls:
+        kw = {k.arg: k.value for k in c.keywords}
+        assert isinstance(kw.get("cancel"), ast.Name) and kw["cancel"].id == "cancel"
 
 
 @needs_ffmpeg

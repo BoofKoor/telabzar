@@ -158,6 +158,7 @@ MESSAGES: dict[str, str] = {
     "wm_ask_content": "Send a <b>text</b> or a <b>photo/logo</b> for the watermark:",
     "trim_ask": "✂️ Send the trim range (e.g. <code>0:10-0:45</code>):",
     "trim_bad": "⚠️ Invalid range. Example: <code>0:10-0:45</code>",
+    "trim_past_end": "⚠️ That range starts after the end of the file (length: <code>{dur}</code>). Send another range:",
     "shot_ask": "📸 Send the moment (e.g. <code>1:23</code>):",
     "shot_bad": "⚠️ Invalid time. Example: <code>1:23</code>",
     "cl_watermark": "💧 Watermark added",

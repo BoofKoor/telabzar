@@ -495,7 +495,14 @@ def _cleanup_cookie(tmp_path: str | None) -> None:
 
 # ── پرچم‌های مشترکِ yt-dlp (proxy / cookies / pot-provider) ─────
 def _common_flags(opts: dict) -> list[str]:
-    flags = ["--no-warnings", "--no-playlist"]
+    # `--no-playlist` فقط لینکی را می‌گیرد که **هم** ویدیو **هم** پلی‌لیست است
+    # (`watch?v=…&list=…`). لینکِ خالصِ پلی‌لیست/کانال/صفحه‌ای با چند ویدیو هنوز
+    # **همهٔ** آیتم‌ها را می‌کشید — اجراشده با yt-dlpِ واقعی روی صفحه‌ای با سه
+    # `<video>`: سه فایل — و سقفِ حجم (`--max-filesize`) به‌ازای **هر فایل** است، پس
+    # تا پرشدنِ دیسک چیزی جلویش نبود. `--playlist-items 1` یعنی «اولین آیتم»؛ روی
+    # لینکِ تک‌ویدیو بی‌اثر است. همین روی probe هم سوار است (`-J` بدونِ آن کلِ
+    # پلی‌لیست را استخراج می‌کرد، و probe کوکی دارد).
+    flags = ["--no-warnings", "--no-playlist", "--playlist-items", "1"]
     if opts.get("proxy"):
         flags += ["--proxy", opts["proxy"]]
     if opts.get("user_agent"):   # هویتِ سشن: همان UA که اکانت با آن شناخته می‌شود
@@ -546,6 +553,13 @@ def _carry_meta(data: dict) -> dict:
 
 def normalize_probe(data: dict) -> dict:
     """خروجیِ ‎-J را به {title, duration, kind, options[], + متادیتای ایمنی} تمیز می‌کند."""
+    # لینکِ پلی‌لیست با `--playlist-items 1` یک دیکشنریِ `_type=playlist` با **یک**
+    # entry می‌دهد که خودش `formats` ندارد؛ بدونِ بازکردن، منوی کیفیت خالی و متادیتای
+    # ایمنی (age_limit/…) مالِ پلی‌لیست بود نه ویدیویی که واقعاً دانلود می‌شود.
+    if data.get("_type") in ("playlist", "multi_video"):
+        first = next((e for e in (data.get("entries") or []) if isinstance(e, dict)), None)
+        if first is not None:
+            data = first
     duration = data.get("duration")
     formats = data.get("formats") or []
     # بیشترین tbr ویدیویی به‌ازای هر ارتفاع + یک صوتِ نماینده (برای تخمینِ merge)
@@ -2755,6 +2769,9 @@ def _gallery_caption(workdir: str) -> str | None:
     return None
 
 
+GALLERY_MAX_ITEMS = 20
+
+
 async def download_gallerydl(url: str, workdir: str, opts: dict,
                              progress=None, cancel=None) -> tuple[list[str], str | None]:
     """دانلودِ گالری/کاروسل با gallery-dl → (فهرستِ فایل‌ها, کپشنِ پست بدونِ هشتگ).
@@ -2769,7 +2786,11 @@ async def download_gallerydl(url: str, workdir: str, opts: dict,
     ck = _writable_cookie(opts.get("cookies"))
     outdir = os.path.join(workdir, "gl")
     os.makedirs(outdir, exist_ok=True)
-    cmd = [GALLERY_DL, "-D", outdir, "--write-metadata"]  # سایدکارِ .json برای کپشن
+    # `--range`: لینکِ پروفایل/بورد/مجموعه کلِ محتوا را می‌کشید (و با کوکیِ اکانت،
+    # یعنی همان الگوی مصرفی که سشن را می‌سوزاند). ۲۰ = سقفِ کاروسلِ اینستاگرام، پس
+    # هیچ پستِ واقعی‌ای کوتاه نمی‌شود.
+    cmd = [GALLERY_DL, "-D", outdir, "--write-metadata",  # سایدکارِ .json برای کپشن
+           "--range", f"1-{GALLERY_MAX_ITEMS}"]
     if opts.get("proxy"):
         cmd += ["--proxy", opts["proxy"]]
     if opts.get("user_agent"):   # هویتِ سشن: UAِ ثابتِ همان اکانت
