@@ -3304,6 +3304,18 @@ CASES: list[dict] = [
      "new": '      - tg-bot-api-data:/var/lib/telegram-bot-api\n      - ./cookies:/cookies     # نوشتنی',
      "target": 'tests/test_tg_janitor.py',
      "expect": 'test_only_the_server_and_the_janitor_may_write_the_api_dir'},
+    {"name": 'diag: the read-only tool gains a delete',
+     "path": 'tools/tg_disk_diag.sh',
+     "old": 'export TZ=UTC   # every time in UTC',
+     "new": 'rm -f "$FS"; export TZ=UTC   # every time in UTC',
+     "target": 'tests/test_tg_disk_diag.py',
+     "expect": 'test_the_script_is_read_only'},
+    {"name": 'diag: the per-day summary keys on size instead of the day',
+     "path": 'tools/tg_disk_diag.sh',
+     "old": "awk '{c[$1]++; s[$1]+=$2}",
+     "new": "awk '{c[$2]++; s[$2]+=$2}",
+     "target": 'tests/test_tg_disk_diag.py',
+     "expect": 'test_the_filesystem_sections_count_files_per_day'},
 ]
 
 
