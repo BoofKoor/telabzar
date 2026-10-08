@@ -35,6 +35,11 @@ class User(Base):
     lang: Mapped[str | None] = mapped_column(String(LANG_LEN), nullable=True)
     role: Mapped[str] = mapped_column(String(16), default="user")
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: یوزرنیم و نامِ تلگرامی، فقط برای پنل (فهرستِ کاربران و جست‌وجو). با هر آپدیت
+    #: اگر عوض شده باشد به‌روز می‌شود (`middlewares.get_or_create_user`). تهی یعنی
+    #: کاربر از پیش از این ستون‌ها پیامی نداده، نه اینکه یوزرنیم ندارد.
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    full_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -216,3 +221,66 @@ class Job(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class DownloadEvent(Base):
+    """یک ردیف به‌ازای هر **پایانِ** یک دانلود — موفق، ناموفق، ردشده یا لغوشده.
+
+    چرا جدولِ جدا و نه `Job`: دانلود عمداً ردیفِ `Job` نمی‌سازد (`Job.file_id` یک
+    FKِ NOT NULL است و دانلودِ شکست‌خورده اصلاً `File` ندارد)، و شمارنده‌های
+    `dlstat:*` فقط دو روز عمر دارند. پس بدونِ این جدول هیچ آمارِ تاریخی‌ای از
+    شکست‌ها وجود نداشت. نوشتنش بهترین‌تلاش است (`app/dl_events.py`) و هرگز دانلود
+    را نمی‌شکند. `owner_id` عمداً FK نیست: این یک لاگ است و حذفِ کاربر نباید
+    تاریخچه را بشکند.
+
+    `outcome` ∈ ok/fail/blocked/refused/cancelled — «blocked» یعنی سیاستِ محتوا ردش
+    کرد، «refused» یعنی سقف/حجم/مدت/شلوغی، و هیچ‌کدام شکستِ سرویس نیستند.
+    """
+
+    __tablename__ = "download_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    owner_id: Mapped[int | None] = mapped_column(nullable=True, index=True)
+    tg_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    platform: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
+    url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(16), index=True)
+    error_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    error: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    height: Mapped[int | None] = mapped_column(nullable=True)
+    duration: Mapped[int | None] = mapped_column(nullable=True)
+    items: Mapped[int | None] = mapped_column(nullable=True)
+    took_ms: Mapped[int | None] = mapped_column(nullable=True)
+    cached: Mapped[bool] = mapped_column(Boolean, default=False)
+    cookie: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    exit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    attempts: Mapped[int | None] = mapped_column(nullable=True)
+    selector: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    engine: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    phase: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+
+class AdminAction(Base):
+    """لاگِ کارهای ادمین در پنل (ورود، ذخیرهٔ تنظیمات، کوکی، کاربر، متن، دکمه، زبان، نود).
+
+    `detail` هرگز راز نگه نمی‌دارد: مقدارِ کلیدهای حساس و userinfoِ پروکسی پیش از
+    نوشتن پوشانده می‌شود (`admin_web._audit_value`). نوشتنش بهترین‌تلاش است و هیچ
+    کارِ ادمینی به‌خاطرِ شکستِ لاگ رد نمی‌شود.
+    """
+
+    __tablename__ = "admin_actions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(32), index=True)
+    target: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)

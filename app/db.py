@@ -71,6 +71,10 @@ _MIGRATIONS = [
     # ردهٔ تازه‌ای از هزینه.
     "ALTER TABLE users ALTER COLUMN lang TYPE VARCHAR(16)",
     "ALTER TABLE text_overrides ALTER COLUMN lang TYPE VARCHAR(16)",
+    # یوزرنیم و نامِ تلگرامی برای پنل. هر دو nullable و بی‌پیش‌فرض‌اند، پس روی
+    # Postgres 11+ catalog-only‌اند (بدونِ بازنویسیِ جدول) — هم‌ردهٔ ADD COLUMNهای بالا.
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(64)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(128)",
 ]
 
 

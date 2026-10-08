@@ -11,6 +11,7 @@ checkpoint)، Redis (`MISCONF`) و خودِ `local-bot-api` («Can't create dire
 from __future__ import annotations
 
 import ast
+import sys
 import asyncio
 import os
 import time
@@ -224,5 +225,8 @@ def test_the_janitor_runs_in_the_lean_bot_image():
     mods = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     mods |= {n.module.split(".")[0] for n in ast.walk(tree)
              if isinstance(n, ast.ImportFrom) and n.module and n.level == 0}
-    assert mods <= {"__future__", "asyncio", "logging", "os", "shutil", "stat", "time", "dataclasses"}
+    # کشف‌محور، نه فهرستِ دستی: «فقط کتابخانهٔ استاندارد» همان ادعاست، و فهرستِ دستی
+    # با افزودنِ `json` (گزارشِ `janitor:last` برای پنل) بی‌دلیل قرمز شد.
+    extra = mods - set(sys.stdlib_module_names)
+    assert not extra, f"tg_janitor بیرون از کتابخانهٔ استاندارد import می‌کند: {sorted(extra)}"
     assert _services()["tg-janitor"]["build"]["dockerfile"] == "docker/bot.Dockerfile"

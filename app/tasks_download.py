@@ -30,6 +30,7 @@ from aiogram.utils.media_group import MediaGroupBuilder
 
 from . import cookies as ck
 from . import dl_active
+from . import dl_events as EV
 from . import dl_cache
 from . import downloader as D
 from . import instagram_anon as IGA
@@ -914,6 +915,30 @@ async def _nsfw_stop(bot: Bot, chat_id: int, mid: int, lang: str, redis,
 
 
 async def run_download(ctx: dict, payload: dict) -> None:
+    """ورودیِ ARQ: خودِ دانلود (`_run_download`) + یک ردیفِ `download_events` در پایان.
+
+    لاگ در **پوسته** است نه وسطِ کار، تا هر خروجی‌ای — از جمله استثنایی که هیچ
+    شاخه‌ای پیش‌بینی‌اش نکرده — ثبت شود. شاخه‌های داخلی نتیجهٔ دقیق را با
+    `EV.settle` می‌نشانند و چون «اولین برنده است»، «crash»ِ این‌جا فقط وقتی
+    می‌نشیند که هیچ شاخه‌ای چیزی ننشانده باشد.
+    """
+    ev = EV.start(payload)
+    try:
+        await _run_download(ctx, payload, ev)
+    except asyncio.CancelledError:
+        # job_timeout یا خاموشیِ ورکر. بدونِ انتظار: await کردن وسطِ لغو یا دوباره
+        # لغو می‌شود یا لغوِ خودِ جاب را می‌بلعد (§۷).
+        EV.settle(ev, EV.FAIL, "aborted")
+        EV.record_soon(ev)
+        raise
+    except Exception as exc:
+        EV.settle(ev, EV.FAIL, "crash", f"{type(exc).__name__}: {exc}")
+        await EV.record(ev)
+        raise
+    await EV.record(ev)
+
+
+async def _run_download(ctx: dict, payload: dict, ev: dict) -> None:
     bot: Bot = ctx["bot"]
     await textstore.refresh_if_stale()  # متن‌های ادمین‌ویرایش‌شده تازه بمانند
     redis = ctx.get("redis")
@@ -947,6 +972,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
     # لینکِ امضاشده با نامِ GUIDدار حتی سرِ نوشتنِ فایلِ متادیتا). یک HEADِ ارزان
     # جواب می‌دهد: هرچه HTML نیست، خودمان استریمش می‌کنیم. منوی کیفیت هم بی‌معنی
     # است، پس مستقیم به fetch می‌رود.
+    ev["exit"] = settings.node_id or "master"
     direct_cap = 0
     if engine == "ytdlp" and platform == "other":
         if await settings_store.get_bool("dl_direct_enabled", settings.dl_direct_enabled):
@@ -955,6 +981,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 engine, phase = "direct", "fetch"
                 log.info("direct file link (%s, %s B) — bypassing yt-dlp",
                          head.get("content_type"), head.get("size"))
+    ev["engine"], ev["phase"] = engine, phase
     if engine == "direct":
         direct_cap = await settings_store.get_int("dl_direct_max_mb",
                                                   settings.dl_direct_max_mb)
@@ -1057,9 +1084,12 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 # پایین) — فقط بدونِ خرجِ کوکی. `blocked` نه `fail`، به همان دلیلی
                 # که شاخهٔ `check_meta` دارد: منویی ساخته نمی‌شود چون سیاست رد کرد.
                 await PS.note(redis, PS.BLOCKED)
+                EV.settle(ev, EV.BLOCKED, "age_limit", attempts=attempts)
                 await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
                                  payload.get("tg_user_id") or 0, "age_limit:18", url)
                 return
+            EV.settle(ev, EV.FAIL, kind or _error_class(msg, platform), msg,
+                      attempts=attempts)
             await _metric(redis, platform, ok=False)
             await PS.note(redis, PS.FAIL)
             if not _says_nothing_about_exit(msg, kind):
@@ -1080,12 +1110,14 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 # پس این جاب هرگز pick‌شدنی نیست و ریختنش در مخرجِ نرخِ رهاشدن
                 # آن عدد را با هر لینکِ سنی باد می‌کند.
                 await PS.note(redis, PS.BLOCKED)
+                EV.settle(ev, EV.BLOCKED, "nsfw", why)
                 await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
                                  payload.get("tg_user_id") or 0, why, url)
                 return
         cap_min = await settings_store.get_int("dl_max_duration_min", settings.dl_max_duration_min)
         if cap_min > 0 and (info.get("duration") or 0) > cap_min * 60:
             await PS.note(redis, PS.BLOCKED)      # همان: موفق ولی بی‌منو
+            EV.settle(ev, EV.REFUSED, "too_long", duration=info.get("duration"))
             await _edit(bot, chat_id, status_mid, t(lang, "dl_too_long", min=cap_min))
             return
         opts = info.get("options") or []
@@ -1139,6 +1171,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
             active = 0
     try:
         if cap and active > cap:
+            EV.settle(ev, EV.REFUSED, "busy")
             await _edit(bot, chat_id, status_mid, t(lang, "dl_busy"))
             return
         # گاردِ فضای دیسک
@@ -1148,6 +1181,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
         except Exception:  # noqa: BLE001
             free = None
         if min_free and free is not None and free < min_free * 1024 ** 3:
+            EV.settle(ev, EV.REFUSED, "no_disk")
             await _edit(bot, chat_id, status_mid, t(lang, "dl_no_disk"))
             return
 
@@ -1255,6 +1289,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 # workdir را `finally`ِ بیرونیِ همین تابع می‌بندد، پس این `return`
                 # چیزی نشت نمی‌دهد؛ تیکر در آن `finally` نیست و باید صریح بسته شود.
                 await _stop_ticker()
+                EV.settle(ev, EV.CANCELLED)
                 await _edit(bot, chat_id, status_mid, t(lang, "cancelled"))
                 return
             if got.won:
@@ -1334,6 +1369,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                                 raise ytdlp_exc
                     paths = [(path, info, thumb)]
                 await ck.mark_ok(redis, cookie_name)   # این اکانت سالم است
+                ev["cookie"] = cookie_name
                 await ck.note_spend(redis, cookie_name)
                 await _ytauth_metric(redis, platform, "fetch", cookie_name, "ok")
                 # همین خروجی برای این اکانت جواب داد → پس اکانت‌هایی که قبلش
@@ -1343,6 +1379,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 break
             except P.ProcessingCancelled:
                 await _stop_ticker()
+                EV.settle(ev, EV.CANCELLED, attempts=attempts)
                 await _edit(bot, chat_id, status_mid, t(lang, "cancelled"))
                 return
             except D.AgeRestricted:
@@ -1352,6 +1389,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 # برای تله‌متری «موفق» نیست ولی «شکستِ مسیر» هم نیست: استخراج جواب داد.
                 await _ytauth_metric(redis, platform, "fetch", cookie_name, "age_limit")
                 await _stop_ticker()
+                EV.settle(ev, EV.BLOCKED, "age_limit", attempts=attempts)
                 pol = await safety.load_policy()
                 await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
                                  payload.get("tg_user_id") or 0, "age_limit:18", url)
@@ -1365,6 +1403,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                 # می‌خورد» که §۷ دربارهٔ خطاهای غیرِکوکی هشدار می‌دهد. هیچ
                 # اکانتی هم مقصر نیست، پس ضربه‌ای ثبت نمی‌شود.
                 await _stop_ticker()
+                EV.settle(ev, EV.REFUSED, "unsupported", attempts=attempts)
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_apple_entity"))
                 await _metric(redis, platform, ok=False)
                 return
@@ -1380,6 +1419,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                         # ۲۰۲۶-۰۹ این متن bot-check خوانده می‌شد، پس کار به کوکی می‌رفت
                         # فقط برای اینکه `--match-filter` بعدش ۱۸+ بودن را ببیند و رد کند.
                         await _stop_ticker()
+                        EV.settle(ev, EV.BLOCKED, "age_limit", attempts=attempts)
                         await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
                                          payload.get("tg_user_id") or 0, "age_limit:18", url)
                         await _metric(redis, platform, ok=False)
@@ -1447,6 +1487,13 @@ async def run_download(ctx: dict, payload: dict) -> None:
             await _alert_if_low(redis, bot, _cookie_platform(platform))
             await _metric(redis, platform, ok=False)
             kind = _yt_kind(msg, platform)
+            if isinstance(dl_err, D.DirectTooLarge):
+                EV.settle(ev, EV.REFUSED, "too_large", size=dl_err.size, attempts=attempts)
+            else:
+                EV.settle(ev, EV.FAIL,
+                          "exit" if exit_bad else (kind or _error_class(msg, platform)),
+                          msg, attempts=attempts,
+                          cookie=failures[-1][0] if failures else None)
             # شکستِ واقعیِ شبکه‌ای (نه ردِ سیاستی) → به حسابِ همین خروجی. اگر همهٔ
             # اکانت‌ها روی یک خروجی بیفتند، مقصر IP است نه سشن‌ها. ویدیوی خصوصی/سنی
             # دربارهٔ خروجی چیزی نمی‌گوید، پس شمرده نمی‌شود.
@@ -1515,6 +1562,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
         if cap_min > 0:
             longest = max((int(i.get("duration") or 0) for _p, i, _t in paths), default=0)
             if longest > cap_min * 60:
+                EV.settle(ev, EV.REFUSED, "too_long", duration=longest, attempts=attempts)
                 await _edit(bot, chat_id, status_mid, t(lang, "dl_too_long", min=cap_min))
                 return
 
@@ -1522,6 +1570,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
         max_mb = await settings_store.get_int("dl_max_size_mb", settings.dl_max_size_mb)
         total = sum(os.path.getsize(p) for p, _i, _t in paths if os.path.exists(p))
         if max_mb and total > max_mb * 1024 * 1024:
+            EV.settle(ev, EV.REFUSED, "too_large", size=total, attempts=attempts)
             await _metric(redis, platform, ok=False)
             await _edit(bot, chat_id, status_mid,
                         t(lang, "dl_too_large", mb=round(total / 1024 / 1024), cap=max_mb))
@@ -1544,6 +1593,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
                         why = f"pixel:{label}:{score:.2f}"
                         break
             if why:
+                EV.settle(ev, EV.BLOCKED, "nsfw", why, size=total, attempts=attempts)
                 await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,
                                  payload.get("tg_user_id") or 0, why, url)
                 await _metric(redis, platform, ok=False)
@@ -1612,6 +1662,7 @@ async def run_download(ctx: dict, payload: dict) -> None:
         if deliver_err:
             # ارسال به کاربر شکست خورد. دانلود انجام شد ولی کاربر چیزی (یا همه‌چیز)
             # نگرفت — پس نه `ok` ثبت می‌شود نه پیامِ وضعیت بی‌صدا پاک می‌شود.
+            EV.settle(ev, EV.FAIL, "deliver", deliver_err, size=total, attempts=attempts)
             await _metric(redis, platform, ok=False)
             await _edit(bot, chat_id, status_mid,
                         t(lang, "dl_failed") + f"\n<code>{escape(deliver_err[:280])}</code>")
@@ -1624,6 +1675,13 @@ async def run_download(ctx: dict, payload: dict) -> None:
 
         await _metric(redis, platform, ok=True)
         await ck.note_exit(redis, settings.node_id, platform, ok=True)
+        _p0, _i0, _t0 = paths[0]
+        EV.settle(ev, EV.OK, size=total, items=len(paths), attempts=attempts,
+                  kind=_kind_from_info(_i0, _p0),
+                  height=max((int(i.get("height") or 0) for _p, i, _t in paths),
+                             default=0) or None,
+                  duration=max((int(i.get("duration") or 0) for _p, i, _t in paths),
+                               default=0) or None)
     finally:
         # تورِ ایمنیِ تیکر: شاخه‌های شناخته‌شده خودشان `_stop_ticker()` می‌زنند،
         # ولی هرچه از آن‌ها فرار کند — مهم‌ترینش `CancelledError`ِ `job_timeout` یا

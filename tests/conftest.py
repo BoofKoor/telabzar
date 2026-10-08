@@ -32,3 +32,23 @@ def redis():
     """Redisِ درون‌حافظه‌ای (fakeredis) — رفتارِ واقعیِ ZSET/TIME، بدونِ ماک."""
     import fakeredis.aioredis as fr
     return fr.FakeRedis(decode_responses=True)
+
+
+@pytest.fixture(autouse=True)
+def dl_event_rows(monkeypatch):
+    """نوشتنِ `download_events` در حافظه ضبط می‌شود، نه در Postgres.
+
+    `run_download` در پایانِ هر جاب یک ردیف می‌نویسد. بدونِ این fixture هر تستی
+    که آن را اجرا کند یک اتصالِ ردشده به `127.0.0.1:5432` می‌زد (DSNِ بالا) — بی‌خطر
+    چون بلعیده می‌شود، ولی هم کُند و هم کور: هیچ تستی نمی‌توانست ببیند **چه چیزی**
+    ثبت شد. حالا همان آرگومان‌هایی که به `DownloadEvent` می‌رسید در این فهرست است.
+    """
+    from app import dl_events
+
+    rows: list[dict] = []
+
+    async def _write(kw: dict) -> None:
+        rows.append(dict(kw))
+
+    monkeypatch.setattr(dl_events, "_write", _write)
+    return rows

@@ -115,7 +115,11 @@ def test_neither_ticker_site_swallows_by_hand_any_more():
     assert "CancelledError" not in _caught_names(tasks.run_op), \
         "run_op هنوز خودش CancelledError می‌گیرد"
 
-    dl_src = inspect.getsource(tasks_download.run_download)
+    # بدنهٔ دانلود از ۲۰۲۶-۱۰ در `_run_download` است و `run_download` پوسته‌ای که
+    # لاگِ پایانِ دانلود (`dl_events`) را می‌نویسد. ادعا دربارهٔ محلِ تیکر است، پس
+    # بدنه را می‌خواند — و پوسته را هم، تا BaseException آن‌جا هم بلعیده نشود.
+    dl_src = inspect.getsource(tasks_download._run_download)
     assert "P.stop_task(ticker)" in dl_src
-    assert "BaseException" not in _caught_names(tasks_download.run_download), \
-        "_stop_ticker هنوز BaseException را می‌بلعد (شاملِ SystemExit)"
+    for fn in (tasks_download._run_download, tasks_download.run_download):
+        assert "BaseException" not in _caught_names(fn), \
+            f"{fn.__name__} هنوز BaseException را می‌بلعد (شاملِ SystemExit)"
