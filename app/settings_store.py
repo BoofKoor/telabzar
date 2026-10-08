@@ -45,6 +45,8 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "vjoin_max_mb": ("int", settings.vjoin_max_mb),
     "stream_base": ("str", settings.stream_base),   # نودِ استریم: پایهٔ عمومیِ لینک‌ها
     "dl_link_days": ("int", settings.dl_link_days),  # عمرِ لینکِ عمومی (روز) · ۰ = بی‌انقضا
+    "tg_files_max_age_hours": ("int", settings.tg_files_max_age_hours),  # tg_janitor · ۰ = خاموش
+    "tg_files_min_free_gb": ("int", settings.tg_files_min_free_gb),      # tg_janitor · ۰ = خاموش
     "cookie_alert_min": ("int", settings.cookie_alert_min),  # آستانهٔ هشدارِ کوکی
     # ── سهمیه و سرعت‌گیرِ استخرِ سشن (app/cookies.py:Limits) ──
     "ck_cap_instagram": ("int", settings.ck_cap_instagram),

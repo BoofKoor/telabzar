@@ -1,5 +1,5 @@
 # تل‌ابزار — استکِ اصلی
-# سرویس‌ها: local-bot-api · postgres · redis · bot · worker · gateway · clamav
+# سرویس‌ها: local-bot-api · tg-janitor · postgres · redis · bot · worker · gateway · clamav
 name: telabzar
 
 services:
@@ -14,6 +14,26 @@ services:
       - tg-bot-api-data:/var/lib/telegram-bot-api
     expose:
       - "8081"
+
+  # پاک‌سازیِ پوشهٔ بالا (`app/tg_janitor.py`). سرورِ محلی هر فایلی را که یک‌بار
+  # getFile شده برای همیشه نگه می‌دارد؛ در تولید یک روز ۹۴٫۷ گیگ ویدیو دیسک را پر
+  # کرد و کلِ استک (Postgres/Redis/local-bot-api) را خواباند.
+  # **عمداً بدونِ depends_on:** وقتی دیسک پر است Postgres خودش unhealthy است، و
+  # سرویسی که منتظرِ سلامتِ آن بماند دقیقاً وقتی لازم است بالا نمی‌آید. خواندنِ
+  # تنظیمات کران‌دار است و روی خطا به پیش‌فرض برمی‌گردد.
+  # تنها سرویسی جز خودِ سرور که این volume را **نوشتنی** سوار می‌کند.
+  tg-janitor:
+    build:
+      context: .
+      dockerfile: docker/bot.Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.tg_janitor"]
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    volumes:
+      - tg-bot-api-data:/var/lib/telegram-bot-api
 
   postgres:
     image: postgres:16-alpine
