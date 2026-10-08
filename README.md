@@ -25,7 +25,7 @@
 - **تحویل** = از طریقِ همان Bot API محلی (بدونِ MTProto). لینک/استریم را سرویسِ **gateway** (aiohttp، پشتیبانیِ HTTP Range) از روی همان فایلِ لوکال سرو می‌کند.
 - **صف:** ARQ روی Redis؛ پردازش در سرویسِ **worker** (ffmpeg / Pillow / tesseract / rembg / faster-whisper / LibreOffice / poppler / 7-Zip).
 - **داده:** Postgres (SQLAlchemy async) برای `users`/`files`/`jobs`/`settings`؛ Redis برای FSM، صف، سقف‌ها و تنظیماتِ زمانِ‌اجرا.
-- سرویس‌ها روی Docker Compose: `local-bot-api · postgres · redis · bot · worker · gateway · clamav`.
+- سرویس‌ها روی Docker Compose: `caddy · local-bot-api · tg-janitor · postgres · redis · bot · worker · download-worker · gateway · admin · clamav · bgutil-pot-provider`. **caddy** درِ ورودیِ HTTPS است و سرتیفیکیتِ Let's Encrypt را خودش می‌گیرد و تمدید می‌کند.
 
 > **روڈمپ (هنوز در کد نیست):** معماریِ توزیع‌شدهٔ Master/Node روی WireGuard، تحویلِ >۲ گیگ با MTProto/Kurigram، و پنلِ ادمینِ **وب** — این‌ها اهدافِ آینده‌اند، نه بخشِ کدِ فعلی.
 
@@ -33,15 +33,28 @@
 - سرور (VPS) با Docker و Docker Compose.
 - توکنِ ربات از [@BotFather](https://t.me/BotFather).
 - `api_id`/`api_hash` از [my.telegram.org](https://my.telegram.org).
-- (اختیاری، برای لینک/استریم) یک دامنه + سرتیفیکیتِ Origin کلودفلر.
+- (توصیه‌شده) یک دامنه برای پنل، مثل `panel.example.com`، و (برای لینک/استریم) یکی دیگر، مثل
+  `dl.example.com`. برای هر کدام یک **رکوردِ A** به IPِ همین سرور بساز؛ در کلودفلر «فقط DNS»
+  (ابرِ خاکستری). سرتیفیکیت دستی نیست — Caddy خودش می‌گیرد.
+- پورت‌های **۸۰** و **۴۴۳** آزاد (هیچ وب‌سرورِ دیگری روی سرور نباشد).
 
 ## نصب
 ```bash
 git clone <repo-url> telabzar && cd telabzar
 bash install.sh
 ```
-installer مقادیر را می‌پرسد، `.env` را با اسرارِ تصادفی می‌سازد، و استک را بالا می‌آورد.
-سپس در تلگرام به ربات `/start` بده.
+installer مقادیر را می‌پرسد — از جمله **دامنهٔ پنل** — `.env` را با اسرارِ تصادفی می‌سازد، و استک را
+بالا می‌آورد. سپس در تلگرام به ربات `/start` بده و پنل را روی `https://<دامنهٔ پنل>` باز کن؛ اولین
+بازدید سرتیفیکیت را می‌گیرد (چند ثانیه). کدِ ورود را خودِ ربات می‌فرستد.
+
+**لینکِ دانلود/استریم:** در پنل، **تنظیمات → لینک و استریم → دامنهٔ لینک** را بگذار (مثل
+`dl.example.com`) و ذخیره کن — سرتیفیکیتِ همان دامنه هم خودکار گرفته می‌شود و کارتِ **HTTPS** در
+صفحهٔ سلامت وضعیتش را نشان می‌دهد. بدونِ دامنهٔ لینک، دکمهٔ «لینک» خاموش است.
+
+بدونِ دامنه هم نصب می‌شود: پنل روی `http://<IP>:2083`، بی‌رمزنگاری. هر وقت خواستی
+`telabzar reconfigure` و دامنه را بده. اگر سرتیفیکیت نیامد: `telabzar logs caddy` (معمولاً رکوردِ A
+یا پورتِ بسته)، و تا آن موقع پنل با تونلِ SSH در دسترس است:
+`ssh -L 2083:127.0.0.1:2083 root@<IP>` و بعد `http://localhost:2083`.
 
 ### دستورهای روزمره
 ```bash

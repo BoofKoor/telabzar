@@ -1,0 +1,15 @@
+{% import "_icons.html" as I %}
+{% if health.tls %}
+<div class=card><h3>{{ I.ico('shield') }}HTTPS</h3><div class=rows>
+  {% for t in health.tls %}
+  <div class=svc>{{ I.ico('link' if t.role == 'link' else 'key') }}
+    <span>{{ 'لینک' if t.role == 'link' else 'پنل' }} · <span class=ltr>{{ t.domain }}</span></span>
+    {% if t.cert %}<span class="badge {{ 'ok' if t.days >= 7 else 'warn' }}" title="{{ t.cert.issuer }}">{{ pt('h.cert_until') }} <span class=num>{{ t.expires }}</span></span>
+    {% else %}<span class="badge dim">{{ pt('h.cert_pending') }}</span>{% endif %}</div>
+  {% endfor %}
+</div>
+{% if health.tls | selectattr('cert', 'none') | list %}
+<p class=hint>سرتیفیکیت با اولین بازکردنِ <b>https://</b> آن دامنه خودکار گرفته می‌شود (برای دامنهٔ لینک، ذخیرهٔ همین صفحه هم صدورش را راه می‌اندازد). اگر صادر نمی‌شود: رکوردِ <b>A</b>ِ دامنه باید به IPِ همین سرور اشاره کند (در کلودفلر «فقط DNS»، ابرِ خاکستری) و پورت‌های <b>۸۰</b> و <b>۴۴۳</b> باز باشند — جزئیات در <span class=mono>telabzar logs caddy</span>.</p>
+{% endif %}
+</div>
+{% endif %}

@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from urllib.parse import urlsplit
 
 import redis.asyncio as aioredis
 from sqlalchemy import select
@@ -43,6 +45,9 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "compress_tiny_target_mb": ("int", settings.compress_tiny_target_mb),
     "compress_tiny_height": ("int", settings.compress_tiny_height),
     "vjoin_max_mb": ("int", settings.vjoin_max_mb),
+    # دامنهٔ لینکِ /dl و /s روی **همین** سرور — Caddy برایش سرتیفیکیتِ خودکار می‌گیرد
+    # (`/tls/ask`ِ پنل تأییدش می‌کند). خواننده فقط `link_domain()`ِ پایینِ همین ماژول.
+    "link_domain": ("str", settings.link_domain),
     "stream_base": ("str", settings.stream_base),   # نودِ استریم: پایهٔ عمومیِ لینک‌ها
     "dl_link_days": ("int", settings.dl_link_days),  # عمرِ لینکِ عمومی (روز) · ۰ = بی‌انقضا
     "tg_files_max_age_hours": ("int", settings.tg_files_max_age_hours),  # tg_janitor · ۰ = خاموش
@@ -221,6 +226,78 @@ ENUM_VALUES: dict[str, tuple[str, ...]] = {
 }
 
 
+#: یک برچسبِ نامِ میزبان، **پس از** IDNA: حرفِ کوچک/رقم/خط‌تیره، نه در ابتدا و انتها.
+_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def normalize_domain(value: str) -> str | None:
+    """`''` → `''` · دامنهٔ معتبر → شکلِ کانونیک · نامعتبر → `None`.
+
+    **بخشنده با چیزی که ادمین paste می‌کند، سخت‌گیر با چیزی که Caddy رویش
+    سرتیفیکیت می‌گیرد.** `https://DL.Example.com/` همان `dl.example.com` است، و
+    دامنهٔ فارسی به شکلِ punycode درمی‌آید (Let's Encrypt همان را می‌خواهد). ولی
+    پورت، مسیر، کوئری، IP و wildcard رد می‌شوند و بی‌صدا دور ریخته **نمی‌شوند**:
+    لینک‌ها همیشه `https://<دامنه>/dl/…` روی ۴۴۳ِ Caddy‌اند، پس `:8443` یا `/files`
+    یعنی ادمین چیزِ دیگری در ذهن دارد و باید بشنود، نه اینکه لینکِ متفاوتی بگیرد.
+
+    کانونیک‌بودن شرطِ **درستی** است نه آراستگی: `/tls/ask` نامِ SNI را با همین
+    خروجی مقایسه می‌کند، پس `DL.example.com.` و `dl.example.com` باید یکی شوند
+    وگرنه سرتیفیکیتِ دامنه‌ای که ادمین ذخیره کرده رد می‌شود.
+    """
+    v = (value or "").strip()
+    if not v:
+        return ""
+    if "://" in v:
+        try:
+            p = urlsplit(v)
+            port = p.port
+        except ValueError:
+            return None
+        if (p.scheme.lower() not in ("http", "https") or port is not None or p.username
+                or p.password or p.query or p.fragment or p.path not in ("", "/")):
+            return None
+        v = p.hostname or ""
+    elif v.endswith("/"):
+        v = v[:-1]
+    v = v.lower().rstrip(".")
+    if not v or any(c in v for c in ":/@?#*") or any(c.isspace() for c in v):
+        return None
+    try:
+        v = v.encode("idna").decode("ascii")
+    except UnicodeError:
+        return None
+    labels = v.split(".")
+    if len(v) > 253 or len(labels) < 2 or not all(_LABEL.match(x) for x in labels):
+        return None
+    if labels[-1].isdigit():          # IPv4 یا TLDِ عددی — سرتیفیکیتِ دامنه نمی‌گیرد
+        return None
+    return v
+
+
+def panel_domain() -> str:
+    """دامنهٔ پنل به شکلِ کانونیک، یا `''`. از env می‌آید (نصب‌کننده)، نه از پنل."""
+    return normalize_domain(settings.panel_domain) or ""
+
+
+def _validate_link_domain(value: str) -> str | None:
+    norm = normalize_domain(value)
+    if norm is None:
+        return (f"دامنهٔ لینک نامعتبر است (دریافت: «{value}»). فقط نامِ دامنه، مثل "
+                f"dl.example.com — بدونِ پورت، بدونِ مسیر.")
+    if norm and norm == panel_domain():
+        # Caddy میزبانِ پنل را به پنل می‌فرستد، پس لینک روی آن ۴۰۴ِ پنل می‌گرفت؛
+        # و محتوای کاربر هم‌مبدأ با پنل سرو می‌شد.
+        return (f"دامنهٔ لینک نمی‌تواند همان دامنهٔ پنل ({norm}) باشد؛ یک زیردامنهٔ "
+                f"جدا بساز، مثل dl.{norm.split('.', 1)[-1]}.")
+    if norm and settings.tls_cert:
+        # نصبِ پیش از ۲۰۲۶-۱۰ با سرتیفیکیتِ Origin: گیت‌وی خودش TLS حرف می‌زند و Caddy
+        # (که HTTPِ ساده به `gateway:8080` می‌فرستد) فقط ۵۰۲ می‌گرفت — یعنی هر لینک
+        # بی‌صدا می‌شکست. بهتر است همین‌جا بگوییم.
+        return ("این نصب هنوز سرتیفیکیتِ دستیِ قدیمی (TLS_CERT) دارد و گیت‌وی پشتِ Caddy "
+                "کار نمی‌کند؛ اول روی سرور `telabzar reconfigure` بزن.")
+    return None
+
+
 def validate_value(key: str, value: str) -> str | None:
     """پیامِ خطای فارسی اگر مقدار نامعتبر است، وگرنه `None`.
 
@@ -254,6 +331,8 @@ def validate_value(key: str, value: str) -> str | None:
     elif kind == "bool":
         if value.strip().lower() not in ("0", "1", "true", "false", "yes", "no", "on", "off"):
             return f"مقدارِ «{key}» باید بولی باشد (on/off)."
+    if key == "link_domain":
+        return _validate_link_domain(value)
     if key in ENUM_VALUES and value not in ENUM_VALUES[key]:
         allowed = " / ".join(v or "«خالی»" for v in ENUM_VALUES[key])
         return f"مقدارِ «{key}» باید یکی از این‌ها باشد: {allowed}"
@@ -432,3 +511,15 @@ async def get_str(key: str, default: str) -> str:
 
 async def get_bool(key: str, default: bool) -> bool:
     return await _store.get_bool(key, default) if _store is not None else default
+
+
+async def link_domain() -> str:
+    """دامنهٔ لینکِ مؤثر (کانونیک)، یا `''` یعنی خاموش.
+
+    **تنها خوانندهٔ کلیدِ `link_domain`.** هم `_link_base`ِ ربات (ساختنِ لینک) و هم
+    `/tls/ask`ِ پنل (تأییدِ سرتیفیکیت) از همین می‌خوانند؛ اگر هرکدام نرمال‌سازیِ خودش
+    را می‌نوشت، روزی ربات لینکی می‌ساخت که Caddy برایش سرتیفیکیت نمی‌گرفت. مقدارِ
+    نامعتبر (مثلاً `LINK_DOMAIN`ِ خرابِ env که از اعتبارسنجیِ پنل رد نشده) خاموش
+    حساب می‌شود، نه لینکِ شکسته.
+    """
+    return normalize_domain(await get_str("link_domain", settings.link_domain)) or ""
