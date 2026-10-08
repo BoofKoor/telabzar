@@ -119,6 +119,25 @@ jobs:
       - name: prove unrar-free is present
         run: unrar-free --version
 
+      # Caddy، **همان نسخه‌ای که `docker-compose.yml` پین کرده** (نسخه از خودِ
+      # compose خوانده می‌شود، پس دو عدد برای یک چیز وجود ندارد)، تا
+      # `tests/test_caddy.py` فایلِ `docker/caddy/Caddyfile` را با پارسرِ واقعی
+      # بسنجد. Caddyfileِ خراب در تولید یعنی Caddy در حلقهٔ ری‌استارت و پنل بی‌HTTPS
+      # — بی‌آنکه هیچ تستِ پایتونی چیزی ببیند. از ریلیزِ رسمیِ GitHub نه Docker
+      # Hub (سقفِ pullِ ناشناس)، و با checksumِ همان ریلیز. نبودنِ این گام را
+      # `test_the_caddy_validation_is_not_dead_weight` می‌گیرد.
+      - name: install caddy (the pinned version)
+        timeout-minutes: 3
+        run: |
+          ver=$(sed -n 's/^ *image: caddy:\([0-9][0-9.]*\)-alpine.*/\1/p' docker-compose.yml)
+          test -n "$ver"
+          base="https://github.com/caddyserver/caddy/releases/download/v${ver}"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 --max-time 120 -O "$base/caddy_${ver}_linux_amd64.tar.gz" -O "$base/caddy_${ver}_checksums.txt"
+          sha512sum -c --ignore-missing "caddy_${ver}_checksums.txt"
+          sudo tar -xzf "caddy_${ver}_linux_amd64.tar.gz" -C /usr/local/bin caddy
+          caddy version
+
       # نگهبانِ «مارکر دوباره بی‌اثر نشود» عمداً **گامِ CI نیست**: با صفر تستِ
       # نشان‌دار، `pytest -m ffmpeg` همه را deselect می‌کند و با کدِ **صفر** خارج
       # می‌شود (کدِ ۵ فقط برای «هیچ تستی جمع نشد» است، نه deselect). پس آن گام

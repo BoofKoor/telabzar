@@ -114,6 +114,8 @@ STRINGS: dict[str, dict[str, str]] = {
     "h.file_source":    {"fa": "منبعِ فایل",             "en": "file source"},
     "h.upload":         {"fa": "آپلودِ کاربر",           "en": "user upload"},
     "h.from_link":      {"fa": "دانلود از لینک",         "en": "downloaded from link"},
+    "h.cert_until":     {"fa": "معتبر تا",               "en": "valid until"},
+    "h.cert_pending":   {"fa": "هنوز صادر نشده",          "en": "not issued yet"},
 }
 
 

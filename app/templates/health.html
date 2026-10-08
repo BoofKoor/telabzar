@@ -41,6 +41,7 @@
 </div>
 <div class=col>
   {% include "_health_core.html" %}
+  {% include "_health_tls.html" %}
   <div class=card><h3>{{ I.ico('cookie') }}وضعیتِ کوکی‌ها</h3><div class=rows>
     {% if pool %}{% for p in pool %}
       <div class=svc><span class="lamp {{'ok' if p.live else 'bad'}}"></span>

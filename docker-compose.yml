@@ -1,8 +1,40 @@
 # تل‌ابزار — استکِ اصلی
-# سرویس‌ها: local-bot-api · tg-janitor · postgres · redis · bot · worker · gateway · clamav
+# سرویس‌ها: caddy · local-bot-api · tg-janitor · postgres · redis · bot · worker · gateway · clamav
 name: telabzar
 
 services:
+  # درِ ورودیِ HTTPS: سرتیفیکیتِ Let's Encrypt را خودش می‌گیرد و تمدید می‌کند.
+  # دامنهٔ پنل از `PANEL_DOMAIN` (نصب‌کننده) و دامنهٔ لینک از تنظیماتِ پنل
+  # (`link_domain`) می‌آید؛ قاعده‌ها و دلیلشان در `docker/caddy/Caddyfile`.
+  # پورتِ ۸۰ برای چالشِ HTTP-01 و ریدایرکت به HTTPS است، ۴۴۳ برای سرو و TLS-ALPN-01.
+  # عمداً بدونِ `env_file`: جز همین یک متغیر هیچ رازی لازم ندارد.
+  caddy:
+    image: caddy:2.11.4-alpine   # تگِ ثابت (نه latest) — گارد: tests/test_caddy.py
+    restart: unless-stopped
+    environment:
+      # `:-` نه `-`: مقدارِ **خالی** هم باید جایگزین شود. نصب بدونِ دامنه
+      # `PANEL_DOMAIN=` می‌نویسد، و Caddy با `host`ِ خالی اصلاً بالا نمی‌آید
+      # (اجراشده روی همین نسخه: «module value cannot be null») — آن‌وقت دامنهٔ
+      # لینک هم با آن می‌خوابد. `.invalid` هرگز resolve نمی‌شود و پنل تأییدش نمی‌کند.
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-panel.invalid}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # **پوشه** نه فایل: bindِ تک‌فایل به inodeِ لحظهٔ ساخت می‌چسبد و git
+      # فایل را با inodeِ تازه بازنویسی می‌کند، پس نسخهٔ تازه دیده نمی‌شد.
+      - ./docker/caddy:/etc/caddy:ro
+      # سرتیفیکیت‌ها و حسابِ ACME. بدونِ volume هر بازسازیِ کانتینر یعنی صدورِ
+      # دوباره، و Let's Encrypt بیش از ۵ سرتیفیکیتِ تکراری در هفته نمی‌دهد.
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE   # بایندِ ۸۰/۴۴۳
+
   local-bot-api:
     image: aiogram/telegram-bot-api:10.2   # تگِ ثابت (نه latest) برای بیلدِ تکرارپذیر
     restart: unless-stopped
@@ -129,8 +161,12 @@ services:
       - ./certs:/certs:ro                              # سرتیفیکیتِ Origin کلودفلر
     # میزبان → کانتینر:۸۰۸۰ (بایندِ غیرِ-privileged؛ نیازی به NET_BIND_SERVICE نیست).
     # پیش‌فرض ۸۴۴۳ تا با ۴۴۳ِ سرویس‌های دیگر تداخل نکند (کلودفلر ۸۴۴۳ را هم پروکسی می‌کند).
+    # **راهِ عمومیِ لینک از ۲۰۲۶-۱۰ سرویسِ `caddy` است** (دامنهٔ لینک روی ۴۴۳ با
+    # سرتیفیکیتِ خودکار)؛ این پورت فقط برای نصب‌های قدیمیِ «PUBLIC_BASE + Origin
+    # Certificate» مانده. نصب‌کننده `GATEWAY_BIND=127.0.0.1` می‌نویسد تا روی نصبِ تازه
+    # فقط از خودِ سرور در دسترس باشد؛ نبودنِ کلید (نصبِ قدیمی) همان رفتارِ قبلی است.
     ports:
-      - "${GATEWAY_HTTPS_PORT:-8443}:8080"
+      - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_HTTPS_PORT:-8443}:8080"
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -206,12 +242,20 @@ services:
         condition: service_healthy
       local-bot-api:
         condition: service_started
+    # راهِ عادیِ پنل از ۲۰۲۶-۱۰ `https://PANEL_DOMAIN` از طریقِ سرویسِ `caddy` است.
+    # این پورتِ مستقیم دو کار دارد: پنل در نصبِ **بدونِ دامنه** (http://IP:2083)، و
+    # راهِ اضطراری وقتی سرتیفیکیت هنوز نیامده (تونلِ SSH). نصب‌کننده با دامنه
+    # `ADMIN_BIND=127.0.0.1` می‌نویسد، چون پنل روی HTTPِ ساده و IPِ عمومی یعنی
+    # کدِ ورود و کوکیِ نشست بی‌رمز روی سیم. نبودنِ کلید (نصبِ قدیمی) = رفتارِ قبلی.
     ports:
-      - "${ADMIN_HTTPS_PORT:-2083}:8080"
+      - "${ADMIN_BIND:-0.0.0.0}:${ADMIN_HTTPS_PORT:-2083}:8080"
     volumes:
       - work-data:/work:ro     # فقط برای نمایشِ فضای دیسک در هلث
       - ./cookies:/cookies     # مدیریتِ کوکی‌ها (نوشتنی)؛ ورکرِ دانلود همین را :ro می‌خواند
       - ./certs:/certs:ro      # همان سرتیفیکیتِ Origin کلودفلر
+      # فقط‌خواندنی، برای کارتِ «HTTPS» در سلامت: سرتیفیکیتِ صادرشده و تاریخِ انقضا
+      # از خودِ انبارِ Caddy خوانده می‌شود — بی‌هیچ درخواستِ شبکه و بی‌هیچ اثری بر ACME.
+      - caddy-data:/caddy-data:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -273,3 +317,5 @@ volumes:
   redis-data:
   work-data:
   clamav-data:
+  caddy-data:
+  caddy-config:

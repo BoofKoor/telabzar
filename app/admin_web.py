@@ -14,6 +14,7 @@ import base64
 import glob
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -30,7 +31,9 @@ from urllib.parse import urlencode, urlsplit
 import aiohttp
 import redis.asyncio as aioredis
 from aiohttp import web
+from cryptography import x509
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.x509.oid import NameOID
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 from sqlalchemy import func, select, text as sql_text, true as sa_true
@@ -195,7 +198,10 @@ GROUPS = [
         ("safety_strikes", "مسدودیِ خودکارِ کاربر پس از", "این تعداد تخلف · ۰ = خاموش"),
     ]),
     ("لینک و استریم", [
-        ("stream_base", "پایهٔ لینک (نودِ استریم)", "خالی = دامنهٔ مستر · مثل https://cdn.example.com"),
+        ("link_domain", "دامنهٔ لینکِ دانلود/استریم",
+         "مثل dl.example.com · رکوردِ A باید به IPِ همین سرور اشاره کند (کلودفلر: فقط DNS، ابرِ خاکستری) · "
+         "سرتیفیکیت خودکار گرفته می‌شود · خالی = دکمهٔ لینک خاموش"),
+        ("stream_base", "پایهٔ لینک (نودِ استریم)", "فقط وقتی نودِ استریم آنلاین است · مثل https://cdn.example.com"),
         ("dl_link_days", "عمرِ لینکِ عمومی (روز)", "از آخرین درخواستِ لینک · ۰ = بی‌انقضا"),
     ]),
     ("فضای دیسکِ سرورِ تلگرام", [
@@ -579,6 +585,122 @@ async def _pot_health(app: web.Application) -> bool | str | None:
     return POT_UNKNOWN if last is None else last == "1"
 
 
+# ── HTTPS: سرتیفیکیتِ خودکارِ Caddy ────────────────────────────────────────
+#: انبارِ Caddy داخلِ کانتینرِ پنل (compose: `caddy-data:/caddy-data:ro`).
+_CADDY_DATA = "/caddy-data"
+#: سرویسِ Caddy روی شبکهٔ compose — مقصدِ handshakeِ «همین حالا صادر کن».
+_CADDY_HOST = "caddy"
+_CADDY_PORT = 443
+_TLS_WARM_TASK = "tls_warm_task"
+#: سقفِ خواندنِ `link_domain` در `/tls/ask`. Caddy منتظرِ این پاسخ است و یک
+#: کلاینت پشتِ handshake؛ Redisِ گیرکرده نباید هر دو را گیر بیندازد.
+_TLS_ASK_TIMEOUT = 5
+#: سقفِ handshakeِ پس‌زمینه. Caddy صدورِ on-demand را خودش در ۱۸۰ ثانیه می‌بُرد.
+_TLS_WARM_TIMEOUT = 200
+
+
+def _cert_info(domain: str) -> dict | None:
+    """سرتیفیکیتِ صادرشده برای این دامنه، از خودِ انبارِ Caddy — بی‌شبکه و بی‌اثر بر ACME.
+
+    مسیرش `caddy/certificates/<صادرکننده>/<دامنه>/<دامنه>.crt` است. اگر بیش از یک
+    صادرکننده سرتیفیکیت داده (Let's Encrypt، ZeroSSL)، آن‌که دیرتر منقضی می‌شود.
+    `domain` همیشه خروجیِ `normalize_domain` است، پس کاراکترِ glob ندارد.
+    """
+    best: dict | None = None
+    pattern = os.path.join(_CADDY_DATA, "caddy", "certificates", "*", domain, f"{domain}.crt")
+    for path in glob.glob(pattern):
+        try:
+            with open(path, "rb") as fh:
+                cert = x509.load_pem_x509_certificate(fh.read())
+        except (OSError, ValueError):
+            continue
+        exp = cert.not_valid_after_utc
+        if best is None or exp > best["expires"]:
+            org = (cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)
+                   or cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME))
+            best = {"expires": exp, "issuer": str(org[0].value) if org else "?"}
+    return best
+
+
+async def _tls_status() -> list[dict]:
+    """یک ردیف برای هر دامنهٔ پیکربندی‌شده (پنل، لینک) با وضعیتِ سرتیفیکیتش.
+
+    `cert=None` یعنی «هنوز صادر نشده»: یا هیچ‌کس هنوز آن دامنه را باز نکرده، یا
+    DNS به این سرور اشاره نمی‌کند. کارت همین دو را می‌گوید، نه یک «خطا»ی مبهم.
+    """
+    rows = []
+    for role, domain in (("panel", settings_store.panel_domain()),
+                         ("link", await settings_store.link_domain())):
+        if not domain:
+            continue
+        info = await asyncio.to_thread(_cert_info, domain)
+        row = {"role": role, "domain": domain, "cert": info}
+        if info:
+            row["days"] = (info["expires"] - datetime.now(timezone.utc)).days
+            row["expires"] = info["expires"].strftime("%Y-%m-%d")
+        rows.append(row)
+    return rows
+
+
+async def _tls_warm(domain: str) -> None:
+    """یک handshake با Caddy برای این نام، تا سرتیفیکیت **همین حالا** صادر شود.
+
+    بدونِ این، اولین کاربری که روی لینک می‌زند صدور را راه می‌انداخت و چند ثانیه
+    منتظر می‌ماند — و ادمین تا آن لحظه نمی‌فهمید DNS درست است یا نه. اعتبارسنجی
+    عمداً خاموش است: کارِ این تابع فقط راه‌انداختنِ صدور است، و وضعیت را کارتِ
+    سلامت از انبارِ Caddy می‌خواند.
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        _reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(_CADDY_HOST, _CADDY_PORT, ssl=ctx, server_hostname=domain),
+            _TLS_WARM_TIMEOUT)
+        writer.close()
+        log.info("tls: %s answers over HTTPS", domain)
+    except Exception as exc:  # noqa: BLE001  — فقط گزارش؛ کارتِ سلامت حقیقت را می‌گوید
+        log.warning("tls: no certificate for %s yet (%s) — its A record must point at this "
+                    "server and ports 80/443 must be open", domain, exc)
+
+
+def _schedule_tls_warm(app: web.Application, domain: str) -> None:
+    """یک handshakeِ پس‌زمینه در هر لحظه — ارجاع روی `app`، مثلِ تازه‌سازیِ pot."""
+    task = app.get(_TLS_WARM_TASK)
+    if task is not None and not task.done():
+        return
+    app[_TLS_WARM_TASK] = asyncio.create_task(_tls_warm(domain))
+
+
+async def tls_ask(request: web.Request) -> web.Response:
+    """گیتِ صدورِ سرتیفیکیتِ Caddy (`on_demand_tls { ask }` در `docker/caddy/Caddyfile`).
+
+    Caddy پیش از گرفتن **یا حتی بارگذاریِ** سرتیفیکیتِ یک نامِ SNI این‌جا را صدا
+    می‌زند؛ هر پاسخِ غیرِ2xx یعنی «نه». فقط دو نام: دامنهٔ پنل (env) و دامنهٔ لینک
+    (پنل). بدونِ این گیت، هر کس با یک SNIِ دلخواه سهمیهٔ صدورِ Let's Encrypt را
+    می‌سوزاند.
+
+    عمومی است (Caddy نشست ندارد)، و جز «بله/نه» دربارهٔ نام‌هایی که خودشان در DNSِ
+    عمومی‌اند چیزی نمی‌گوید. دامنهٔ پنل بی‌Redis/Postgres تأیید می‌شود؛ خواندنِ
+    دامنهٔ لینک کران‌دار است و روی خطا «نه» می‌گوید.
+    """
+    name = settings_store.normalize_domain(request.query.get("domain", "")) or ""
+    if name:
+        allowed = name == settings_store.panel_domain()
+        if not allowed:
+            try:
+                link = await asyncio.wait_for(settings_store.link_domain(), _TLS_ASK_TIMEOUT)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("tls ask: cannot read link_domain (%s) — refusing %s", exc, name)
+                link = ""
+            allowed = name == link
+        if allowed:
+            log.info("tls ask: approved %s", name)
+            return web.Response(text="ok")
+    log.debug("tls ask: refused %r", request.query.get("domain", ""))
+    return web.Response(status=403, text="no")
+
+
 async def _health(app: web.Application) -> dict:
     r: aioredis.Redis = app["redis"]
     h: dict = {}
@@ -640,6 +762,10 @@ async def _health(app: web.Application) -> dict:
             hosts.append({"name": p, "ok": ok, "fail": fail,
                           "rate": round(ok / (ok + fail) * 100)})
     h["hosts"] = hosts
+    try:
+        h["tls"] = await _tls_status()
+    except Exception:  # noqa: BLE001  — کارتِ HTTPS نباید صفحهٔ سلامت را بیندازد
+        h["tls"] = []
     h["all_ok"] = h["postgres"] and h["redis"]
     return h
 
@@ -1161,19 +1287,39 @@ _RL_VERIFY_PER_IP = _RL_REQ_PER_IP * _CODE_TRIES
 _ADMIN_ID_MAXLEN = 20
 
 
+def _is_internal_peer(addr: str) -> bool:
+    """همتای سوکت از **داخلِ** همین ماشین/شبکهٔ داکر است (خصوصی یا loopback)؟"""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_private or ip.is_loopback
+
+
 def _client_ip(request: web.Request) -> str:
-    """آدرسِ همتای سوکت — عمداً `X-Forwarded-For` خوانده **نمی‌شود**.
+    """آدرسِ کلاینت برای سقفِ نرخِ per-IPِ ورود.
 
-    XFF را خودِ کلاینت ست می‌کند، پس اعتماد به آن سقفِ per-IP را برای همان
-    استقراری که باید محافظتش کند (پنلِ مستقیماً روی اینترنت، همان چیزی که
-    `install.sh` با TLSِ خودش می‌سازد) به یک no-op تبدیل می‌کند: مهاجم به‌ازای
-    هر درخواست یک مقدارِ تازه می‌گذارد.
+    **`X-Forwarded-For` فقط وقتی خوانده می‌شود که همتای سوکت داخلی باشد** — یعنی
+    اتصال از Caddy آمده، نه از اینترنت. از ۲۰۲۶-۱۰ راهِ عادیِ پنل همان Caddy است،
+    و بدونِ این قاعده همهٔ کلاینت‌ها یک سطل می‌شدند (IPِ کانتینرِ Caddy): مهاجم با
+    پرکردنِ همان یک سطل، ورودِ ادمینِ واقعی را می‌بست. Caddy (بی `trusted_proxies`)
+    هر XFFِ ورودی را **دور می‌ریزد** و IPِ واقعیِ همتای خودش را می‌گذارد — اجراشده:
+    `X-Forwarded-For: 6.6.6.6`ِ جعلی در پنل به‌شکلِ IPِ واقعیِ کلاینت رسید.
 
-    بهایش صریح است: پشتِ یک پروکسیِ معکوس همهٔ کلاینت‌ها یک سطل می‌شوند. به
-    همین دلیل عددهای per-IP **بالاتر از** عددهای per-admin چیده شده‌اند، پس یک
-    ادمینِ عادی هیچ‌وقت اول به این سقف نمی‌خورد.
+    همتای **عمومی** (پنلِ مستقیم روی `:2083`، نصبِ بدونِ دامنه) همچنان XFF را
+    نادیده می‌گیرد: آن هدر را خودِ کلاینت ست می‌کند و اعتماد به آن سقف را به no-op
+    تبدیل می‌کرد. آخرین عضو برداشته می‌شود چون همان است که نزدیک‌ترین پروکسی نوشته.
     """
-    return request.remote or "?"
+    peer = request.remote or "?"
+    if _is_internal_peer(peer):
+        last = request.headers.get("X-Forwarded-For", "").split(",")[-1].strip()
+        try:
+            return str(ipaddress.ip_address(last))
+        except ValueError:
+            pass
+    return peer
 
 
 async def _rate_limit(r: aioredis.Redis, key: str, limit: int, window: int) -> bool:
@@ -2263,6 +2409,12 @@ async def save(request: web.Request) -> web.Response:
                 await store.set(k, val)
             else:
                 await store.reset(k)
+    # دامنهٔ لینک همین حالا سرتیفیکیت بگیرد، نه با اولین کلیکِ یک کاربر. هر ذخیره
+    # (نه فقط تغییرِ همین فیلد): handshakeِ سرتیفیکیتِ موجود ارزان است، و ذخیرهٔ
+    # دوباره پس از درست‌کردنِ DNS تنها راهِ «دوباره امتحان کن» از داخلِ پنل است.
+    domain = await settings_store.link_domain()
+    if domain:
+        _schedule_tls_warm(request.app, domain)
     raise _result("/", ok="1")
 
 
@@ -2811,9 +2963,10 @@ async def _on_startup(app: web.Application) -> None:
 async def _on_cleanup(app: web.Application) -> None:
     # تازه‌سازیِ pot در پس‌زمینه می‌دود؛ اگر لغو نشود از خودِ اپ عمر بیشتری
     # می‌کند — همان انضباطی که keepaliveِ `dl_active` لازم دارد.
-    task = app.get(_POT_TASK)
-    if task is not None and not task.done():
-        task.cancel()
+    for key in (_POT_TASK, _TLS_WARM_TASK):
+        task = app.get(key)
+        if task is not None and not task.done():
+            task.cancel()
     try:
         await app["redis"].aclose()
     except Exception:  # noqa: BLE001
@@ -2970,6 +3123,7 @@ def build_app() -> web.Application:
     app.router.add_get("/node/install.sh", node_install)  # عمومی
     app.router.add_get("/node/peers", node_peers)         # گِیت با NODE_SECRET (wg-sync)
     app.router.add_get("/healthz", healthz)
+    app.router.add_get("/tls/ask", tls_ask)          # عمومی — گیتِ صدورِ سرتیفیکیتِ Caddy
     # یک هندلر برای کلِ زیردرختِ کنسول، نه `add_static`: خروجیِ Next هر صفحه
     # را `<slug>/index.html` می‌دهد و استاتیکِ aiohttp دایرکتوری را باز نمی‌کند،
     # پس با آن هر صفحه‌ای جز خانه ۴۰۴ می‌شد. گِیتِ نشست هم فقط روی HTML است و

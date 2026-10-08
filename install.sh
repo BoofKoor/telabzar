@@ -29,18 +29,118 @@ ask() { # ask <var> <prompt> [default]
   printf -v "$__var" '%s' "$__ans"
 }
 
-read_pem() { # read_pem <outfile> <label>
-  local out=$1 label=$2 line
-  say ""
-  say "${BOLD}${label}${RESET}"
-  say "${DIM}Paste the whole text (including the BEGIN/END lines), then type ${RESET}${BOLD}EOF${RESET}${DIM} on a line of its own and press Enter:${RESET}"
-  : > "$out"; chmod 600 "$out"
-  while IFS= read -r line; do
-    [[ "$line" == "EOF" ]] && break
-    printf '%s\n' "$line" >> "$out"
+# Bare host name from whatever was typed: lowercase, no scheme, no trailing slash or dot.
+clean_domain() {
+  local d
+  d=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+  d=${d#http://}; d=${d#https://}; d=${d%/}; d=${d%.}
+  printf '%s' "$d"
+}
+
+valid_domain() { # letters/digits/hyphens, at least two labels, alphabetic TLD
+  [[ "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]] && (( ${#1} <= 253 ))
+}
+
+# Every pipeline below that may legitimately fail ends in `|| true`. Under
+# `set -euo pipefail` a failing pipeline inside an assignment ends the whole
+# script with no message — and "the domain does not resolve yet" is the common
+# case here, not an edge case (getent exits 2).
+public_ip() { # the same detection node/master-setup.sh uses
+  local ip
+  ip=$(curl -fsS4 --max-time 8 https://api.ipify.org 2>/dev/null || true)
+  [[ -n "$ip" ]] || ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)
+  printf '%s' "$ip"
+}
+
+# Where the domain's records point, compared with this server. Only warns: DNS
+# may still be propagating, and Caddy retries on its own once it points here.
+# Sets DNS_STATE (ok | missing | elsewhere | unknown) for issue_panel_cert.
+DNS_STATE=unknown
+check_dns() { # check_dns <domain>
+  local d=$1 me ips v6
+  me=$(public_ip)
+  ips=$(getent ahostsv4 "$d" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)
+  if [[ -z "$ips" ]]; then
+    DNS_STATE=missing
+    # No apostrophe inside ${...:-…}: bash then hunts for a closing quote and the
+    # whole script stops parsing (measured — `bash -n` fails at a later `done`).
+    warn "${d} does not resolve yet. Create an A record pointing to ${me:-the IP of this server}."
+    say  "${DIM}The certificate is issued automatically as soon as it points here.${RESET}"
+  elif [[ -z "$me" ]]; then
+    DNS_STATE=unknown
+    warn "${d} points to ${ips% }; the IP of this server could not be detected to compare."
+  elif [[ " $ips" == *" $me "* ]]; then
+    DNS_STATE=ok
+    ok "${d} points to this server (${me})."
+  else
+    DNS_STATE=elsewhere
+    warn "${d} points to ${ips% } but this server is ${me}."
+    say  "${DIM}Fix the A record. On Cloudflare, set the record to \"DNS only\" (grey cloud): the automatic${RESET}"
+    say  "${DIM}certificate needs the request to reach this server directly.${RESET}"
+  fi
+  # Let's Encrypt validates over IPv6 first when an AAAA record exists, so a stale
+  # AAAA fails the certificate even with a perfect A record. (`ahostsv6` also lists
+  # the A records as ::ffff:… — those are not AAAA records.)
+  v6=$(getent ahostsv6 "$d" 2>/dev/null | awk '{print $1}' | grep -v '^::ffff:' | sort -u | tr '\n' ' ' || true)
+  if [[ -n "$v6" ]]; then
+    warn "${d} also has an IPv6 (AAAA) record: ${v6% }"
+    say  "${DIM}Let's Encrypt tries IPv6 first: that address must reach this server too, or delete the AAAA record.${RESET}"
+  fi
+}
+
+# Caddy needs ports 80 (certificate challenge, redirect) and 443. Another web
+# server on either makes it crash-loop and the panel unreachable over HTTPS.
+check_ports() {
+  local p who busy=0
+  command -v ss >/dev/null 2>&1 || return 0
+  # A reconfigure: our own caddy already holds both ports. Asked of compose rather
+  # than read from `ss -p`, which shows no process names unless run as root.
+  [[ -n "$($COMPOSE ps -q caddy 2>/dev/null || true)" ]] && return 0
+  for p in 80 443; do
+    who=$(ss -Hltnp "sport = :$p" 2>/dev/null | grep -v docker-proxy || true)
+    if [[ -n "$who" ]]; then
+      warn "Port $p is already in use: $(printf '%s' "$who" | head -n1 | awk '{print $NF}')"
+      busy=1
+    fi
   done
-  if ! grep -q "BEGIN" "$out"; then
-    warn "That does not look like a valid PEM (no BEGIN line found)."
+  if (( busy )); then
+    say "${DIM}Stop that service (e.g. systemctl disable --now nginx) — the automatic HTTPS needs 80 and 443.${RESET}"
+    local GO
+    ask GO "Continue anyway? (y/n)" "n"
+    [[ "$GO" =~ ^[Yy]$ ]] || die "Cancelled. Free ports 80/443 and run the installer again."
+  fi
+}
+
+# Get the panel certificate now, so the installer can say whether HTTPS works
+# instead of leaving it to the first visit. One attempt only: Let's Encrypt
+# allows 5 failed validations per name per hour, and a name that points
+# elsewhere would only spend them.
+issue_panel_cert() { # issue_panel_cert <domain>
+  local d=$1 port i
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl is not installed; open https://${d} once to get the certificate."
+    return 0
+  fi
+  if [[ "$DNS_STATE" == missing || "$DNS_STATE" == elsewhere ]]; then
+    warn "Not requesting the certificate yet: ${d} does not point to this server."
+    say  "${DIM}Once the A record is fixed, opening https://${d} gets it automatically.${RESET}"
+    return 0
+  fi
+  port=$(env_get ADMIN_HTTPS_PORT); port=${port:-2083}
+  # Caddy asks the panel (/tls/ask) before every certificate, so wait for it.
+  say "Waiting for the admin panel to start…"
+  for i in $(seq 1 30); do
+    curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:${port}/healthz" 2>/dev/null && break
+    sleep 3
+  done
+  say "Getting the HTTPS certificate for ${d} from Let's Encrypt…"
+  # --resolve: talk to the local Caddy whatever this server's own DNS says;
+  # Let's Encrypt still validates through the public A record.
+  if curl -fsS -o /dev/null --max-time 150 --resolve "${d}:443:127.0.0.1" "https://${d}/healthz" 2>/dev/null; then
+    ok "HTTPS works: https://${d} (the certificate renews automatically)."
+  else
+    warn "No certificate yet. Check that the A record points here and ports 80/443 are open;"
+    say  "${DIM}details: telabzar logs caddy. It is retried automatically on the next visit to https://${d}.${RESET}"
   fi
 }
 
@@ -77,24 +177,36 @@ install_master() {
   ask DEFAULT_LANG "Default language (fa/en)" "fa"
   ask MAX_FILE_MB "Max size per file (MB)" "2000"
 
-  # ── Domain and TLS for download/stream links (optional) ──
+  # ── Admin panel domain: HTTPS with an automatic certificate (Caddy + Let's Encrypt) ──
   say ""
-  say "${BOLD}Download / stream links${RESET} ${DIM}(optional — lets the bot hand out links to files)${RESET}"
-  say "${DIM}Needs a domain behind Cloudflare (proxy on) and an Origin Certificate from the Cloudflare dashboard.${RESET}"
-  ask DOMAIN "Domain (e.g. files.example.com — press Enter to skip)" ""
-
-  local PUBLIC_BASE="" TLS_CERT="" TLS_KEY="" GW_PORT="8080"
-  if [[ -n "$DOMAIN" ]]; then
-    say "${DIM}Use 443 if it is free on this server; otherwise 8443 (Cloudflare proxies both).${RESET}"
-    ask GW_PORT "HTTPS port on this server" "8443"
-    if [[ "$GW_PORT" == "443" ]]; then PUBLIC_BASE="https://${DOMAIN}"; else PUBLIC_BASE="https://${DOMAIN}:${GW_PORT}"; fi
-    mkdir -p certs
-    read_pem certs/cert.pem "1) Cloudflare Origin Certificate"
-    read_pem certs/key.pem  "2) Origin Private Key"
-    TLS_CERT="/certs/cert.pem"; TLS_KEY="/certs/key.pem"
-    ok "Domain and certificate configured → ${PUBLIC_BASE}"
+  say "${BOLD}Admin panel domain${RESET} ${DIM}(recommended — HTTPS with a certificate that is issued and renewed automatically)${RESET}"
+  say "${DIM}Create an A record for it pointing to this server first. On Cloudflare use \"DNS only\" (grey cloud).${RESET}"
+  say "${DIM}Download/stream links get their own domain later, in the admin panel (Settings), also with an automatic certificate.${RESET}"
+  local PANEL_DOMAIN="" ADMIN_BASE="" ADMIN_BIND="0.0.0.0" OLD_DOMAIN
+  OLD_DOMAIN=$(env_get PANEL_DOMAIN)
+  while true; do
+    if [[ -n "$OLD_DOMAIN" ]]; then   # a reconfigure: Enter keeps the domain, so removing needs its own answer
+      ask PANEL_DOMAIN "Panel domain (Enter keeps it, - removes it)" "$OLD_DOMAIN"
+    else
+      ask PANEL_DOMAIN "Panel domain (e.g. panel.example.com — press Enter to skip)"
+    fi
+    [[ "$PANEL_DOMAIN" == "-" ]] && PANEL_DOMAIN=""
+    PANEL_DOMAIN=$(clean_domain "$PANEL_DOMAIN")
+    [[ -z "$PANEL_DOMAIN" ]] && break
+    valid_domain "$PANEL_DOMAIN" && break
+    warn "\"${PANEL_DOMAIN}\" is not a valid domain name. Type just the name, e.g. panel.example.com."
+  done
+  if [[ -n "$PANEL_DOMAIN" ]]; then
+    ADMIN_BASE="https://${PANEL_DOMAIN}"
+    # The plain-HTTP port 2083 then stays on localhost: an SSH tunnel still reaches it,
+    # the internet does not (login codes and session cookies never travel unencrypted).
+    ADMIN_BIND="127.0.0.1"
+    check_dns "$PANEL_DOMAIN"
+    check_ports
+    ok "Panel → ${ADMIN_BASE}"
   else
-    warn "No domain; the \"Link\" button stays disabled until you set one (telabzar reconfigure)."
+    warn "No domain: the panel is served on plain HTTP at port 2083 (http://<server-ip>:2083)."
+    say  "${DIM}You can add a domain any time: telabzar reconfigure${RESET}"
   fi
 
   # Keep fixed secrets from an existing .env (the Postgres password is baked
@@ -127,21 +239,22 @@ POSTGRES_DB=telabzar
 # and the admin panel deliberately refuses to start with an empty ADMIN_SECRET.
 ADMIN_SECRET=${ADMIN_SECRET}
 NODE_SECRET=${NODE_SECRET}
-# Note: DOMAIN is deliberately not written — it is only an input to this
-# script, used to build PUBLIC_BASE and the certificate paths; no code reads it.
-PUBLIC_BASE=${PUBLIC_BASE}
-GATEWAY_HTTPS_PORT=${GW_PORT}
-TLS_CERT=${TLS_CERT}
-TLS_KEY=${TLS_KEY}
+# HTTPS: Caddy serves the panel on PANEL_DOMAIN and gets its certificate itself.
+# The download/stream link domain is a panel setting (link_domain), not this file.
+PANEL_DOMAIN=${PANEL_DOMAIN}
+ADMIN_BASE=${ADMIN_BASE}
+# Direct plain-HTTP ports (panel 2083, gateway 8443): 127.0.0.1 = this server only.
+ADMIN_BIND=${ADMIN_BIND}
+GATEWAY_BIND=127.0.0.1
 EOF
   ok ".env written (secrets generated randomly)."
 
   say ""
   say "${BOLD}Summary:${RESET}"
   say "  • The bot connects to local-bot-api with ${BOLD}long-polling${RESET}."
-  say "  • Services: local-bot-api · postgres · redis · bot · worker · download-worker · clamav · gateway · admin · bgutil-pot-provider"
-  if [[ -n "$DOMAIN" ]]; then
-    say "  • Links/streams on ${BOLD}${PUBLIC_BASE}${RESET} (port ${GW_PORT})."
+  say "  • Services: caddy · local-bot-api · tg-janitor · postgres · redis · bot · worker · download-worker · clamav · gateway · admin · bgutil-pot-provider"
+  if [[ -n "$PANEL_DOMAIN" ]]; then
+    say "  • Admin panel on ${BOLD}${ADMIN_BASE}${RESET} (certificate: automatic, Let's Encrypt)."
   fi
   local CONFIRM
   ask CONFIRM "Start the install and bring the stack up? (y/n)" "y"
@@ -152,6 +265,7 @@ EOF
   $COMPOSE up -d --build
 
   install_cli
+  [[ -n "$PANEL_DOMAIN" ]] && issue_panel_cert "$PANEL_DOMAIN"
 
   # ── Distributed nodes (optional) — automatic WireGuard / master infra setup ──
   say ""
@@ -173,11 +287,14 @@ EOF
   ok "Stack is up. The bot connects with long-polling (no webhook needed)."
   say "${DIM}Status:${RESET}  telabzar status    ${DIM}|${RESET}   ${DIM}Logs:${RESET}  telabzar logs <service>"
   say "${DIM}ClamAV downloads its signature database on first start; it is ready after a few minutes.${RESET}"
-  if [[ -n "$DOMAIN" ]]; then
-    say "${DIM}Admin panel:${RESET}  https://${DOMAIN}:2083"
+  if [[ -n "$PANEL_DOMAIN" ]]; then
+    say "${DIM}Admin panel:${RESET}  ${ADMIN_BASE}"
+    say "${DIM}If it does not load, check the A record and 'telabzar logs caddy'; meanwhile an SSH tunnel${RESET}"
+    say "${DIM}reaches the panel:  ssh -L 2083:127.0.0.1:2083 root@<server-ip>   then open http://localhost:2083${RESET}"
   else
     say "${DIM}Admin panel:${RESET}  http://<server-ip>:2083"
   fi
+  say "${DIM}Download/stream links: admin panel → Settings → link domain (e.g. dl.example.com, its own A record).${RESET}"
   say "${DIM}Now send /start to the bot in Telegram (do this before logging into the panel —${RESET}"
   say "${DIM}the panel's login code is sent to you by the bot).${RESET}"
 }
@@ -251,4 +368,6 @@ main() {
   esac
 }
 
-main "$@"
+# Tests source this file to call the functions above one by one; they set this
+# variable so that sourcing defines everything without starting the installer.
+[[ -n "${TELABZAR_INSTALL_LIB:-}" ]] || main "$@"

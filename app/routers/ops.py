@@ -138,11 +138,13 @@ async def _check_limits(pool: ArqRedis, user_id: int) -> str | None:
 
 
 async def _link_base() -> str:
-    """پایهٔ عمومیِ لینک‌های /dl و /s.
+    """پایهٔ عمومیِ لینک‌های /dl و /s — به این ترتیب:
 
-    اگر `stream_base` (دامنهٔ نودِ استریم) ست است **و یک نودِ gateway آنلاین است** →
-    روی نود؛ وگرنه `public_base`ِ مستر. یعنی نبودِ نود (یا افتادنش) → لینک‌ها خودکار به
-    مستر برمی‌گردند و نمی‌شکنند («نبودِ نود → همه‌چیز روی مستر»)."""
+    1. `stream_base` (دامنهٔ نودِ استریم)، **فقط اگر یک نودِ gateway آنلاین است** —
+       نبودنِ نود (یا افتادنش) لینک را خودکار به مستر برمی‌گرداند و نمی‌شکند.
+    2. `link_domain` از پنل → `https://<دامنه>`؛ Caddy برایش سرتیفیکیتِ خودکار می‌گیرد.
+    3. `public_base`ِ env — فقط نصب‌های قدیمیِ «Origin Certificate».
+    """
     base = (await settings_store.get_str("stream_base", settings.stream_base) or "").rstrip("/")
     if base:
         store = settings_store.get_store()
@@ -151,6 +153,9 @@ async def _link_base() -> str:
                 return base
         except Exception:  # noqa: BLE001  — خطای رجیستری نباید لینک را بشکند
             pass
+    domain = await settings_store.link_domain()
+    if domain:
+        return f"https://{domain}"
     return (settings.public_base or "").rstrip("/")
 
 
