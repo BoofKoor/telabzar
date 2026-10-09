@@ -7,7 +7,7 @@ import re
 import subprocess
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 
 from app import pdftools as T
 from app.exceptions import UserFacingError
@@ -139,15 +139,22 @@ async def test_lock_refuses_a_bad_password(tmp_path):
 
 # ── فشرده‌سازی ──────────────────────────────────────────────────
 def _scan_jpeg(path, w=2480, h=3508):
-    """صفحهٔ اسکن‌مانند: A4 در ۳۰۰dpi (نویزِ نرم + شیب)، JPEGِ ~۳ مگ.
+    """صفحهٔ اسکن‌مانند: A4 در ۳۰۰dpi — کاغذِ نویزدارِ نرم با **سطرهای متن**، JPEGِ ~۱٫۴ مگ.
 
-    رزولوشن باید بالای آستانهٔ Ghostscript باشد (`DownsampleThreshold` ۱٫۵ برابرِ
-    هدف): عکسِ ۲۰۰dpi زیرِ آن است و هیچ سطحی کوچکش نمی‌کند — نسخهٔ اولِ همین تست
-    با ۱۶۰۰ پیکسل «بی‌فایده» برگرداند و چیزی نسنجید.
+    دو قید، هر دو با شکستِ همین تست پیدا شدند:
+    - رزولوشن باید بالای آستانهٔ Ghostscript باشد (`DownsampleThreshold` ۱٫۵ برابرِ
+      هدف): عکسِ ۲۰۰dpi زیرِ آن است و هیچ سطحی کوچکش نمی‌کند — نسخهٔ اول با ۱۶۰۰
+      پیکسل «بی‌فایده» برگرداند و چیزی نسنجید.
+    - **لبهٔ تیزِ متن** لازم است: انتخاب‌گرِ خودکارِ Ghostscript روی نویزِ نرمِ خالی
+      JPEG برمی‌دارد، پس نسخهٔ دوم بدونِ فیلترِ اجباری هم سبز می‌ماند (دفترچهٔ سابوتاژ
+      گرفتش). با متن Flate برمی‌دارد و «زیاد» (۶۷۸ک) از «معمولی» (۱۷۲ک) بزرگ‌تر می‌شود
+      — همان باگی که این تست برایش هست.
     """
-    noise = Image.effect_noise((w // 4, h // 4), 60).resize((w, h))
-    grad = Image.linear_gradient("L").resize((w, h))
-    Image.merge("RGB", (noise, grad, Image.blend(noise, grad, 0.5))).save(path, "JPEG", quality=92)
+    im = Image.effect_noise((w // 2, h // 2), 60).convert("RGB").filter(ImageFilter.GaussianBlur(2))
+    draw = ImageDraw.Draw(im)
+    for k in range(40):
+        draw.text((100, 60 + k * 40), f"Lorem ipsum dolor sit amet scanned page line {k}", fill=(0, 0, 0))
+    im.resize((w, h)).save(path, "JPEG", quality=95)
     return str(path)
 
 
