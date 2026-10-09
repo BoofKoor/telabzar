@@ -27,7 +27,6 @@
 """
 from __future__ import annotations
 
-import ast
 import asyncio
 import collections
 import os
@@ -597,16 +596,11 @@ async def test_the_safety_layer_still_blocks_media_from_the_anonymous_path(
     assert bot.edits and bot.edits[-1] == t("fa", "nsfw_blocked"), bot.edits[-3:]
 
 
-# ── ۱۲) ثبتِ کلید (AST، بدونِ import — قاعدهٔ ۲۰۲۶-۰۸-۱۳) ─────────
+# ── ۱۲) ثبتِ کلید ───────────────────────────────────────────────────
 def test_the_flag_is_registered_everywhere_the_panel_needs_it():
-    """`admin_web` روی رانرِ CI قابلِ import نیست، پس سورس با AST خوانده می‌شود."""
+    """چیدمانِ صفحهٔ تنظیمات از ۲۰۲۶-۱۰ در `panel_settings` است — ماژولی خالص که
+    jobِ اصلی import می‌کند (`admin_web` روی رانرِ CI قابلِ import نیست)."""
+    from app import panel_settings
     from app.settings_store import RUNTIME_KEYS
     assert RUNTIME_KEYS.get("dl_ig_anon_enabled") == ("bool", False)
-
-    src = Path("app/admin_web.py").read_text(encoding="utf-8")
-    groups = next(ast.literal_eval(n.value)
-                  for n in ast.walk(ast.parse(src))
-                  if isinstance(n, ast.Assign)
-                  and any(getattr(t, "id", "") == "GROUPS" for t in n.targets))
-    keys = {row[0] for _title, rows in groups for row in rows}
-    assert "dl_ig_anon_enabled" in keys, "کلید در هیچ صفحهٔ پنلی نیست"
+    assert "dl_ig_anon_enabled" in panel_settings.setting_keys(), "کلید در هیچ صفحهٔ پنلی نیست"

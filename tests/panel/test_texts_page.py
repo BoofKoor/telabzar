@@ -24,24 +24,48 @@ def _some_key() -> str:
     return aw._TEXT_KEYS[0]
 
 
-async def test_every_category_renders_its_title(panel):
-    """کشف‌محور: هر دسته‌ای که `_texts_groups` می‌سازد باید در صفحه باشد."""
+def _cats():
+    """دسته‌ها و شمارِ هرکدام — از همان تابعی که هندلر صدا می‌زند، نه بازسازیِ دستی."""
     from app import admin_web as aw
 
-    groups = aw._texts_groups("fa", "")
-    assert len(groups) >= 3, f"پیش‌شرط: چند دسته باید باشد، {len(groups)} بود"
-    shows(await _fetch(panel, "/texts"), *[g["title"] for g in groups])
+    _rows, counts = aw._texts_rows("fa", "", "all", False)
+    return aw, counts
+
+
+async def test_every_category_renders_its_title(panel):
+    """کشف‌محور: هر دسته‌ای که صفحه دارد باید تراشه‌اش را با برچسب داشته باشد."""
+    aw, counts = _cats()
+    real = [c for c in aw._TEXT_CAT_IDS if counts.get(c)]
+    assert len(real) >= 3, f"پیش‌شرط: چند دستهٔ ناتهی باید باشد، {real}"
+    f = aw.Fmt("fa")
+    shows(await _fetch(panel, "/texts"), *[f.t("tx.cat." + c) for c in ("all",) + aw._TEXT_CAT_IDS])
 
 
 async def test_every_category_states_how_many_keys_it_holds(panel):
-    """شمارِ هر دسته کنارِ عنوانش — وگرنه «فهرست خالی شد» دیده نمی‌شود."""
-    from app import admin_web as aw
+    """شمارِ هر دسته روی تراشه‌اش — وگرنه «فهرست خالی شد» دیده نمی‌شود."""
+    aw, counts = _cats()
+    f = aw.Fmt("fa")
+    text = page_text(await _fetch(panel, "/texts"))
+    for c in ("all",) + aw._TEXT_CAT_IDS:
+        label = f"{f.t('tx.cat.' + c)} {f.num(counts.get(c, 0))}"
+        assert label in text, f"تراشهٔ «{c}» شمارش را نمی‌گوید: «{label}»"
 
-    html = await _fetch(panel, "/texts")
-    text = page_text(html)
-    for g in aw._texts_groups("fa", ""):
-        assert f"{g['title']} ({g['n']})" in text, (
-            f"دستهٔ «{g['title']}» شمارش ({g['n']}) را نمی‌گوید")
+
+def test_no_key_falls_outside_every_category():
+    """جمعِ دسته‌ها = کلِ کلیدها؛ کلیدی که در هیچ دسته‌ای نیفتد از فیلتر گم می‌شود."""
+    aw, counts = _cats()
+    assert counts["all"] == len(aw._TEXT_KEYS)
+    assert sum(counts.get(c, 0) for c in aw._TEXT_CAT_IDS) == counts["all"]
+
+
+async def test_a_category_filter_shows_exactly_its_keys(panel):
+    """تراشه فقط لینک نیست: `?cat=` واقعاً همان تعداد ردیف رندر می‌کند."""
+    import re
+
+    aw, counts = _cats()
+    cat = max(aw._TEXT_CAT_IDS, key=lambda c: counts.get(c, 0))
+    html = await _fetch(panel, f"/texts?cat={cat}")
+    assert len(re.findall(r'class="txt-row[ "]', html)) == counts[cat]
 
 
 async def test_a_key_is_editable_with_its_current_value(panel):
@@ -57,12 +81,37 @@ async def test_a_key_is_editable_with_its_current_value(panel):
     shows(await _fetch(panel, "/texts"), key, SENTINEL)
 
 
+def _row(html: str, key: str) -> str:
+    """مارک‌آپِ ردیفِ همین کلید — از `<div class="txt-row` تا ردیفِ بعدی."""
+    at = html.index(f'<div class="k">{key}</div>')
+    start = html.rindex('<div class="txt-row', 0, at)
+    nxt = html.find('<div class="txt-row', at)
+    return html[start:nxt if nxt != -1 else len(html)]
+
+
 async def test_an_edited_key_is_marked_as_edited(panel):
-    """ادمین باید بتواند ویرایش‌شده را از پیش‌فرض تفکیک کند."""
+    """ادمین باید بتواند ویرایش‌شده را از پیش‌فرض تفکیک کند — **روی همان ردیف**.
+
+    نشانهٔ دیدنی سه‌تاست: خطِ «پیش‌فرض: …» با متنِ اصلی، دکمهٔ «برگرداندن»، و
+    کلاسِ `edited` (نقطهٔ کنارِ کلید). ادعا به ردیف محدود است، چون «ویرایش‌شده» در
+    نوارِ ابزار (`فقط ویرایش‌شده‌ها`) و زیرعنوانِ صفحه هم هست — همان «سه منبع برای
+    یک توکن» که §۶ ثبت کرده.
+    """
+    from app import admin_web as aw
     from app import textstore
 
-    await textstore.set_text("fa", _some_key(), SENTINEL)
-    shows(await _fetch(panel, "/texts"), "ویرایش‌شده")
+    key = _some_key()
+    other = next(k for k in aw._TEXT_KEYS if k != key)
+    await textstore.set_text("fa", key, SENTINEL)
+    html = await _fetch(panel, "/texts")
+    f = aw.Fmt("fa")
+    mine = _row(html, key)
+    assert 'class="txt-row edited"' in mine
+    shows(mine, f.t("tx.default"), aw._text_default("fa", key), f.t("tx.reset"))
+    # کنترلِ معکوس: ردیفِ دست‌نخورده هیچ‌کدام را ندارد
+    theirs = _row(html, other)
+    assert 'class="txt-row edited"' not in theirs
+    assert missing_facts(theirs, [f.t("tx.reset")]) == [f.t("tx.reset")]
 
 
 async def test_the_search_narrows_the_list_to_what_matches(panel):

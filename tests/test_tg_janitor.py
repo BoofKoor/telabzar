@@ -183,12 +183,8 @@ def test_both_keys_are_registered_for_the_panel():
     from app.settings_store import RUNTIME_KEYS
     assert RUNTIME_KEYS["tg_files_max_age_hours"][0] == "int"
     assert RUNTIME_KEYS["tg_files_min_free_gb"][0] == "int"
-    src = (ROOT / "app" / "admin_web.py").read_text(encoding="utf-8")
-    groups = next(ast.literal_eval(n.value) for n in ast.walk(ast.parse(src))
-                  if isinstance(n, ast.Assign)
-                  and any(getattr(t, "id", "") == "GROUPS" for t in n.targets))
-    keys = {row[0] for _t, rows in groups for row in rows}
-    assert {"tg_files_max_age_hours", "tg_files_min_free_gb"} <= keys
+    from app import panel_settings
+    assert {"tg_files_max_age_hours", "tg_files_min_free_gb"} <= set(panel_settings.setting_keys())
 
 
 def _services() -> dict:

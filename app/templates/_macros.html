@@ -1,0 +1,85 @@
+{# Shared pieces. Every value arrives formatted from Python (panel_fmt); these only lay it out. #}
+
+{% macro pill(p) -%}
+<span class="pill {{ p.cls }}">{% if p.icon %}{{ ic(p.icon) }}{% endif %}{{ p.text }}</span>
+{%- endmacro %}
+
+{% macro delta(d) -%}
+{% if d %}<span class="delta {{ d.cls }}"{% if d.title %} title="{{ d.title }}"{% endif %}>{% if d.icon %}{{ ic(d.icon) }}{% endif %}{{ d.text }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro kpi(k) -%}
+<div class="card kpi">
+  <div class="kpi-top"><span class="kpi-ic tint {{ k.tint }}">{{ ic(k.icon) }}</span><span class="kpi-label">{{ k.label }}</span>{{ delta(k.delta) }}</div>
+  <div class="kpi-val num">{{ k.value }}</div>
+  <div class="kpi-sub">{{ k.sub }}</div>
+</div>
+{%- endmacro %}
+
+{% macro empty(icon, text, ok=False, cls='') -%}
+<div class="empty{% if ok %} ok{% endif %} {{ cls }}"><span class="em-ic">{{ ic(icon, 'ic-20') }}</span><div>{{ text }}</div></div>
+{%- endmacro %}
+
+{% macro legend(items) -%}
+<div class="legend">{% for x in items %}<span class="li"><i class="swatch" style="background:{{ x.color }}"></i>{{ x.label }}{% if x.value is not none %} <b class="num">{{ x.value }}</b>{% endif %}</span>{% endfor %}</div>
+{%- endmacro %}
+
+{% macro view_toggle() -%}
+<div class="seg icons sm js-only" role="group" aria-label="{{ t('c.chart') }} / {{ t('c.table') }}">
+  <button type="button" aria-pressed="true" data-view="chart" aria-label="{{ t('c.chart') }}" title="{{ t('c.chart') }}">{{ ic('chart-column', 'ic-16') }}</button>
+  <button type="button" aria-pressed="false" data-view="table" aria-label="{{ t('c.table') }}" title="{{ t('c.table') }}">{{ ic('table', 'ic-16') }}</button>
+</div>
+{%- endmacro %}
+
+{% macro chart(spec, cls='', h=None) -%}
+<div class="chart {{ cls }}" data-spec='{{ spec|tojson }}' role="img" aria-label="{{ spec.aria or '' }}"{% if h %} style="height:{{ h }}px"{% endif %}></div>
+{%- endmacro %}
+
+{% macro avatar(u, size='') -%}
+{% set nm = f.uname(u) %}{% set ini = f.initials(u.name or u.uname) %}
+<span class="avatar {{ size }} {{ f.av(u.id or u.tg) }}" aria-hidden="true">{% if ini %}{{ ini }}{% else %}{{ ic('user', 'ic-16') }}{% endif %}</span>
+{%- endmacro %}
+
+{% macro user_cell(u, href='', sheet=True) -%}
+<div class="cell-user">{{ avatar(u, 'sm') }}<div class="grow">
+  {% if href %}<a class="rowlink n trunc" href="{{ href }}"{% if sheet %} data-sheet{% endif %}><bdi>{{ f.uname(u) }}</bdi></a>{% else %}<div class="n trunc"><bdi>{{ f.uname(u) }}</bdi></div>{% endif %}
+  <div class="sub trunc">{% if u.uname and u.name %}<bdi>@{{ u.uname }}</bdi>{% elif u.tg %}<bdi class="mono">{{ u.tg }}</bdi>{% endif %}</div>
+</div></div>
+{%- endmacro %}
+
+{% macro pager(p) -%}
+<div class="pager"><span class="num">{{ p.text }}</span>
+  <span class="row">
+    {% if p.prev %}<a class="btn btn-secondary btn-sm" href="{{ p.prev }}" rel="prev">{{ ic('chevron-left', 'flip') }}{{ t('c.prev') }}</a>{% else %}<span class="btn btn-secondary btn-sm" aria-disabled="true">{{ ic('chevron-left', 'flip') }}{{ t('c.prev') }}</span>{% endif %}
+    {% if p.next %}<a class="btn btn-secondary btn-sm" href="{{ p.next }}" rel="next">{{ t('c.next') }}{{ ic('chevron-right', 'flip') }}</a>{% else %}<span class="btn btn-secondary btn-sm" aria-disabled="true">{{ t('c.next') }}{{ ic('chevron-right', 'flip') }}</span>{% endif %}
+  </span></div>
+{%- endmacro %}
+
+{% macro card_head(title, sub='', tools='') -%}
+<div class="card-h"><div><h2>{{ title }}</h2>{% if sub %}<div class="sub">{{ sub }}</div>{% endif %}</div>{% if tools %}<div class="tools">{{ tools }}</div>{% endif %}</div>
+{%- endmacro %}
+
+{% macro range_seg(ranges, key, path) -%}
+<div class="seg" role="group" aria-label="{{ t('c.time') }}">{% for r in ranges %}<a href="{{ path }}?r={{ r }}"{% if r == key %} aria-current="true"{% endif %}>{{ t('r.' + r) }}</a>{% endfor %}</div>
+{%- endmacro %}
+
+{% macro sheet_head(title, close_href, sub='') -%}
+<div class="sheet-h"><div><h3>{{ title }}</h3>{% if sub %}<div class="sub muted fs-12">{{ sub }}</div>{% endif %}</div>
+  <a class="icon-btn sm" href="{{ close_href }}" data-sheet-close aria-label="{{ t('c.close') }}">{{ ic('x') }}</a></div>
+{%- endmacro %}
+
+{% macro copy_btn(text) -%}
+<button class="icon-btn sm js-only" type="button" data-copy="{{ text }}" aria-label="{{ t('c.copy') }}" title="{{ t('c.copy') }}">{{ ic('copy') }}</button>
+{%- endmacro %}
+
+{% macro hidden_state(state, skip=()) -%}
+{% for k, v in state.items() if v not in ('', None) and k not in skip %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+{%- endmacro %}
+
+{% macro feed_item(x, show_user=True) -%}
+<a class="feed-item" href="{{ x.href }}" data-sheet>
+  <span class="feed-ic tint {{ x.tint }}">{{ ic(x.icon, 'ic-16') }}</span>
+  <div class="grow"><div class="t trunc">{% if show_user %}<bdi>{{ x.title }}</bdi> · {% endif %}{{ x.what }}</div><div class="s trunc">{{ x.sub|dots }}</div></div>
+  <div class="stack" style="align-items:flex-end;gap:4px">{{ pill(x.pill) }}<span class="when">{{ f.ago(x.t) }}</span></div>
+</a>
+{%- endmacro %}

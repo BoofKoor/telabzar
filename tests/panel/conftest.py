@@ -21,7 +21,7 @@
 ماژول وصله می‌زند، و همان کار این‌جا انجام می‌شود.
 
 فهرستِ ماژول‌ها **اندازه‌گیری شده** است، نه حدس: با importِ `app.admin_web` و
-پیمایشِ `sys.modules` دقیقاً چهار ماژول نامِ `Sessionmaker` را نگه می‌دارند.
+پیمایشِ `sys.modules` دقیقاً پنج ماژول نامِ `Sessionmaker` را نگه می‌دارند.
 `_SESSIONMAKER_HOLDERS` همان‌هاست و `test_the_sessionmaker_holder_list_is_complete`
 (در `tests/panel/test_panel_harness.py`) با همان پیمایش نگه‌داری‌اش می‌کند — پس
 اگر ماژولِ پنجمی اضافه شود، تست می‌افتد نه اینکه بی‌صدا به Postgres وصل شود.
@@ -38,7 +38,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 #: ماژول‌هایی که سرِ import نامِ `Sessionmaker` را به فضای نامِ خودشان می‌آورند.
 #: اندازه‌گیری‌شده، نه دستی — تستِ همراهش همین را ثابت می‌کند.
-_SESSIONMAKER_HOLDERS = ("app.db", "app.admin_web", "app.settings_store", "app.textstore")
+_SESSIONMAKER_HOLDERS = ("app.db", "app.admin_web", "app.settings_store", "app.textstore",
+                         "app.panel_data", "app.dl_events")
 
 #: شناسهٔ ادمینِ تست. `settings.admin_id_set` یک propertyِ **فقط‌خواندنی** است
 #: (`app/config.py:181`) و مشتق از `admin_ids`، پس باید فیلدِ زیرین ست شود.
@@ -206,6 +207,9 @@ async def panel(tmp_path, monkeypatch):
     # هلثِ پنل یک GETِ ۳ثانیه‌ای به pot-provider می‌زند؛ در تست خاموشش می‌کنیم
     # تا اجرا به شبکه وابسته نشود.
     monkeypatch.setattr(admin_web.settings, "pot_provider_url", "")
+    # کارتِ سرویس‌های `/system` به Bot API و ClamAV وصل می‌شود (پس‌زمینه، با کش)؛
+    # در تست هیچ‌کدام نیست و سوکتِ بسته فقط اجرا را کند می‌کند.
+    monkeypatch.setattr(admin_web, "PROBES_ENABLED", False)
 
     app = admin_web.build_app()
     # startupِ واقعی به Redis و Postgresِ واقعی وصل می‌شود؛ جایش fake را تزریق کن.
@@ -246,7 +250,7 @@ async def seeded(panel, tmp_path):
     from datetime import datetime, timedelta, timezone
 
     from app import cookies as ck
-    from app.models import File, Job, Node, User
+    from app.models import AdminAction, DownloadEvent, File, Job, Node, User
 
     now = datetime.now(timezone.utc)
     ts = int(_t.time())
@@ -273,6 +277,37 @@ async def seeded(panel, tmp_path):
         s.add(Job(file_id=up.id, op="trim", status="queued", created_at=now))
         s.add(Node(id="n1", name="edge", role="download",
                    wg_ip="10.51.0.2", wg_pubkey="pubkey="))
+        # لاگِ دانلود (از بازطراحیِ ۲۰۲۶-۱۰ منبعِ نرخِ موفقیت و خطاهای دانلود).
+        # ترتیبِ درج = شناسه‌ها: ۱–۴ موفقِ ساندکلاد (همان چهار فایل)، ۵–۶ ناموفقِ
+        # ساندکلاد، ۷ موفقِ کش‌خوردهٔ اینستاگرام، ۸ ردشده (حجم). پس نرخِ ساندکلاد
+        # ۴ از ۶ است، و «ردشده» عمداً در مخرج نیست (شکستِ سرویس نیست).
+        ev = dict(created_at=now - timedelta(minutes=5))
+        for i in range(4):
+            s.add(DownloadEvent(owner_id=blocked.id, tg_user_id=901, platform="soundcloud",
+                                url=f"https://soundcloud.com/a/t{i}", outcome="ok", kind="video",
+                                size=10 ** 7, height=1080, duration=61, took_ms=4200,
+                                exit="master", engine="ytdlp", phase="fetch", **ev))
+        for i in range(2):
+            s.add(DownloadEvent(owner_id=blocked.id, tg_user_id=901, platform="soundcloud",
+                                url=f"https://soundcloud.com/a/x{i}", outcome="fail",
+                                error_class="login_required",
+                                error="ERROR: [soundcloud] 3141592: HTTP Error 401: Unauthorized",
+                                cookie="cookies_healthy.txt", exit="master", attempts=2,
+                                engine="ytdlp", phase="fetch", **ev))
+        s.add(DownloadEvent(owner_id=plain.id, tg_user_id=902, platform="instagram",
+                            url="https://www.instagram.com/p/Cx1/", outcome="ok", kind="image",
+                            size=5 * 10 ** 6, cached=True, **ev))
+        s.add(DownloadEvent(owner_id=plain.id, tg_user_id=902, platform="youtube",
+                            url="https://youtu.be/abcdefghijk", outcome="refused",
+                            error_class="too_big", **ev))
+        # لاگِ کارهای ادمین — یک ردیف از هر شکلِ رندر (تنظیم، کاربر، ورود).
+        s.add_all([
+            AdminAction(admin_id=ADMIN_ID, action="setting", target="dl_max_size_mb",
+                        detail={"from": "2000", "to": "1500"}, ip="10.0.0.9", **ev),
+            AdminAction(admin_id=ADMIN_ID, action="user_block", target="901",
+                        detail={"name": ""}, ip="10.0.0.9", **ev),
+            AdminAction(admin_id=ADMIN_ID, action="login", ip="10.0.0.9", **ev),
+        ])
         await s.commit()
 
     cdir = tmp_path / "cookies"

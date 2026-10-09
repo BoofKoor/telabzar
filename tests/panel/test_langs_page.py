@@ -46,18 +46,35 @@ async def test_the_page_lists_every_available_language(panel):
     shows(html, *langs.keys(), *langs.values())
 
 
+def _f():
+    from app.admin_web import Fmt
+    return Fmt("fa")
+
+
+def _row(html: str, code: str) -> str:
+    """ردیفِ جدولِ همین زبان — از `<tr>` تا `</tr>`ی که کدش را دارد."""
+    at = html.index(f'<bdi class="mono">{code}</bdi>')
+    return html[html.rindex("<tr>", 0, at):html.index("</tr>", at)]
+
+
 async def test_the_page_states_how_many_keys_a_language_still_lacks(panel):
-    """پوششْ محاسبه‌شده است نه برچسبِ ثابت — وگرنه هیچ‌وقت خاموش نمی‌شود."""
+    """پوششْ محاسبه‌شده است نه برچسبِ ثابت — وگرنه هیچ‌وقت خاموش نمی‌شود.
+
+    دو نشانه، هر دو **روی ردیفِ همان زبان**: «۵۰ از ۲۲۳» و پهنای نوار.
+    """
     _r, pack = await _export(panel)
     pack["texts"] = dict(list(pack["texts"].items())[:50])
     await _import(panel, pack)
-    html = await _fetch(panel, "/langs")
-    shows(html, f"50/{len(L.TEXT_KEYS)}", f"{50 * 100 // len(L.TEXT_KEYS)}٪")
+    row = _row(await _fetch(panel, "/langs"), "es")
+    f, total = _f(), len(L.TEXT_KEYS)
+    shows(row, f.t("c.of", a=f.num(50), b=f.num(total)))
+    assert f'style="width:{50 / total * 100:.1f}%"' in row
 
 
 async def test_a_builtin_language_cannot_be_deleted(panel):
     r = await panel.client.post("/langs/delete", cookies=panel.cookies, data={"code": "fa"})
-    shows(await r.text(), "زبانِ داخلی حذف‌شدنی نیست")
+    shows(await r.text(), _f().t("lng.err.builtin"))
+    assert "fa" in await panel.aw._languages()
 
 
 async def test_deleting_a_language_takes_its_texts_with_it(panel):
@@ -183,7 +200,7 @@ async def test_a_rejected_pack_writes_nothing_at_all(panel):
     r, body = await _import(panel, pack)
     assert textstore.lang_texts("es") == {}
     assert await textstore.languages() == {}
-    shows(body, "welcome", "هیچ‌چیز نوشته نشد")
+    shows(body, "welcome", _f().t("lng.d.nothing"))
 
 
 async def test_a_rejected_pack_names_every_kind_of_problem(panel):
@@ -225,7 +242,9 @@ async def test_importing_over_the_default_language_asks_first(panel):
         pack["texts"][k] = "CHANGED " + pack["texts"][k]
     r, body = await _import(panel, pack, lang=DEFAULT, name="فارسی")
     assert textstore.lang_texts(DEFAULT) == {}, "پیش از تأیید نباید چیزی نوشته شود"
-    shows(body, "بله، اعمال کن", str(len(changed)))
+    f = _f()
+    shows(body, f.t("lng.d.confirm_btn"), f.t("lng.d.confirm", c=f.num(len(changed))))
+    assert '<input type="hidden" name="confirm" value="yes">' in body
 
 
 async def test_the_confirmation_states_what_changes_and_what_does_not(panel):
@@ -237,7 +256,9 @@ async def test_the_confirmation_states_what_changes_and_what_does_not(panel):
         pack["texts"][k] = "CHANGED " + pack["texts"][k]
     _r, body = await _import(panel, pack, lang=DEFAULT, name="فارسی")
     # ۷ عوض می‌شود · ۳۳ همان است · بقیه اصلاً در بسته نیست
-    shows(body, "7", "33", str(len(L.TEXT_KEYS) - 40))
+    f = _f()
+    shows(body, f.t("lng.d.changes", c=f.num(7), s=f.num(33)),
+          f.t("lng.d.missing", n=f.num(len(L.TEXT_KEYS) - 40)))
 
 
 async def test_the_confirmed_import_writes(panel):

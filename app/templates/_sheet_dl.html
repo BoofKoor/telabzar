@@ -1,0 +1,31 @@
+{% import '_macros.html' as m with context %}
+<aside class="sheet" role="dialog" aria-modal="true" aria-label="{{ t('ac.d.title') }}">
+  {{ m.sheet_head(t('ac.d.title'), close_href, f.full(e.t)) }}
+  <div class="sheet-b">
+    <dl class="kv">
+      <dt>{{ t('c.status') }}</dt><dd>{{ m.pill(f.dl_pill(e.outcome)) }}</dd>
+      <dt>{{ t('ac.d.user') }}</dt><dd>{% if e.user.id %}<a href="/users?open={{ e.user.id }}"><bdi>{{ f.uname(e.user) }}</bdi></a>{% else %}<bdi>{{ f.uname(e.user) }}</bdi>{% endif %}{% if e.user.tg %} <bdi class="mono muted fs-12">{{ e.user.tg }}</bdi>{% endif %}</dd>
+      <dt>{{ t('c.platform') }}</dt><dd><span class="row"><span class="sq xs tint {{ f.ptint(e.platform) }}">{{ ic(f.picon(e.platform), 'ic-14') }}</span>{{ f.plat(e.platform) }}</span></dd>
+      {% if e.outcome == 'ok' %}
+        {% if e.kind %}<dt>{{ t('ac.d.type') }}</dt><dd>{{ f.kind(e.kind) }}{% if e['items'] and e['items'] > 1 %} · {{ t('ac.d.items', n=f.num(e['items'])) }}{% endif %}</dd>{% endif %}
+        {% if e.height %}<dt>{{ t('ac.d.quality') }}</dt><dd><bdi>{{ f.res(e.height) }}</bdi></dd>{% endif %}
+        {% if e.size %}<dt>{{ t('c.size') }}</dt><dd>{{ f.size(e.size) }}</dd>{% endif %}
+        {% if e.duration %}<dt>{{ t('ac.d.length') }}</dt><dd>{{ f.secs_short(e.duration) }}</dd>{% endif %}
+      {% endif %}
+      <dt>{{ t('ac.d.took') }}</dt><dd>{% if e.cached %}{{ t('c.cached') }}{% elif e.took %}{{ f.secs(e.took) }}{% else %}—{% endif %}</dd>
+      <dt>{{ t('ac.d.account') }}</dt><dd>{% if e.cookie %}<bdi class="mono">{{ e.cookie }}</bdi>{% else %}{{ t('ac.d.noacct') }}{% endif %}</dd>
+      {% if e.exit %}<dt>{{ t('ac.d.exit') }}</dt><dd><bdi>{{ e.exit_label or e.exit }}</bdi></dd>{% endif %}
+      {% if e.attempts %}<dt>{{ t('ac.d.attempts') }}</dt><dd class="num">{{ f.num(e.attempts) }}</dd>{% endif %}
+      {% if e.engine %}<dt>{{ t('ac.d.engine') }}</dt><dd><bdi class="mono">{{ e.engine }}{% if e.selector %} · {{ e.selector }}{% endif %}</bdi></dd>{% endif %}
+    </dl>
+    {% if e.url %}
+    <div class="mt-20"><div class="row jsb" style="margin-bottom:6px"><b class="fw-6" style="font-size:13.5px">{{ t('ac.d.url') }}</b>
+      <button class="btn btn-ghost btn-sm js-only" type="button" data-copy="{{ e.url }}">{{ ic('copy') }}{{ t('c.copy') }}</button></div>
+      <div class="codebox">{{ e.url }}</div></div>
+    {% endif %}
+    {% if e.outcome != 'ok' and (e.error or e.error_class) %}
+    <div class="mt-16"><b class="fw-6" style="font-size:13.5px;display:block;margin-bottom:6px">{{ t('ac.d.error') }}{% if e.error_class %} · <span class="bad">{{ f.err(e.error_class) }}</span>{% endif %}</b>
+      {% if e.error %}<div class="codebox">{{ e.error }}</div>{% endif %}</div>
+    {% endif %}
+  </div>
+</aside>

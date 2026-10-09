@@ -19,10 +19,17 @@ from app import admin_web as aw
 ROOT = Path(__file__).resolve().parents[2]
 TPL_DIR = Path(aw._TEMPLATE_DIR)
 
-#: نامِ هر قالبی که `_render` صدا می‌زند — از خودِ سورس کشف می‌شود نه فهرستِ دستی.
-_RENDER_CALL = re.compile(r'_render\(\s*"([a-z_]+)"')
-#: `{% extends %}` و `{% include %}` داخلِ قالب‌ها
-_REF = re.compile(r'{%\s*(?:extends|include)\s*"([^"]+)"')
+#: نامِ هر قالبی که `_render`/`_page` صدا می‌زند — از خودِ سورس کشف می‌شود نه
+#: فهرستِ دستی. نامِ **لفظی** فقط وقتی شمرده می‌شود که به `+` نچسبیده باشد؛ شکلِ
+#: پویا (`"_sheet_" + sheet_kind`) جدا باز می‌شود، وگرنه «`_sheet_.html`» خواسته
+#: می‌شد که قالبی نیست.
+_RENDER_CALL = re.compile(r'(?:_render\(|_page\(\s*request,)\s*"([a-z_]+)"(?!\s*\+)')
+_DYNAMIC_SHEET = re.compile(r'_render\(\s*"_sheet_"\s*\+')
+_SHEET_KIND = re.compile(r'sheet_kind\s*=.*,\s*"([a-z_]+)"\s*$', re.M)
+#: `extends`/`include`/`import`/`from` با نامِ **لفظی**، هر دو نوعِ کوتیشن
+_REF = re.compile(r"""{%-?\s*(?:extends|include|import|from)\s*(['"])([^'"]+)\1\s*(?:%|-|as\b|import\b|with\b)""")
+#: شکلِ پویا: `{% include '_sheet_' ~ x ~ '.html' %}`
+_DYNAMIC_REF = re.compile(r"""{%-?\s*include\s*(['"])_sheet_\1\s*~""")
 
 
 def _dockerfile_copy_roots(path: Path) -> set[str]:
@@ -77,15 +84,42 @@ def test_the_copy_parser_ignores_comments(tmp_path):
     assert _dockerfile_copy_roots(f) == {"app"}
 
 
-def test_every_template_name_the_panel_asks_for_resolves():
-    """هر نامی که `_render` یا یک `{% extends %}`/`{% include %}` می‌خواهد."""
+def _wanted_templates() -> set[str]:
     src = (ROOT / "app" / "admin_web.py").read_text(encoding="utf-8")
     wanted = {f"{n}.html" for n in _RENDER_CALL.findall(src)}
-    assert len(wanted) >= 10, f"محل‌های فراخوانیِ _render پیدا نشدند: {wanted}"
+    dynamic = bool(_DYNAMIC_SHEET.search(src))
     for f in TPL_DIR.glob("*.html"):
-        wanted |= set(_REF.findall(f.read_text(encoding="utf-8")))
+        text = f.read_text(encoding="utf-8")
+        wanted |= {name for _q, name in _REF.findall(text)}
+        dynamic |= bool(_DYNAMIC_REF.search(text))
+    if dynamic:                     # برگه‌های کشویی: هر نوعی که هندلر می‌سازد
+        wanted |= {f"_sheet_{k}.html" for k in _SHEET_KIND.findall(src)}
+    return wanted
+
+
+def test_every_template_name_the_panel_asks_for_resolves():
+    """هر نامی که `_render`/`_page` یا `extends`/`include`/`import` می‌خواهد."""
+    wanted = _wanted_templates()
+    assert len(wanted) >= 15, f"محل‌های فراخوانی پیدا نشدند: {sorted(wanted)}"
+    assert {"base.html", "_macros.html", "_sheet_dl.html", "_sheet_job.html"} <= wanted, sorted(wanted)
     for name in sorted(wanted):
         aw.ENV.get_template(name)        # TemplateNotFound اگر نباشد
+
+
+def test_no_template_file_is_orphaned():
+    """جهتِ عکس: قالبی که هیچ‌کس نمی‌خواهد کدِ مرده است — یا فراخوانیِ گم‌شده."""
+    orphans = sorted({p.name for p in TPL_DIR.glob("*.html")} - _wanted_templates())
+    assert not orphans, f"این قالب‌ها هیچ‌جا رندر یا include نمی‌شوند: {orphans}"
+
+
+def test_the_reference_patterns_are_not_dead_weight():
+    """کنترلِ منفی برای کشف: هر چهار شکل، و پویا جدا از لفظی."""
+    tpl = ("{% extends 'base.html' %}{% import \"_m.html\" as m with context %}"
+           "{% include 'x.html' %}{% from 'y.html' import z %}{% include '_sheet_' ~ k ~ '.html' %}")
+    assert {n for _q, n in _REF.findall(tpl)} == {"base.html", "_m.html", "x.html", "y.html"}
+    assert _DYNAMIC_REF.search(tpl)
+    src = 'return _render("_sheet_" + kind, request)\n    return await _page(request, "users", "users")\n'
+    assert _RENDER_CALL.findall(src) == ["users"] and _DYNAMIC_SHEET.search(src)
 
 
 def test_the_template_directory_is_not_empty():
@@ -110,27 +144,42 @@ def test_a_template_file_ends_with_exactly_one_newline(path):
         f"{path.name} بیش از یک خطِ جدیدِ پایانی دارد — یک `\\n` به هر صفحه اضافه می‌شود")
 
 
-def test_the_stylesheet_that_ships_is_the_file_on_disk(panel_css_text):
-    """CSS از فایل خوانده می‌شود ولی **درون‌خطی** تزریق می‌شود.
+_LINK = re.compile(r'<link rel="stylesheet" href="(/static/css/panel\.css)\?v=([0-9a-f]+)"')
 
-    اگر روزی به `<link>` برود، این تست قرمز می‌شود و آن **درست** است: آن سوییچ
-    بایت‌های HTML را عوض می‌کند و سه خوانندهٔ `<style>`ِ همان پاسخ را می‌شکند،
-    پس باید تصمیمِ آگاهانه باشد نه یک اثرِ جانبی.
+
+async def test_the_stylesheet_that_ships_is_the_file_on_disk(panel, panel_css_text):
+    """از بازطراحیِ ۲۰۲۶-۱۰ استایل **لینک** می‌شود، با `?v=<هش>` و کشِ یک‌ساله.
+
+    تصمیمِ آگاهانه‌ای که نسخهٔ قبلیِ این تست برایش قرمز می‌شد: نسخهٔ درونِ‌خطی
+    هر صفحه را ~۶۰ کیلوبایت سنگین می‌کرد و کش نمی‌شد. ادعای تازه این است که
+    URL **از خودِ فایل** ساخته شده — اگر فایل عوض شود و هش نه، مرورگرها یک سال
+    نسخهٔ کهنه را با صفحهٔ تازه قاطی می‌کنند.
     """
-    assert panel_css_text.strip(), "panel.css خالی است"
-    assert panel_css_text == aw._CSS
+    import hashlib
 
-
-async def test_the_served_page_carries_the_stylesheet_from_the_file(panel, panel_css_text):
-    """کنترلِ انتها‌به‌انتها: فایل واقعاً به مرورگر می‌رسد.
-
-    بدونِ این، «`_CSS` برابرِ فایل است» می‌تواند صادق باشد در حالی که `_render`
-    اصلاً تزریقش نمی‌کند.
-    """
     html = await (await panel.client.get("/", cookies=panel.cookies)).text()
-    marker = "@font-face{font-family:'Vazirmatn'"
-    assert marker in panel_css_text and marker in html
-    assert ".card{background:" in html, "قواعدِ اصلی در صفحه نیستند"
+    m = _LINK.search(html)
+    assert m, "صفحه panel.css را با نسخه لینک نکرده"
+    data = panel_css_text.encode("utf-8")
+    assert m.group(2) == hashlib.sha256(data).hexdigest()[:10], "هشِ URL مالِ این فایل نیست"
+    resp = await panel.client.get(f"{m.group(1)}?v={m.group(2)}", headers={"Accept-Encoding": "identity"})
+    assert resp.status == 200 and await resp.read() == data
+    assert "immutable" in resp.headers["Cache-Control"]
+
+
+async def test_a_stale_version_is_not_cached_for_a_year(panel):
+    """کنترلِ معکوس: URLِ نسخهٔ کهنه نباید `immutable` بگیرد — وگرنه همان قاطی‌شدن."""
+    resp = await panel.client.get("/static/css/panel.css?v=0000000000")
+    assert resp.status == 200 and resp.headers["Cache-Control"] == "no-cache"
+
+
+async def test_the_font_the_stylesheet_names_is_served(panel, panel_css_text):
+    """فونت محلی است (CSP هیچ هاستِ بیرونی نمی‌دهد)؛ URLش باید واقعاً سرو شود."""
+    urls = re.findall(r"url\('(/static/fonts/[^']+)'\)", panel_css_text)
+    assert urls, "panel.css هیچ فونتِ محلی‌ای نام نمی‌برد"
+    for u in urls:
+        resp = await panel.client.get(u)
+        assert resp.status == 200 and len(await resp.read()) > 10_000, u
 
 
 def test_the_stylesheet_ends_with_exactly_one_newline(panel_css_text):

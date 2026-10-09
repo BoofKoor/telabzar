@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% block content %}
+<div class="page-h"><div><h1>{{ t('sys.title') }}</h1><div class="sub">{% if checked %}{{ t('sy.sub', a=f.num(svc_ok), b=f.num(services|length), t=f.ago(checked)) }}{% else %}{{ t('d.svc', a=f.num(svc_ok), b=f.num(services|length)) }}{% endif %}</div></div>
+  <div class="actions"><a class="btn btn-secondary" href="/system?refresh=1">{{ ic('refresh-cw') }}{{ t('c.refresh') }}</a></div></div>
+
+<div class="section-title" style="margin-top:0">{{ t('sy.services') }}</div>
+<div class="svc-grid">{% for s in services %}
+  <div class="card svc"><span class="ic-box tint {{ s.tint }}">{{ ic(s.icon) }}</span>
+    <div class="grow"><div class="n">{{ t('sy.svc.' + s.key) }}</div>
+      <div class="s">{% if s.key == 'https' %}{{ t('sy.certs_ok', n=f.num(s.certs)) }}
+        {%- elif s.ok is none %}{{ t('sy.unchecked') }}
+        {%- elif s.ok %}{{ t('sy.ms', n=f.num(s.ms)) if s.ms is not none else t('sy.ok') }}{% if s.ver %} · <bdi class="mono">{{ s.ver }}</bdi>{% endif %}
+        {%- else %}{{ t('sy.down.s') }}{% endif %}</div></div>
+    {% if s.ok %}<span class="pill good">{{ ic('circle-check') }}{{ t('sy.ok') }}</span>
+    {% elif s.ok is none %}<span class="pill neutral">{{ ic('circle-help') }}{{ t('sy.unknown') }}</span>
+    {% else %}<span class="pill bad">{{ ic('circle-x') }}{{ t('sy.down') }}</span>{% endif %}
+  </div>{% endfor %}</div>
+
+<div class="grid mt-20">
+  <section class="card s4">
+    {{ m.card_head(t('sy.work')) }}
+    <div class="card-b">
+      <dl class="kv" style="grid-template-columns:1fr auto;font-size:14px">
+        <dt>{{ t('sy.dl_active') }}</dt><dd class="num" style="text-align:end"><b class="fw-6">{{ t('c.of', a=f.num(dl_active), b=f.num(dl_conc)) if dl_conc else f.num(dl_active) }}</b></dd>
+        <dt>{{ t('sy.running') }}</dt><dd class="num" style="text-align:end"><b class="fw-6">{{ f.num(stuck.running) }}</b></dd>
+        <dt>{{ t('sy.queued') }}</dt><dd class="num" style="text-align:end"><b class="fw-6">{{ f.num(shell.queue_total) }}</b></dd>
+        <dt>{{ t('sy.stuck') }}<div class="muted fs-12">{{ t('sy.stuck.h') }}</div></dt><dd class="num" style="text-align:end"><b class="fw-6 {{ 'warn' if stuck.n else '' }}">{{ f.num(stuck.n) }}</b>{% if stuck.n and stuck.oldest %}<div class="muted fs-12">{{ t('sy.stuck.oldest', t=f.ago(stuck.oldest)) }}</div>{% endif %}</dd>
+      </dl>
+      <div class="mt-12">{% for k, name in queue_names %}
+        <div class="row jsb" style="padding:8px 0;border-top:1px solid var(--border-soft);font-size:13px"><bdi class="mono muted">{{ name }}</bdi><span class="num">{{ f.num(queues.get(k, 0)) }}</span></div>{% endfor %}</div>
+      <div class="mt-12"><a class="link-more" href="/nodes">{{ t('nav.nodes') }}{{ ic('chevron-right', 'ic-14 flip') }}</a></div>
+    </div>
+  </section>
+
+  <section class="card s8">
+    {{ m.card_head(t('sy.disk')) }}
+    <div class="card-b">{% if disk %}
+      <div class="row jsb wrap" style="align-items:baseline;gap:4px 12px"><span class="num fw-6" style="font-size:24px">{{ f.pct(disk.pct) }}</span>
+        <span class="muted num" style="font-size:13px">{{ t('sy.disk.s', u=f.size(disk.used), t=f.size(disk.total), f=f.size(disk.free)) }}</span></div>
+      <div class="diskbar" role="img" aria-label="{{ t('sy.disk.s', u=f.size(disk.used), t=f.size(disk.total), f=f.size(disk.free)) }}">
+        {% for _, v, col in segs %}<i style="flex:{{ v }};background:{{ col }}"></i>{% endfor %}
+        {% for mk in markers %}<span class="mk {{ mk.cls }}" style="inset-inline-start:{{ mk.at }}%"></span>{% endfor %}</div>
+      <div class="legend mt-12">{% for k, v, col in segs %}<span class="li"><i class="swatch" style="background:{{ col }}{% if k == 'sy.disk.free' %};box-shadow:inset 0 0 0 1px var(--border-strong){% endif %}"></i>{{ t(k) }} <b class="num">{{ f.size(v) }}</b></span>{% endfor %}</div>
+      {% if markers %}<div class="disk-notes">{% for mk in markers %}<div><i class="mk-key {{ mk.cls }}"></i>{{ t(mk.label, v=f.num(mk.gb) ~ ' ' ~ t('u.gb')) }}</div>{% endfor %}</div>{% endif %}
+      <div class="muted fs-12" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft)">{% if jan %}{{ t('sy.janitor', t=f.ago(jan.at), n=f.num(jan.files), s=f.size(jan.bytes)) }} {{ t('sy.janitor.kept', n=f.num(jan.kept_files), s=f.size(jan.kept_bytes)) }}{% else %}{{ t('sy.janitor.none') }}{% endif %}</div>
+      {% else %}{{ m.empty('hard-drive', t('sy.disk.none')) }}{% endif %}</div>
+  </section>
+
+  <section class="card s6 keep">
+    {{ m.card_head(t('sy.engines'), t('sy.engines.s')) }}
+    <div class="card-b flush"><div class="tbl-wrap"><table class="tbl cards">
+      <thead><tr><th>{{ t('sy.e.who') }}</th><th>yt-dlp</th><th>gallery-dl</th><th>{{ t('sy.e.at') }}</th></tr></thead>
+      <tbody>{% for e in engines %}<tr>
+        <td class="lead"><bdi>{{ e.get('label') or e.get('who') or '—' }}</bdi></td>
+        <td data-l="yt-dlp"><bdi class="mono">{{ e['yt-dlp'] or '—' }}</bdi></td>
+        <td data-l="gallery-dl"><bdi class="mono">{{ e['gallery-dl'] or '—' }}</bdi></td>
+        <td class="nowrap" data-l="{{ t('sy.e.at') }}">{{ f.ago(e.at) if e.get('at') else '—' }}</td>
+      </tr>{% else %}<tr><td colspan="4">{{ m.empty('cpu', t('sy.engines.none')) }}</td></tr>{% endfor %}</tbody>
+    </table></div></div>
+  </section>
+
+  <section class="card s6 keep" id="certs">
+    {{ m.card_head(t('sy.certs'), t('sy.c.renew') if tls else '') }}
+    <div class="card-b flush"><div class="tbl-wrap"><table class="tbl cards">
+      <thead><tr><th>{{ t('sy.c.domain') }}</th><th>{{ t('sy.c.role') }}</th><th>{{ t('sy.c.until') }}</th><th>{{ t('sy.c.left') }}</th><th>{{ t('sy.c.issuer') }}</th></tr></thead>
+      <tbody>{% for c in tls %}<tr>
+        <td class="lead"><bdi class="mono">{{ c.domain }}</bdi></td>
+        <td data-l="{{ t('sy.c.role') }}">{{ t('sy.c.' + c.role) }}</td>
+        {% if c.cert %}
+        <td class="nowrap" data-l="{{ t('sy.c.until') }}">{{ f.day_long(c.expires_ts) }}</td>
+        <td class="nowrap" data-l="{{ t('sy.c.left') }}"><span class="{{ c.sev }}">{{ t('sy.c.days', n=f.num(c.days)) }}</span></td>
+        <td data-l="{{ t('sy.c.issuer') }}">{{ c.cert.issuer }}</td>
+        {% else %}
+        <td colspan="3" data-l="{{ t('c.status') }}"><span class="pill warn">{{ ic('triangle-alert') }}{{ t('sy.c.none') }}</span></td>
+        {% endif %}
+      </tr>{% else %}<tr><td colspan="5">{{ m.empty('lock', t('sy.certs.none')) }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% if tls|rejectattr('cert')|list %}<div class="muted fs-12" style="padding:12px 20px;border-top:1px solid var(--border-soft)">{{ t('sy.c.hint') }} <bdi class="mono">telabzar logs caddy</bdi></div>{% endif %}</div>
+  </section>
+</div>
+{% endblock %}

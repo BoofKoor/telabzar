@@ -1,31 +1,54 @@
-{% import "_icons.html" as I %}<!doctype html>
-<html lang={{lang}} dir={{dir}}{% if theme != 'auto' %} data-theme={{theme}}{% endif %}><head>
-<meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>{{ pt('page.login') }} · {{ pt('brand') }}</title>
-<style>{{css}}</style></head><body><div class=lwrap><div class=lcard>
-<div class=lhead><b>TELABZAR</b><span>{{ pt('brand.sub') }} · v1.0 D3</span></div>
-<div class=lbody>
-{% if step == 2 %}
-  <h2>{{ pt('page.login') }} — کدِ تأیید</h2>
-  <p class=sub>کدی که ربات به تلگرامت فرستاد را وارد کن.</p>
-  {% if sent %}<div class=sent>{{ I.ico('check', '12px') }} کد به تلگرامِ ادمین ارسال شد</div>{% endif %}
-  {% if error %}<div class=errbox>{{error}}</div>{% endif %}
-  <form method=post action=/auth/verify>
-    <input type=hidden name=admin_id value="{{admin_id}}">
-    <div class=lbl>6-DIGIT CODE</div>
-    <input class=lin name=code inputmode=numeric maxlength=6 autocomplete=one-time-code placeholder="------" autofocus>
-    <button class=btn>SIGN IN</button>
-  </form>
-  <div class=muted>valid 5 min · single use</div>
-{% else %}
-  <h2>{{ pt('page.login') }}</h2>
-  <p class=sub>شناسهٔ عددیِ تلگرامِ ادمین را وارد کن؛ یک کد برایت فرستاده می‌شود.
-    بدونِ پسورد — فقط ادمین‌های ثبت‌شده.</p>
-  {% if error %}<div class=errbox>{{error}}</div>{% endif %}
-  <form method=post action=/auth/request>
-    <div class=lbl>ADMIN TELEGRAM ID</div>
-    <input class=lin name=admin_id inputmode=numeric placeholder="123456789" autofocus>
-    <button class=btn>SEND CODE</button>
-  </form>
-{% endif %}
-</div></div></div></body></html>
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% block title %}{{ t('in.title') }}{% endblock %}
+{% block body %}
+{% set dark_icon = 'sun' if theme == 'dark' else 'moon' %}
+<main class="login" id="content">
+  <div class="login-top">
+    <div class="seg lang sm" role="group" aria-label="{{ t('top.lang') }}">{% for code, name in (('fa', 'فا'), ('en', 'EN')) %}<a href="/prefs?lang={{ code }}&amp;to=%2Flogin"{% if code == lang %} aria-current="true"{% endif %} lang="{{ code }}">{{ name }}</a>{% endfor %}</div>
+    <a class="icon-btn" href="/prefs?theme={{ 'light' if theme == 'dark' else 'dark' }}&amp;to=%2Flogin" data-act="theme" aria-label="{{ t('top.theme') }}" title="{{ t('top.theme') }}"><svg class="ic" aria-hidden="true"><use data-theme-icon href="{{ sprite }}#i-{{ dark_icon }}"></use></svg></a>
+  </div>
+  <div class="login-col">
+    <section class="card login-card">
+      <div class="brand"><span class="brand-mark">{{ ic('send') }}</span><div><div class="brand-name">{{ t('brand') }}</div><div class="brand-sub">{{ t('brand.sub') }}</div></div></div>
+      {% if step == 1 %}
+      <h1>{{ t('in.title') }}</h1>
+      <p class="lead">{{ t('in.lead1') }}</p>
+      <form method="post" action="/auth/request">
+        <div class="form-row"><label for="lg-id">{{ t('in.id') }}</label>
+          <input class="input ltr{% if error %} err{% endif %}" id="lg-id" name="admin_id" value="{{ admin_id }}" inputmode="numeric" autocomplete="username" placeholder="78216453" maxlength="24" required autofocus{% if error %} aria-invalid="true" aria-describedby="lg-e1"{% endif %}>
+          {% if error %}<div class="field-err" id="lg-e1" role="alert">{{ ic('circle-alert', 'ic-14') }}<span>{{ error }}</span></div>
+          {% else %}<div class="help">{{ t('in.id.h', s=f.iso('/start')) }}</div>{% endif %}</div>
+        <button class="btn btn-primary w-full" type="submit" data-busy="{{ t('in.sending') }}">{{ ic('send') }}{{ t('in.send') }}</button>
+      </form>
+      {% else %}
+      <h1>{{ t('in.code') }}</h1>
+      <p class="lead">{{ t('in.lead2', id=f.iso(admin_id)) }} <a class="link-btn" href="/login?change=1">{{ t('in.change') }}</a></p>
+      {% if dead %}
+      <div class="callout {{ 'bad' if dead == 'burned' else 'warn' }}" role="alert">{{ ic('circle-x' if dead == 'burned' else 'clock') }}<div class="grow">{{ t('in.' + dead) }}</div></div>
+      <form class="mt-16" method="post" action="/auth/request"><input type="hidden" name="admin_id" value="{{ admin_id }}">
+        <button class="btn btn-primary w-full" type="submit" data-busy="{{ t('in.sending') }}">{{ ic('rotate-ccw') }}{{ t('in.new') }}</button></form>
+      {% else %}
+      <form id="lg-code" method="post" action="/auth/verify">
+        <input type="hidden" name="admin_id" value="{{ admin_id }}">
+        {# بدونِ JS همین یک فیلد است؛ با JS پنهان می‌شود و شش خانهٔ پایین پرش می‌کنند. #}
+        <div class="form-row otp-fallback"><label for="lg-c">{{ t('in.code') }}</label>
+          <input class="input ltr num{% if error %} err{% endif %}" id="lg-c" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9۰-۹٠-٩]{6}" placeholder="123456" required autofocus{% if error %} aria-invalid="true" aria-describedby="lg-e2"{% endif %}></div>
+        <div class="otp{% if error %} err{% endif %}" role="group" aria-label="{{ t('in.code') }}" hidden>{% for i in range(6) %}<input inputmode="numeric" maxlength="1" autocomplete="{{ 'one-time-code' if loop.first else 'off' }}" aria-label="{{ t('in.code') }} {{ f.num(i + 1) }}">{% endfor %}</div>
+        {% if error %}<div class="field-err js-clear-err" id="lg-e2" role="alert" style="justify-content:center;margin-top:12px">{{ ic('circle-alert', 'ic-14') }}<span>{{ error }}</span></div>{% endif %}
+        <div class="lg-meta">
+          <span class="num" data-countdown="{{ left }}" data-label="{{ t('in.valid', t='{t}') }}" data-expire="/login">{{ t('in.valid', t=f.clock(left)) }}</span>
+          <button class="link-btn js-only" id="lg-rs" type="submit" form="lg-resend" data-countdown="{{ wait }}" data-label="{{ t('in.resend_in', t='{t}') }}" data-enables="lg-rs" data-done="{{ t('in.resend') }}"{% if wait %} disabled{% endif %}>{{ t('in.resend_in', t=f.clock(wait)) if wait else t('in.resend') }}</button>
+          <button class="link-btn no-js-only" type="submit" form="lg-resend">{{ t('in.resend') }}</button>
+        </div>
+        <button class="btn btn-primary w-full" type="submit" data-busy="{{ t('in.checking') }}">{{ ic('log-in') }}{{ t('in.verify') }}</button>
+        <div class="help tac mt-12">{{ t('in.session') }}</div>
+      </form>
+      <form id="lg-resend" method="post" action="/auth/request" hidden><input type="hidden" name="admin_id" value="{{ admin_id }}"></form>
+      {% endif %}
+      {% endif %}
+    </section>
+  </div>
+  {% if toast %}<div data-toast="{{ toast }}" data-icon="send" hidden></div>{% endif %}
+</main>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% import '_macros.html' as m with context %}
+{% macro usage(v, cap) -%}
+<div class="row jsb" style="font-size:13.5px"><b class="num fw-6">{{ f.num(v) }}</b><span class="muted">{{ t('us.limit', n=f.num(cap)) if cap else t('c.unlimited') }}</span></div>
+{% if cap %}<div class="bar {{ 'bad' if v >= cap else 'warn' if v >= cap * 0.8 else '' }}" style="margin-top:6px"><i style="width:{{ '%.1f'|format([v / cap * 100, 100]|min) }}%"></i></div>{% endif %}
+{%- endmacro %}
+<aside class="sheet" role="dialog" aria-modal="true" aria-label="{{ t('c.user') }}">
+  {{ m.sheet_head(t('c.user'), close_href) }}
+  <div class="sheet-b">
+    <div class="row-12">{{ m.avatar(u, 'lg') }}<div class="grow">
+      <div class="fw-6 trunc" style="font-size:17px">{% if u.name %}<bdi>{{ u.name }}</bdi>{% elif u.uname %}<bdi>@{{ u.uname }}</bdi>{% else %}<span class="muted">{{ t('us.noname') }}</span>{% endif %}</div>
+      <div class="row muted fs-12" style="gap:6px">{% if u.uname and u.name %}<bdi>@{{ u.uname }}</bdi> ·{% endif %}<bdi class="mono">{{ u.tg }}</bdi>{{ m.copy_btn(u.tg) }}</div></div></div>
+    {% if not u.name and not u.uname %}<div class="callout info mt-12">{{ ic('info', 'ic-16') }}<span>{{ t('us.namenote') }}</span></div>{% endif %}
+    <div class="chips mt-16">
+      {% if u.lang %}<span class="tag">{{ f.lang_name(u.lang, langs) }}</span>{% endif %}
+      <span class="tag">{{ t('us.joined', d=f.day_long(u.joined)) }}</span>
+      <span class="tag">{{ t('us.seen', d=f.ago(u.seen)) }}</span>
+      {% if u.is_admin %}<span class="pill primary">{{ t('top.admin') }}</span>{% elif u.blocked %}<span class="pill bad">{{ ic('ban') }}{{ t('st.blocked') }}</span>{% endif %}
+    </div>
+    <div class="mini-stats">{% for k, v in (('us.s.files', u.files), ('us.s.dls', u.dls), ('us.s.ops', u.ops)) %}
+      <div class="mini"><div class="l">{{ t(k) }}</div><div class="v num">{{ f.num(v) }}</div></div>{% endfor %}</div>
+    <div class="section-title">{{ t('us.today') }}</div>
+    <div class="mini-stats two" style="margin-top:0">
+      <div class="mini"><div class="l" style="margin-bottom:4px">{{ t('us.today.dl') }}</div>{{ usage(u.dl_today, u.dl_cap) }}</div>
+      <div class="mini"><div class="l" style="margin-bottom:4px">{{ t('us.today.ops') }}</div>{{ usage(u.ops_today, u.op_cap) }}</div>
+    </div>
+    <div class="section-title">{{ t('us.recent') }}</div>
+    <div class="feed">{% for x in u.recent %}{{ m.feed_item(x, show_user=False) }}{% else %}{{ m.empty('history', t('us.none')) }}{% endfor %}</div>
+  </div>
+  {% if not u.is_admin %}<div class="sheet-f">
+    {% set blocking = not u.blocked %}
+    <form method="post" action="/users/block"{% if blocking %} data-confirm="{{ t('us.block.q', n=f.iso(f.uname(u))) }}" data-confirm-text="{{ t('us.block.t') }}" data-confirm-ok="{{ t('us.block') }}" data-danger{% endif %}>
+      <input type="hidden" name="id" value="{{ u.id }}"><input type="hidden" name="action" value="{{ 'block' if blocking else 'unblock' }}"><input type="hidden" name="back" value="{{ back }}">
+      <button class="btn {{ 'btn-danger' if blocking else 'btn-secondary' }}" type="submit">{{ ic('user-x' if blocking else 'user-check') }}{{ t('us.block' if blocking else 'us.unblock') }}</button>
+    </form></div>{% endif %}
+</aside>

@@ -8,9 +8,8 @@
 دو جهت بسته می‌شود:
 
 * هرچه Dockerfileها COPY می‌کنند باید در زمینه بماند (جهتِ خطرناک).
-* سنگین‌های شناخته‌شده باید بیرون بمانند (جهتِ حجم/درستی — بدونشان
-  `COPY panel ./` همان `node_modules`ی را که `npm ci` نصب کرده بازنویسی
-  می‌کند).
+* چیزهای حجیم یا محرمانهٔ شناخته‌شده باید بیرون بمانند (`.git`، `.env`،
+  دیتابیسِ محلی، کوکی‌ها).
 """
 from __future__ import annotations
 
@@ -83,20 +82,9 @@ def test_nothing_a_dockerfile_copies_is_excluded():
     assert not clashes, f"این‌ها COPY می‌شوند ولی از زمینه بیرون‌اند: {clashes}"
 
 
-def test_the_heavy_build_output_is_excluded():
-    """جهتِ حجم/درستی.
-
-    بدونِ این، `COPY panel ./` همان `node_modules`ی را که `npm ci` تازه از
-    روی lockfile نصب کرده با نسخهٔ محلیِ ماشینِ builder بازنویسی می‌کند.
-    """
+def test_the_heavy_or_secret_paths_are_excluded():
+    """جهتِ حجم/محرمانگی: تاریخچهٔ گیت، `.env`، دیتابیسِ محلی و کوکی‌ها نباید
+    واردِ زمینهٔ build شوند — هیچ Dockerfileی لازمشان ندارد."""
     pats = set(_patterns())
-    for need in ("panel/node_modules", "panel/.next", "app/static/console", ".git"):
+    for need in (".git", ".env", "*.db", "cookies"):
         assert need in pats, f"{need} باید از زمینهٔ build بیرون باشد"
-
-
-def test_the_console_build_output_is_supplied_by_the_node_stage():
-    """`app/static/console` بیرون است، پس باید از مرحلهٔ Node بیاید — وگرنه
-    ایمیج اصلاً کنسول ندارد و `/console` ۵۰۳ می‌دهد."""
-    admin = (ROOT / "docker" / "admin.Dockerfile").read_text(encoding="utf-8")
-    assert "--from=console" in admin
-    assert "app/static/console" in admin

@@ -9,17 +9,18 @@
 خواندنِ همان صفحه‌ای که کاربر می‌بیند. یک assert روی سورس این‌جا بی‌معنا بود،
 چون ادعا دربارهٔ چیزی است که به **کاربر** نشان داده می‌شود.
 
-⚠ `"errbox" in body` معیارِ خطا **نیست** — آن رشته در `_CSS` هست و در هر صفحه
-تکرار می‌شود، پس همیشه صادق است. اولین نسخهٔ همین پروب دقیقاً همین مثبتِ کاذب
-را داد. معیارِ درست `<div class=errbox>` رندرشده است، که `_shows_error` می‌سنجد.
+⚠ وجودِ یک کلاس در صفحه معیارِ خطا **نیست** — نامِ کلاس در CSS هم هست.
+معیارِ درست **بنرِ رندرشده** است (`<div class="flash callout bad"`)، که
+`_shows_error` می‌سنجد؛ و محتوای پیام از داخلِ همان بنر خوانده می‌شود.
 """
 from __future__ import annotations
 
 import pytest
 
 
-#: نشانهٔ رندرشدهٔ بنرِ خطا (نه کلاسِ CSS، که در هر صفحه هست).
-_ERR_MARK = "<div class=errbox>"
+#: نشانهٔ رندرشدهٔ بنرِ خطا/موفقیت در `base.html` (نه نامِ کلاس در CSS).
+_ERR_MARK = '<div class="flash callout bad"'
+_OK_MARK = '<div class="flash callout good"'
 
 
 def _shows_error(body: str) -> bool:
@@ -37,11 +38,11 @@ def _error_text(body: str) -> str:
     if _ERR_MARK not in body:
         return ""
     tail = body.split(_ERR_MARK, 1)[1]
-    return tail.split("</div>", 1)[0]
+    return tail.split('<div class="grow">', 1)[1].split("</div>", 1)[0]
 
 
 def _shows_ok(body: str) -> bool:
-    return "<div class=saved>" in body
+    return _OK_MARK in body
 
 
 async def _follow(panel, resp) -> str:
@@ -177,16 +178,19 @@ def _settings_form(**over) -> dict:
     می‌خواند، پس یک فرمِ ناقص چیزی را می‌سنجد که هیچ مرورگری نمی‌فرستد.
     """
     from app import settings_store as ss
-    from app.admin_web import GROUPS
+    from app.admin_web import _settings_fields
+    from app.panel_settings import SECRET_TYPES
     form: dict[str, str] = {}
-    for _title, fields in GROUPS:
-        for k, _l, _h in fields:
-            kind, default = ss.RUNTIME_KEYS[k]
-            if kind == "bool":
-                if default:
-                    form[k] = "on"
-            else:
-                form[k] = str(default)
+    for fld in _settings_fields():
+        k = fld["k"]
+        kind, default = ss.RUNTIME_KEYS[k]
+        if kind == "bool":
+            if default:                     # چک‌باکسِ خاموش اصلاً فرستاده نمی‌شود
+                form[k] = "on"
+        elif fld["type"] in SECRET_TYPES:
+            continue                        # راز رندر نمی‌شود؛ «خالی» یعنی دست نزن
+        else:
+            form[k] = str(default)
     form.update(over)
     return form
 
@@ -204,7 +208,6 @@ _REJECTED = [
     ("safety_threshold", "9999", "percent over 100"),
     ("ck_warmup_pct", "150", "percent over 100"),
     ("dl_max_size_mb", "5000", "over the Bot API upload ceiling"),
-    ("dl_daily_count", "1,000", "thousands separator"),
     ("dl_concurrency", "--5", "isdigit says yes, int() raises"),
     ("rate_per_min", "", "cleared box"),
     ("dl_default_ux", "banana", "not in ENUM_VALUES"),
@@ -270,6 +273,17 @@ async def test_a_legal_setting_still_saves(panel, key, value):
     stored = await ss.get_store().get(key)
     expected = None if value == str(ss.RUNTIME_KEYS[key][1]) else value
     assert stored == expected, f"{key}={value!r} → ذخیره‌شده {stored!r}"
+
+
+async def test_a_thousands_separator_is_read_as_the_number(panel):
+    """تغییرِ آگاهانهٔ بازطراحیِ ۲۰۲۶-۱۰: پیش از آن «1,000» رد می‌شد چون `int()`
+    رویش می‌ترکید. صفحهٔ تازه عدد را با رقمِ پنل نشان می‌دهد و `_clean_int` رقمِ
+    فارسی، جداکنندهٔ هزارگان و فاصله را پیش از اعتبارسنجی پاک می‌کند — پس «1,000»
+    همان ۱۰۰۰ است، و چیزی که ذخیره می‌شود همان عددِ مؤثر است، نه رشتهٔ خام."""
+    from app import settings_store as ss
+    _r, body = await _post_settings(panel, dl_daily_count="1,000")
+    assert _shows_ok(body) and not _shows_error(body)
+    assert await ss.get_store().get("dl_daily_count") == "1000"
 
 
 async def test_persian_digits_keep_working(panel):
@@ -362,10 +376,11 @@ async def test_an_invalid_role_says_so(panel):
     این تست روی سورسِ پیش از رفع هم سبز بود. همان تلهٔ «برچسب در کلِ صفحه
     هست» یک بار دیگر، این‌بار روی یک بنرِ نامربوط.
     """
+    from app.panel_i18n import pt
     r = await panel.client.post("/nodes/add", data={"role": "banana", "name": "x"},
                                 cookies=panel.cookies, allow_redirects=False)
     body = await _follow(panel, r)
-    assert "نقشِ نامعتبر" in _error_text(body), "پیامِ اختصاصیِ نقش نشان داده نشد"
+    assert pt("fa", "nd.bad_role") in _error_text(body), "پیامِ اختصاصیِ نقش نشان داده نشد"
     assert not await panel.redis.get(f"njoinview:{panel.admin_id}"), "توکن نباید ساخته شود"
 
 
@@ -379,13 +394,18 @@ async def test_a_value_already_stored_out_of_range_names_itself(panel):
     است نه یک دیباگ.
     """
     from app import settings_store as ss
+    from app.admin_web import Fmt, _fld_label
+    from app.panel_settings import field
     store = ss.get_store()
     await store.set("max_file_mb", "-1")           # وضعیتی که استقرار می‌تواند ارث ببرد
-    body = await (await panel.client.get("/", cookies=panel.cookies)).text()
-    assert 'name="max_file_mb" value="-1"' in body, "صفحه باید مقدارِ واقعی را نشان بدهد"
+    body = await (await panel.client.get("/settings", cookies=panel.cookies)).text()
+    shown = Fmt("fa").digits("-1")                  # صفحهٔ فارسی عدد را با رقمِ فارسی نشان می‌دهد
+    assert f'name="max_file_mb" value="{shown}"' in body, "صفحه باید مقدارِ واقعی را نشان بدهد"
 
-    _r, after = await _post_settings(panel, max_file_mb="-1")
-    assert "max_file_mb" in _error_text(after), "پیام باید بگوید کدام کلید"
+    r, after = await _post_settings(panel, max_file_mb="-1")
+    assert _fld_label(Fmt("fa"), field("max_file_mb")) in _error_text(after), \
+        "پیام باید بگوید کدام فیلد"
+    assert "focus=max_file_mb" in r.headers["Location"], "صفحه باید روی همان فیلد باز شود"
     assert await store.get("max_file_mb") == "-1", "ردیفِ موجود نباید خودبه‌خود عوض شود"
 
     _r2, ok_body = await _post_settings(panel, max_file_mb="1500")   # راهِ خروج

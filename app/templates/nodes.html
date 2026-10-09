@@ -1,52 +1,85 @@
-{% extends "base.html" %}{% import "_icons.html" as I %}
-{% block title %}{{ pt('nav.nodes') }}{% endblock %}
-{% block heading %}{{ pt('page.nodes') }}{% endblock %}
-{% block tick %}
-  <span><i>&gt;</i> wg show wg0</span>
-  <span>peers {{nodes|length}}</span>
-  <span>online {{online}}</span>
-  {% if reaped %}<span>reaped {{reaped}}</span>{% endif %}
-{% endblock %}
-{% block body %}
-<div class=card>
-  <h3>{{ I.ico('server') }}{{ pt('page.nodes') }}
-    <span class=tag>{{nodes|length}} {{ pt('h.node') }} · {{online}} {{ pt('h.online') }}</span>
-    {% if reaped %}<span class=tag>{{reaped}} جابِ برگردانده‌شده</span>{% endif %}</h3>
-  <div class=pad>
-    {% if error %}<div class=errbox>{{error}}</div>{% endif %}
-    {% if not master_ready %}<div class=errbox>
-      WireGuardِ مستر پیکربندی نشده (<span class=mono>WG_MASTER_PUBKEY / WG_ENDPOINT / ADMIN_BASE</span>). راهنما در README.</div>{% endif %}
-    {% if not nodes %}<div class=empty>{{ pt('h.no_nodes') }}</div>{% endif %}
-    {% for n in nodes %}
-    <div class=nd>
-      <span class="st {{'on' if n.online else 'off'}}"></span>
-      <div class=meta><b>{{n.name}}</b>
-        <small>{{n.role_label}} · <span class=mono>{{n.wg_ip}}</span>
-        {%- if n.online %} <span class=mono>load {{n.load}} · done {{n.done}} · v{{n.ver}}</span>
-        {%- else %} · {{ pt('h.offline') }}{% endif %}</small></div>
-      <span class=rl>{{n.role}}</span>
-      <form method=post action=/nodes/remove onsubmit="return confirm('این نود حذف شود؟')">
-        <input type=hidden name=id value="{{n.id}}">
-        <button class="btn-sm btn-danger">{{ pt('c.delete') }}</button></form>
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% block content %}
+<div class="page-h"><div><h1>{{ t('nav.nodes') }}</h1><div class="sub">{{ t('nd.sub', n=f.num(nodes|length), o=f.num(online)) }}</div></div>
+  <div class="actions">{% if master_ready %}<a class="btn btn-primary" href="/nodes?dlg=nd-add" data-dialog="nd-add">{{ ic('plus') }}{{ t('nd.add') }}</a>{% endif %}</div></div>
+
+{% if master_ready %}
+<div class="callout info mb-20">{{ ic('network', 'ic-16') }}<div class="grow row wrap" style="gap:8px">{{ t('nd.wg.up') }}
+  <span class="tag">{{ t('nd.wg.subnet') }}&nbsp;<bdi class="mono">{{ wg_subnet }}</bdi></span>
+  <span class="tag">{{ t('nd.wg.master') }}&nbsp;<bdi class="mono">{{ wg_master_ip }}</bdi></span>
+  {% if reaped %}<span class="tag">{{ t('nd.reaped', n=f.num(reaped)) }}</span>{% endif %}</div></div>
+{% else %}
+<div class="callout warn mb-20">{{ ic('triangle-alert', 'ic-16') }}<div class="grow"><div class="fw-6">{{ t('nd.wg.off') }}</div>
+  <div class="mt-8">{{ t('nd.wg.off.s') }}</div><div class="codebox mt-8">telabzar nodes-enable</div></div></div>
+{% endif %}
+
+<div class="node-grid">
+  {% for n in nodes %}
+  <section class="card node-card">
+    <div class="h"><span class="ic-box tint {{ n.tint }}">{{ ic(n.icon) }}</span>
+      <div class="grow"><div class="fw-6 trunc" style="font-size:15px"><bdi>{{ n.name }}</bdi></div><div class="muted fs-12">{{ f.role(n.role) }}</div></div>
+      {% if n.online %}<span class="pill good">{{ ic('circle-check') }}{{ t('st.online') }}</span>{% else %}<span class="pill bad">{{ ic('circle-x') }}{{ t('st.offline') }}</span>{% endif %}
+      <details class="dd"><summary class="icon-btn sm" aria-label="{{ t('c.more') }}">{{ ic('ellipsis-vertical') }}</summary>
+        <div class="pop menu" role="menu">
+          <form method="post" action="/nodes/remove" data-confirm="{{ t('nd.rm.q', n=f.iso(n.name)) }}" data-confirm-text="{{ t('nd.rm.t') }}" data-confirm-ok="{{ t('nd.remove') }}" data-danger>
+            <input type="hidden" name="id" value="{{ n.id }}"><button class="menu-item danger" type="submit">{{ ic('trash-2') }}{{ t('nd.remove') }}</button></form>
+        </div></details>
     </div>
-    {% endfor %}
-  </div>
+    <dl class="kv">
+      <dt>{{ t('c.status') }}</dt><dd>{{ t('nd.beat', t=f.ago(n.beat)) if n.beat else '—' }}</dd>
+      <dt>{{ t('nd.k.wg') }}</dt><dd><bdi class="mono">{{ n.wg_ip }}</bdi></dd>
+      {# heartbeat «load» درصدِ CPU نیست: برای ورکر طولِ صفِ همان نقش است (worker._node_heartbeat)
+         و برای نودِ استریم تعدادِ درخواستِ در جریان (gateway_node) #}
+      <dt>{{ t('nd.k.inflight') if n.role == 'gateway' else t('nd.k.waiting') }}</dt><dd class="num">{{ f.num(n.load) if n.online and n.load is not none else '—' }}</dd>
+      <dt>{{ t('nd.k.done') }}</dt><dd class="num">{{ f.num(n.done) if n.done is not none else '—' }}</dd>
+      {% if n.queue %}<dt>{{ t('nd.k.queue') }}</dt><dd><bdi class="mono">{{ n.queue }}</bdi></dd>{% endif %}
+      <dt>{{ t('nd.k.joined') }}</dt><dd>{{ f.day_long(n.joined) }}</dd>
+    </dl>
+    {% if not n.online %}<div class="callout warn mt-16">{{ ic('triangle-alert', 'ic-16') }}<span>{{ t('nd.off.note') }}</span></div>{% endif %}
+  </section>
+  {% endfor %}
+  {% if master_ready %}<a class="card add-card" href="/nodes?dlg=nd-add" data-dialog="nd-add">{{ ic('plus', 'ic-20') }}<span>{{ t('nd.add') }}</span></a>
+  {% elif not nodes %}<div class="card add-card" aria-disabled="true">{{ ic('server', 'ic-20') }}<span>{{ t('nd.none') }}</span></div>{% endif %}
 </div>
-<div class=card>
-  <h3>{{ I.ico('plus') }}افزودنِ نود</h3>
-  <div class=pad>
-    {% if token %}
-      <div class=note>روی سرورِ نود (Ubuntu/Debian، با root) این را اجرا کن — توکن یک‌بارمصرف و ۳۰ دقیقه معتبر است:</div>
-      <div class=cmd>{{install_cmd}}</div>
-    {% else %}
-      <div class=note>نقشِ نود را انتخاب کن؛ یک دستورِ نصب برایت می‌سازد.</div>
-      <form class=nd-form method=post action=/nodes/add>
-        <select class=sel name=role style="min-width:220px">
-          {% for k, r in roles.items() %}<option value="{{k}}">{{r.label}}</option>{% endfor %}
-        </select>
-        <input class=inp name=name placeholder="نامِ نود (مثلاً de-1)">
-        <button class=btn-go>ساختِ دستورِ نصب</button>
-      </form>
-    {% endif %}
-  </div>
-</div>{% endblock %}
+
+<section class="card mt-20">
+  {{ m.card_head(t('nd.queues'), t('nd.queues.s')) }}
+  <div class="card-b flush"><div class="tbl-wrap"><table class="tbl cards">
+    <thead><tr><th>{{ t('nd.k.queue') }}</th><th>{{ t('nd.q.purpose') }}</th><th>{{ t('nd.q.consumer') }}</th><th class="end">{{ t('nd.q.depth') }}</th></tr></thead>
+    <tbody>{% for q in queues %}<tr>
+      <td class="lead"><bdi class="mono">{{ q.key }}</bdi></td>
+      <td data-l="{{ t('nd.q.purpose') }}">{{ t(q.purpose) }}</td>
+      <td data-l="{{ t('nd.q.consumer') }}">{{ t('nd.q.master') if q.consumer == 'master' else t('nd.q.node', r=f.role(q.consumer)) }}{% if q.down %}<div class="sub warn">{{ t('nd.q.down') }}</div>{% endif %}</td>
+      <td class="end num" data-l="{{ t('nd.q.depth') }}"><b class="fw-6">{{ f.num(q.depth) }}</b></td>
+    </tr>{% endfor %}</tbody>
+  </table></div></div>
+</section>
+{% endblock %}
+
+{% block sheet %}
+<dialog class="dialog" id="nd-add" aria-labelledby="nd-add-t"{% if dlg == 'nd-add' or (dlg == 'nd-made' and not install_cmd) %} open{% endif %}>
+  <form method="post" action="/nodes/add">
+    <div class="dialog-h"><div><h3 id="nd-add-t">{{ t('nd.d.title') }}</h3></div><a class="icon-btn sm" href="/nodes" data-close aria-label="{{ t('c.close') }}">{{ ic('x') }}</a></div>
+    <div class="dialog-b">
+      {% if dlg == 'nd-made' and not install_cmd %}<div class="callout warn mb-20">{{ ic('triangle-alert', 'ic-16') }}<span>{{ t('nd.d.cmd.gone') }}</span></div>{% endif %}
+      <div class="form-row"><label for="nd-n">{{ t('nd.d.name') }}</label><input class="input ltr" id="nd-n" name="name" placeholder="de-2" autocomplete="off" maxlength="40"><div class="help">{{ t('nd.d.name.h') }}</div></div>
+      <fieldset class="form-row" style="margin:0;border:0;padding:0"><legend class="fw-6" style="font-size:13.5px;margin-bottom:6px">{{ t('nd.d.role') }}</legend>
+        {% for r in roles %}{% set icon, tint = ('download', 't6') if r == 'download' else ('cpu', 't5') if r == 'processing' else ('globe', 't3') %}
+        <label class="callout" style="cursor:pointer;align-items:center;margin-top:{{ '0' if loop.first else '8px' }}"><input type="radio" name="role" value="{{ r }}"{% if loop.first %} checked{% endif %} style="accent-color:var(--primary)">
+          <span class="sq sm tint {{ tint }}">{{ ic(icon, 'ic-16') }}</span>
+          <span class="grow"><b class="fw-6">{{ f.role(r) }}</b><div class="muted fs-12">{{ t('nd.d.r.' + r) }}</div></span></label>{% endfor %}
+      </fieldset>
+    </div>
+    <div class="dialog-f"><a class="btn btn-secondary" href="/nodes" data-close>{{ t('c.cancel') }}</a><button class="btn btn-primary" type="submit">{{ ic('key-round') }}{{ t('nd.d.make') }}</button></div>
+  </form>
+</dialog>
+{% if install_cmd %}
+<dialog class="dialog" id="nd-made" aria-labelledby="nd-made-t" open>
+  <div class="dialog-h"><div><h3 id="nd-made-t">{{ t('nd.d.title') }}</h3></div><a class="icon-btn sm" href="/nodes" data-close aria-label="{{ t('c.close') }}">{{ ic('x') }}</a></div>
+  <div class="dialog-b"><div class="fw-6" style="margin-bottom:6px">{{ t('nd.d.cmd') }}</div><div class="codebox">{{ install_cmd }}</div>
+    <div class="row jsb wrap mt-8"><span class="muted fs-12">{{ t('nd.d.cmd.n') }}</span><button class="btn btn-secondary btn-sm js-only" type="button" data-copy="{{ install_cmd }}">{{ ic('copy') }}{{ t('c.copy') }}</button></div></div>
+  <div class="dialog-f"><a class="btn btn-primary" href="/nodes" data-close>{{ t('c.close') }}</a></div>
+</dialog>
+{% endif %}
+{% endblock %}

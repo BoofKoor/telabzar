@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% block title %}{{ t('c.search') }}{% endblock %}
+{% block content %}
+<div class="page-h"><div><h1>{{ t('c.search') }}</h1>{% if groups %}<div class="sub">{{ t('srch.sub', q=q, n=f.num(total)) }}</div>{% endif %}</div></div>
+<form class="toolbar mb-20" method="get" action="/search" role="search">
+  <div class="search-in grow">{{ ic('search') }}<input class="input" type="search" name="q" value="{{ q }}" placeholder="{{ t('top.search') }}" aria-label="{{ t('top.search') }}" autocomplete="off"{% if not q %} autofocus{% endif %}></div>
+  <button class="btn btn-primary" type="submit">{{ ic('search') }}{{ t('c.search') }}</button>
+</form>
+{% if q|length < 2 %}
+<section class="card">{{ m.empty('search', t('srch.hint')) }}</section>
+{% elif not groups %}
+<section class="card">{{ m.empty('search', t('c.no_results')) }}</section>
+{% else %}
+<div class="grid top">{% for g in groups %}
+  <section class="card s6 keep">
+    {{ m.card_head(g.label) }}
+    <div class="feed">{% for x in g['items'] %}
+      <a class="feed-item" href="{{ x.href }}"><span class="feed-ic tint {{ x.tint or 't0' }}">{{ ic(x.icon, 'ic-16') }}</span>
+        <div class="grow"><div class="t trunc"><bdi>{{ x.t }}</bdi></div>{% if x.get('sub') %}<div class="s trunc"><bdi{% if x.get('mono') %} class="mono"{% endif %}>{{ x.sub }}</bdi></div>{% endif %}</div>{{ ic('chevron-right', 'ic-16 faint flip') }}</a>
+    {% endfor %}</div>
+    {% if g.get('more') and g['items']|length >= 5 %}<div class="card-f"><a class="link-more" href="{{ g.more }}">{{ t('srch.more') }}{{ ic('chevron-right', 'ic-14 flip') }}</a></div>{% endif %}
+  </section>{% endfor %}</div>
+{% endif %}
+{% endblock %}

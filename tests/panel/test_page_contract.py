@@ -1,22 +1,17 @@
 """کفِ قراردادِ هر صفحه: ۲۰۰ بدهد — **هم با داده، هم بدونِ داده**.
 
-دو موردِ §۴٫۵ سندِ بازطراحی، و هر دو با اجرا تأیید شد که واقعاً غایب‌اند نه
-صرفاً کم‌رنگ: امروز هر هشت صفحه روی دادهٔ خالی ۲۰۰ می‌دهند و فرگمنتِ سلامت روی
-`/` هم رندر می‌شود — ولی **هیچ تستی هیچ‌کدام را assert نمی‌کند**.
-
 **چرا «دادهٔ خالی» جدا از «دادهٔ پر» لازم است.** شاخهٔ `{% else %}`ِ یک حلقه با
 fixtureِ `seeded` هرگز اجرا نمی‌شود، و شاخه‌ای که اجرا نشود می‌تواند در بازآرایی
-بشکند بی‌آنکه کسی بفهمد — دقیقاً همان چیزی که برای `{% if health.disk_total %}`
-اتفاق افتاده بود (در `test_health_page` ثبت شده): آن شاخه در **هیچ** تستی اجرا
-نمی‌شد. استقرارِ تازه هم همین حالت است، پس این کف دربارهٔ یک حالتِ واقعی است نه
-یک حالتِ ساختگی.
+بشکند بی‌آنکه کسی بفهمد. استقرارِ تازه هم همین حالت است، پس این کف دربارهٔ یک
+حالتِ واقعی است نه ساختگی.
 
-**و فرگمنتِ مشترک باید روی هر دو صفحه سنجیده شود** (ریسکِ ۴ سند):
-`_HEALTH_CARDS` عضوِ `DictLoader` نیست، بلکه با الحاقِ **رشته‌ایِ پایتون** در دو
-جا داخلِ `_SETTINGS` و `_HEALTH` نشانده می‌شود (`admin_web.py:506,708`). یعنی
-اگر استخراج آن را به `{% include %}` تبدیل کند، شکستنش روی یکی از دو صفحه
-کاملاً ممکن است در حالی که دیگری سالم بماند. تست‌های `test_health_page` همه
-`/health` را می‌زنند، پس نیمهٔ داشبورد تا امروز پوشش نداشت.
+**و دادهٔ مشترک باید روی همهٔ صفحه‌ها یکی باشد.** از بازطراحیِ ۲۰۲۶-۱۰ صفحهٔ
+`/health` جایش را به `/system` داده و چیزی که بینِ صفحه‌ها مشترک است «پوسته»
+است (`admin_web._shell`): عمقِ صف در ستونِ کناری، نوارِ سرویس‌های داشبورد و
+کارت‌های صفحهٔ سیستم همه از همان یک ساخت می‌خوانند. اگر صفحه‌ای عدد را از جای
+دیگری بیاورد، دو صفحه دو عددِ متفاوت نشان می‌دهند — همان چیزی که این‌جا گرفته
+می‌شود. عددها **کاشته‌شده و متمایز**ند (۱۳۷/۲۵۱/۱۴۹/۲۶۰)، چون «صفر» با «نرسید»
+یکی است.
 """
 from __future__ import annotations
 
@@ -39,31 +34,51 @@ async def test_every_page_answers_with_data(seeded, path):
     assert resp.status == 200, f"{path} با داده → HTTP {resp.status}"
 
 
-@pytest.mark.parametrize("path", ["/", "/health"])
-async def test_the_shared_health_partial_renders_on_both_pages(seeded, path):
-    """`_HEALTH_CARDS` روی داشبورد و صفحهٔ سلامت — همان محتوا، دو مسیرِ رندر.
+@pytest.mark.parametrize("old, new", [("/health", "/system"), ("/stats", "/reports")])
+async def test_the_old_addresses_still_lead_somewhere(panel, old, new):
+    """نشانکِ مرورگرِ ادمین به صفحهٔ قدیم نباید ۴۰۴ بدهد."""
+    resp = await panel.client.get(old, cookies=panel.cookies, allow_redirects=False)
+    assert resp.status == 301 and resp.headers["Location"] == new
 
-    ادعا روی **مقدار** است نه مارک‌آپ، و مقدار از خودِ `_health()` می‌آید: اگر
-    استخراج یکی از دو محلِ الحاق را جا بیندازد، همین‌جا قرمز می‌شود.
+
+async def _queue_total(seeded) -> int:
+    from app import admin_web as aw
+    return sum((await aw._queue_depths(seeded.redis)).values())
+
+
+async def test_the_system_page_lists_every_queue(seeded):
+    """هر صفِ ARQ با عمقِ خودش — از همان `_QUEUES` که پوسته می‌خواند."""
+    from app import admin_web as aw
+
+    f = aw.Fmt("fa")
+    depths = await aw._queue_depths(seeded.redis)
+    assert sorted(depths.values()) == [137, 149, 251, 260], f"پیش‌شرطِ کاشت: {depths}"
+    html = await _fetch(seeded, "/system")
+    shows(html, *[name for _k, name in aw._QUEUES], *[f.num(n) for n in depths.values()])
+
+
+@pytest.mark.parametrize("path", ["/", "/system", "/users", "/settings"])
+async def test_the_shell_queue_total_is_the_same_everywhere(seeded, path):
+    """ستونِ کناری روی **هر** صفحه همان مجموعِ صف را می‌گوید."""
+    from app import admin_web as aw
+
+    f = aw.Fmt("fa")
+    total = await _queue_total(seeded)
+    assert total == 137 + 251 + 149 + 260
+    shows(await _fetch(seeded, path), f.t("sys.jobs", n=f.num(total)))
+
+
+async def test_the_services_strip_and_the_system_page_agree(seeded):
+    """«N از M سرویس سالم» روی داشبورد و صفحهٔ سیستم — یک منبع، یک عدد.
+
+    کنترلِ معکوسِ داخلی: عدد از خودِ `_services` می‌آید نه هاردکد، و دو صفحه
+    باید **همان** را بگویند — اگر یکی را از جای دیگری بخواند، این‌جا قرمز می‌شود.
     """
     from app import admin_web as aw
 
-    health = await aw._health(seeded.client.server.app)
-    html = await _fetch(seeded, path)
-    shows(html, health["q_main"], health["q_dl"], "Postgres", "pot-provider")
-
-
-async def test_the_partial_is_not_silently_one_sided(seeded):
-    """کنترلِ معکوس: دو صفحه باید **همان** اعداد را بدهند، نه یکی خالی.
-
-    بدونِ این، تستِ بالا با قالبی که فرگمنت را فقط در یکی رندر کند و در دیگری
-    عددها را از جای دیگری بیاورد هم می‌توانست سبز بماند.
-    """
-    from app import admin_web as aw
-
-    health = await aw._health(seeded.client.server.app)
-    dash = await _fetch(seeded, "/")
-    hp = await _fetch(seeded, "/health")
-    for fact in (health["q_main"], health["q_proc"], health["q_dl"], health["dl_active"]):
-        assert str(fact) in dash and str(fact) in hp, (
-            f"«{fact}» روی هر دو صفحه نیست — فرگمنتِ مشترک یک‌طرفه شده")
+    f = aw.Fmt("fa")
+    rows = await aw._services(seeded.client.server.app)
+    assert len(rows) >= 4, f"پیش‌شرط: سرویس‌ها ساخته نشدند: {rows}"
+    fact = f.t("d.svc", a=f.num(sum(1 for r in rows if r["ok"])), b=f.num(len(rows)))
+    for path in ("/", "/system"):
+        shows(await _fetch(seeded, path), fact)

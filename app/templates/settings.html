@@ -1,35 +1,64 @@
-{% extends "base.html" %}{% import "_icons.html" as I %}
-{% block title %}{{ pt('nav.settings') }}{% endblock %}
-{% block heading %}{{ pt('page.settings') }}{% endblock %}
-{% block tick %}
-  <span><i>&gt;</i> ./ctl config --live</span>
-  <span>{{ groups|length }} groups</span>
-  <span>no restart required</span>
-  <span>q {{health.q_main}}/{{health.q_proc}}/{{health.q_dl}}</span>
-{% endblock %}
-{% block body %}<div class=grid2>
-<div class=col>
-  {% if saved %}<div class=saved>{{ I.ico('check', '13px') }} تغییرات ذخیره شد — بدونِ ری‌استارت اعمال شد.</div>{% endif %}
-  {% if error %}<div class=errbox>{{error}}</div>{% endif %}
-  <form method=post action=/save>
-  {% for title, fields in groups %}
-    <div class=card><h3>{{ I.ico(gicon.get(title, 'sliders')) }}{{title}}{% if loop.first %}<span class=tag>بدونِ ری‌استارت</span>{% endif %}</h3><div class=rows>
-    {% for key, label, hint in fields %}
-      <div class=row><label>{{label}}{% if hint %}<small>{{hint}}</small>{% endif %}</label>
-      {% set kind = meta[key][0] %}
-      {% if kind == 'bool' %}<input class=tg type=checkbox name="{{key}}" {% if v[key] %}checked{% endif %}>
-      {% elif key in enums %}<select class=sel name="{{key}}">
-        {% for opt in enums[key] %}<option value="{{opt}}" {% if v[key]|string == opt %}selected{% endif %}>{{ labels.get(opt, opt) }}</option>{% endfor %}
-      </select>
-      {% elif key in longtext %}<textarea class="ta-inline" name="{{key}}" rows=3
-        dir=ltr spellcheck=false>{{v[key]}}</textarea>
-      {% else %}<input class="inp num" name="{{key}}" value="{{v[key]}}">{% endif %}
-      </div>
-    {% endfor %}
-    </div></div>
-  {% endfor %}
-    <div class=card><button class=save>ذخیرهٔ تغییرات</button></div>
-  </form>
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% macro ctl(it) -%}
+{% set id = 'i-' ~ it.k %}
+{% if it.type == 'bool' %}<span class="switch"><input type="checkbox" id="{{ id }}" name="{{ it.k }}"{% if it.value %} checked{% endif %}><span></span></span>
+{% elif it.type == 'enum' %}<select class="select" id="{{ id }}" name="{{ it.k }}">{% for val, lab in it.opts %}<option value="{{ val }}"{% if val == it.value %} selected{% endif %}>{{ lab }}</option>{% endfor %}</select>
+{% elif it.type == 'list' %}<textarea class="textarea ltr mono" id="{{ id }}" name="{{ it.k }}" rows="3" spellcheck="false" placeholder="example.com">
+{{ it.shown }}</textarea>
+{% elif it.type == 'secret' %}<div class="affix w-full"><input class="input ltr" type="password" id="{{ id }}" name="{{ it.k }}" value="" autocomplete="new-password" spellcheck="false" placeholder="{{ t('st.secret.set') if it.is_set else '—' }}">
+  <button class="icon-btn sm js-only" type="button" style="position:absolute;inset-inline-end:4px" data-reveal aria-label="{{ t('st.show') }}">{{ ic('eye') }}</button></div>
+  {% if it.is_set %}<label class="check fs-12 mt-8"><input type="checkbox" name="clear__{{ it.k }}">{{ t('st.secret.clear') }}</label>{% endif %}
+{% elif it.type == 'int' %}<div class="affix"><input class="input num" id="{{ id }}" name="{{ it.k }}" value="{{ it.shown }}" inputmode="numeric" autocomplete="off" data-int{% if it.max is not none %} data-max="{{ it.max }}"{% endif %}>{% if it.unit %}<span class="unit">{{ it.unit }}</span>{% endif %}</div>
+{% else %}<input class="input{% if it.get('ltr') %} ltr{% endif %}" id="{{ id }}" name="{{ it.k }}" value="{{ it.shown }}" placeholder="{{ it.get('ph') or '' }}" spellcheck="false" autocomplete="off">
+{% endif %}
+{%- endmacro %}
+{% block content %}
+<div class="page-h"><div><h1>{{ t('st.title') }}</h1><div class="sub">{{ t('st.sub') }}</div></div>
+  <div class="actions"><form class="toolbar" method="get" action="/settings" role="search">
+    <div class="search-in" style="min-width:260px">{{ ic('search') }}<input class="input" type="search" name="q" value="{{ q }}" placeholder="{{ t('st.q') }}" aria-label="{{ t('st.q') }}" data-set-q></div>
+    <button class="btn btn-secondary no-js-only" type="submit">{{ ic('search') }}</button></form></div></div>
+
+<div class="set-layout">
+  <nav class="set-nav" aria-label="{{ t('st.title') }}">{% for s in secs %}
+    <a href="#sec-{{ s.id }}" class="{{ s.tint }}{% if loop.first %} on{% endif %}">{{ ic(s.icon) }}<span>{{ s.title }}</span>{% if s.n_changed %}<span class="badge num" title="{{ t('st.changed_n', n=f.num(s.n_changed)) }}">{{ f.num(s.n_changed) }}</span>{% endif %}</a>{% endfor %}</nav>
+  <div>
+    <form id="set-form" method="post" action="/settings/save" data-savebar-form>
+      {% for s in secs %}
+      <section class="card set-sec" id="sec-{{ s.id }}"{% if not s.match %} hidden{% endif %}>
+        <div class="card-h"><div class="row-12"><span class="kpi-ic tint {{ s.tint }}" style="width:32px;height:32px">{{ ic(s.icon, 'ic-16') }}</span><h2>{{ s.title }}</h2></div>
+          <span class="muted fs-12">{{ t('st.count', n=f.num(s.n_all)) }}</span></div>
+        <div style="margin-top:12px">
+        {% for sub in s.subs %}
+          {% if sub.caps %}
+          <div class="set-sub"{% if not sub.match %} hidden{% endif %}>{{ sub.t }}{% if sub.h %} <span style="font-weight:400">· {{ sub.h }}</span>{% endif %}</div>
+          <div class="cap-grid"{% if not sub.match %} hidden{% endif %}>{% for it in sub.f %}
+            <div class="cap-cell{% if it.changed %} changed{% endif %}" id="f-{{ it.k }}" data-f="{{ it.k }}" data-search="{{ it.search }}"{% if not it.match %} hidden{% endif %}>
+              <label class="n" for="i-{{ it.k }}">{% if it.get('plat') %}<span class="sq xs tint {{ f.ptint(it.plat) }}" style="width:18px;height:18px;border-radius:5px">{{ ic(f.picon(it.plat), 'ic-14') }}</span>{% endif %}{{ it.label }}</label>
+              <input class="input num" id="i-{{ it.k }}" name="{{ it.k }}" value="{{ it.shown }}" inputmode="numeric" autocomplete="off" data-int{% if it.max is not none %} data-max="{{ it.max }}"{% endif %}>
+              <div class="muted tac" style="font-size:12px;margin-top:6px">{{ t('u.perh') }}{% if it.changed %} · {{ t('c.default', v=it.default_text) }}{% endif %}</div>
+              <span class="key sr-only">{{ it.k }}</span>
+            </div>{% endfor %}</div>
+          {% else %}
+          {% if sub.t %}<div class="set-sub"{% if not sub.match %} hidden{% endif %}>{{ sub.t }}</div>{% endif %}
+          {% for it in sub.f %}
+          <div class="fld{% if it.type == 'bool' %} bool{% endif %}{% if it.type == 'list' %} wide{% endif %}{% if it.changed %} changed{% endif %}" id="f-{{ it.k }}" data-f="{{ it.k }}" data-search="{{ it.search }}"{% if not it.match %} hidden{% endif %}>
+            <div><div class="lab"><label for="i-{{ it.k }}">{{ it.label }}</label></div>{% if it.help %}<div class="help">{{ it.help }}</div>{% endif %}
+              <div class="row wrap" style="gap:10px;margin-top:4px"><span class="key">{{ it.k }}</span>
+                {% if it.changed and it.type != 'secret' %}<span class="def">{{ t('c.default', v=it.default_text) }} · <button class="js-only" type="button" data-default="i-{{ it.k }}" data-v="{{ it.default_v }}">{{ t('tx.reset') }}</button></span>{% endif %}</div></div>
+            <div class="ctl"{% if it.type != 'bool' %} style="flex-direction:column;align-items:stretch"{% endif %}>{{ ctl(it) }}</div>
+          </div>
+          {% endfor %}
+          {% endif %}
+        {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+      <section class="card" data-set-none{% if shown %} hidden{% endif %}>{{ m.empty('search', t('st.none')) }}</section>
+      <div class="no-js-only mt-20" style="text-align:end"><button class="btn btn-primary" type="submit">{{ ic('save') }}{{ t('c.save') }}</button></div>
+      <div class="savebar" data-savebar hidden><div class="msg">{{ ic('square-pen', 'ic-20') }}<span data-savebar-msg></span></div>
+        <div class="row"><button class="btn btn-secondary" type="reset">{{ t('c.cancel') }}</button><button class="btn btn-primary" type="submit" data-savebar-save data-busy="{{ t('c.save') }}">{{ ic('save') }}{{ t('c.save') }}</button></div></div>
+    </form>
+  </div>
 </div>
-<div class=col>{% include "_health_cards.html" %}</div>
-</div>{% endblock %}
+{% endblock %}

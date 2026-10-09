@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import os
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -133,7 +134,12 @@ async def test_the_join_token_never_appears_in_a_url(panel, no_wireguard):
                                    cookies=panel.cookies, allow_redirects=False)
     assert resp.status == 302
     loc = resp.headers["Location"]
-    assert loc == "/nodes", f"redirect باید بی‌کوئری باشد، بود: {loc!r}"
+    # از بازطراحیِ ۲۰۲۶-۱۰ ریدایرکت دیالوگِ نتیجه را با `dlg=nd-made` باز می‌کند.
+    # پارامترِ UI مجاز است، هر چیزِ دیگری نه — فهرستِ **بسته**، تا پارامترِ تازه‌ای
+    # که روزی توکن را حمل کند بی‌صدا رد نشود.
+    u = urlsplit(loc)
+    assert u.path == "/nodes", loc
+    assert parse_qs(u.query) in ({}, {"dlg": ["nd-made"]}), f"redirect پارامترِ ناشناخته دارد: {loc!r}"
 
     stored = await panel.redis.get(f"njoinview:{panel.admin_id}")
     assert stored, "توکن باید در Redis برای همان ادمین ذخیره شده باشد"

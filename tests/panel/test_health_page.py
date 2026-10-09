@@ -1,111 +1,109 @@
-"""`/health` باید هر چیزی را که `_health()` جمع کرده **بگوید**.
+"""`/system` (جانشینِ `/health`) باید هر چیزی را که پوسته جمع کرده **بگوید**.
 
-## چرا این فایل، و چرا حالا
+## پیشینه
 
-اندازه‌گیریِ پوشش (بدنهٔ هر قالب را جدا خالی کن، ببین چند تست قرمز می‌شود) روی
-`f00d37e` نشان داد `_HEALTH` شش تست می‌اندازد که **پنج‌تایش عیناً همان پنج‌تای
-`_HEALTH_CARDS` است** و ششمی گاردِ کلاس است. یعنی بدنهٔ اختصاصیِ `/health` —
-هرچه بیرونِ فرگمنتِ مشترک است — **صفر** نگهبان داشت.
-
-و سابوتاژِ ریزدانه بدتر بود. این پنج حذف **هیچ** تستی را نینداختند:
-
-    صفِ پردازش · دانلودِ فعال · نسخهٔ موتور · خطِ استخرِ کوکی · نوارِ دیسک
-
-پس «قالب نگهبان دارد» فقط دربارهٔ بجِ pot و کارتِ نرخِ دانلود صادق بود.
+اندازه‌گیریِ پوشش روی `f00d37e` نشان داد بدنهٔ اختصاصیِ `/health` **صفر** نگهبان
+داشت: حذفِ «صفِ پردازش · دانلودِ فعال · نسخهٔ موتور · خطِ استخرِ کوکی · نوارِ دیسک»
+هیچ تستی را نمی‌انداخت. از بازطراحیِ ۲۰۲۶-۱۰ سلامت در `/system` است (سرویس‌ها،
+کار، دیسک، موتورها، گواهی‌ها) و استخرِ کوکی در کارتِ داشبورد؛ همان ادعاها آن‌جا.
 
 ## شکلِ ادعاها
 
-روی **مقدار** بسته می‌شوند نه روی مارک‌آپ، چون گامِ بعدی همین صفحه را بازآرایی
-می‌کند: جابه‌جاییِ کارت باید سبز بماند، افتادنِ عدد باید قرمز شود. مقدارِ
-انتظاری هم از خودِ `_health()` گرفته می‌شود نه هاردکد، پس تست دربارهٔ «قالب
-چیزی را که کد محاسبه کرده رندر می‌کند» حرف می‌زند، نه دربارهٔ یک عددِ ثابت.
-
-عددهای کاشته‌شده عمداً **سه‌رقمی و متمایز**اند (`conftest.seeded`): در صفحه‌ای
-که نرخِ درصدی و نسخهٔ `1.29` و گیگابایتِ دیسک هم دارد، «۲ در صفحه هست» ادعای
-ضعیفی است. غیرِتصادفی‌بودنشان با سابوتاژ اثبات می‌شود نه با استدلال.
+روی **مقدار** نه مارک‌آپ، و مقدارِ انتظاری از همان تابعی که هندلر صدا می‌زند
+(`_services`, `dl_active.count`, `_disk`, `ck.accounts`) — نه هاردکد. عددهای کاشته‌شده
+عمداً سه‌رقمی و متمایزند (`conftest.seeded`): «۲ در صفحه هست» ادعای ضعیفی است.
 """
 from __future__ import annotations
 
-import pytest
-from pagefacts import page_text, shows
+from pagefacts import missing_facts, shows
 from test_panel_css_classes import _fetch
 
-#: سرویس‌هایی که کارتِ «سلامتِ سرویس‌ها» ردیف می‌سازد: (متنِ صفحه, کلیدِ health).
-#: صریح است — ولی `test_the_service_list_has_not_drifted` نگه‌داری‌اش می‌کند، پس
-#: سرویسِ تازه‌ای که رندر نشود بی‌صدا رد نمی‌شود. همان شکلِ فهرستِ صریح +
-#: گاردِ کشف که `_KNOWN_UNREACHABLE` و `_SESSIONMAKER_HOLDERS` هم دارند.
-BOOL_SERVICES = [("Postgres", "postgres"), ("Redis", "redis")]
+
+def _f():
+    from app.admin_web import Fmt
+    return Fmt("fa")
 
 
 def _app(panel):
     return panel.client.server.app
 
 
-# ── کارتِ سرویس‌ها ──────────────────────────────────────────────────────────
-async def test_every_boolean_service_reports_its_state(seeded):
-    """هر سرویس باید نامش را **کنارِ** وضعیتش بدهد، نه یکی از آن دو را."""
+def _svc_card(html: str, key: str) -> str:
+    """کارتِ یک سرویس در `/system` — با برچسبِ همان سرویس."""
+    label = _f().t("sy.svc." + key)
+    for block in html.split('<div class="card svc">')[1:]:
+        if f'<div class="n">{label}</div>' in block:
+            return block.split('<div class="card svc">', 1)[0]
+    raise AssertionError(f"کارتِ سرویسِ «{key}» رندر نشد")
+
+
+# ── سرویس‌ها ─────────────────────────────────────────────────────────────────
+async def test_every_service_reports_its_state(seeded):
+    """هر سرویس نامش را **کنارِ** وضعیتش می‌دهد — سه حالت، سه برچسب."""
     from app import admin_web as aw
 
-    health = await aw._health(_app(seeded))
-    html = await _fetch(seeded, "/health")
-    for label, key in BOOL_SERVICES:
-        expected = "آنلاین" if health[key] else "خطا"
-        shows(html, f"{label} {expected}")
-
-
-async def test_the_pot_provider_row_reports_its_third_state(seeded):
-    """pot سه‌حالته است و «تنظیم‌شده ولی نسنجیده» با «پیکربندی‌نشده» یکی نیست.
-
-    در هارنس `pot_provider_url` تهی است، پس حالتِ قطعی «پیکربندی‌نشده» است.
-    """
-    from app import admin_web as aw
-
-    health = await aw._health(_app(seeded))
-    assert health["pot"] is None, "پیش‌شرطِ تست عوض شده — هارنس pot را تهی می‌گذارد"
-    shows(await _fetch(seeded, "/health"), "pot-provider (یوتیوب) پیکربندی‌نشده")
+    rows = await aw._services(_app(seeded))
+    html = await _fetch(seeded, "/system")
+    f = _f()
+    for r in rows:
+        want = f.t("sy.ok") if r["ok"] else f.t("sy.unknown") if r["ok"] is None else f.t("sy.down")
+        shows(_svc_card(html, r["key"]), want)
 
 
 async def test_the_service_list_has_not_drifted(seeded):
-    """گاردِ کشف: سرویسِ تازه‌ای که به `_health` اضافه شود باید ردیف هم بگیرد.
+    """گاردِ کشف: هر سرویسی که `_services` بسازد کارت می‌گیرد، و برعکس."""
+    import re
 
-    بدونِ این، `BOOL_SERVICES` یک فهرستِ دستی است که می‌پوسد — همان چیزی که §۶
-    بارها ثبت کرده. `all_ok` مشتق است نه سرویس، پس کنار گذاشته می‌شود.
-    """
     from app import admin_web as aw
 
-    health = await aw._health(_app(seeded))
-    booleans = {k for k, v in health.items() if isinstance(v, bool)} - {"all_ok"}
-    assert booleans == {k for _l, k in BOOL_SERVICES}, (
-        "مجموعهٔ سرویس‌های بولیِ `_health` عوض شده؛ اگر ردیفِ تازه‌ای لازم است "
-        "هم قالب هم `BOOL_SERVICES` باید به‌روز شوند.")
+    keys = {r["key"] for r in await aw._services(_app(seeded))}
+    assert {"postgres", "redis"} <= keys, keys
+    html = await _fetch(seeded, "/system")
+    f = _f()
+    labels = set(re.findall(r'<div class="card svc">.*?<div class="n">([^<]+)</div>', html, re.S))
+    assert labels == {f.t("sy.svc." + k) for k in keys}
 
 
-# ── کارتِ صف و دیسک ─────────────────────────────────────────────────────────
-async def test_every_queue_depth_reaches_the_page(seeded):
-    """چهار عمقِ صف، هر کدام عددِ خودش.
-
-    مقدارِ انتظاری از `_health()` می‌آید؛ ولی یک پینِ پیش‌شرط هم هست، وگرنه اگر
-    روزی همهٔ صف‌ها صفر شوند این تست به «صفر در صفحه هست» تنزل می‌کند و بی‌صدا
-    بی‌معنا می‌شود.
-    """
+async def test_a_dead_database_is_reported_as_down(seeded, monkeypatch):
+    """کنترلِ معکوس: «سالم» بی‌قیدوشرط نیست — پینگِ شکست‌خورده «قطع» می‌شود."""
     from app import admin_web as aw
 
-    health = await aw._health(_app(seeded))
-    depths = (health["q_main"], health["q_proc"], health["q_dl"], health["dl_active"])
-    assert depths == (137, 251, 409, 73), (
-        f"دادهٔ کاشته‌شده عوض شده ({depths}) — عددهای متمایز شرطِ معنادارییِ این تست‌اند")
-    shows(await _fetch(seeded, "/health"), *depths)
+    async def dead():
+        raise ConnectionError("no route to postgres")
+
+    monkeypatch.setattr(aw, "_pg_ping", dead)
+    card = _svc_card(await _fetch(seeded, "/system"), "postgres")
+    f = _f()
+    shows(card, f.t("sy.down"), f.t("sy.down.s"))
+    assert missing_facts(card, [f.t("sy.ok")]) == [f.t("sy.ok")]
 
 
+# ── کار ──────────────────────────────────────────────────────────────────────
+async def test_the_live_download_count_reaches_the_page(seeded):
+    """۷۳ دانلودِ در جریان (کاشته از مسیرِ خودِ `dl_active`)، با سقفِ هم‌زمانی."""
+    from app import dl_active
+
+    n = await dl_active.count(seeded.redis)
+    assert n == 73, f"پیش‌شرطِ کاشت: {n}"
+    f = _f()
+    shows(await _fetch(seeded, "/system"), f.t("sy.dl_active"), f.num(73))
+
+
+async def test_the_stuck_jobs_line_counts_what_panel_data_counts(seeded):
+    """جابِ گیرکرده همان عددی است که `stuck_jobs` می‌دهد — نه بازشماریِ قالب."""
+    from app import panel_data as PD
+
+    stuck = await PD.stuck_jobs()
+    f = _f()
+    shows(await _fetch(seeded, "/system"), f.t("sy.stuck"), f.num(stuck["n"]),
+          f.t("sy.running"), f.num(stuck["running"]))
+
+
+# ── دیسک ─────────────────────────────────────────────────────────────────────
 async def test_the_disk_meter_reports_what_it_measured(seeded, monkeypatch):
-    """`shutil.disk_usage` وصله می‌شود، و این یک قیدِ محیطی است نه سلیقه.
+    """`shutil.disk_usage` وصله می‌شود — `settings.work_dir` (`/work`) روی رانر نیست.
 
-    `settings.work_dir` پیش‌فرضش `/work` است که نه در سندباکس هست نه روی رانر،
-    پس `_health` استثنا می‌گیرد و `disk_total = 0` می‌گذارد — یعنی شاخهٔ
-    `{% if health.disk_total %}` **در هیچ تستی اجرا نمی‌شد**. مکانیزمِ زیرِ
-    سنجش «قالب عددی را که کد محاسبه کرده رندر می‌کند» است، و منبعِ آن عدد یک
-    فراخوانیِ سیستمیِ محیط‌وابسته است؛ پس وصله‌کردنش تست را قطعی می‌کند بی‌آنکه
-    مسیرِ واقعی را دور بزند.
+    بدونِ وصله شاخهٔ «دیسک سنجیده شد» در **هیچ** تستی اجرا نمی‌شد.
     """
     from collections import namedtuple
 
@@ -113,68 +111,57 @@ async def test_the_disk_meter_reports_what_it_measured(seeded, monkeypatch):
 
     du = namedtuple("du", "total used free")
     gib = 1024 ** 3
-    monkeypatch.setattr(aw.shutil, "disk_usage",
-                        lambda _p: du(500 * gib, 120 * gib, 380 * gib))
-    health = await aw._health(_app(seeded))
-    assert (health["disk_used"], health["disk_total"]) == (120, 500)
-    shows(await _fetch(seeded, "/health"), "120/500G")
+    monkeypatch.setattr(aw.shutil, "disk_usage", lambda _p: du(500 * gib, 120 * gib, 380 * gib))
+    f = _f()
+    shows(await _fetch(seeded, "/system"),
+          f.t("sy.disk.s", u=f.size(120 * gib), t=f.size(500 * gib), f=f.size(380 * gib)),
+          f.pct(120 / 500))
 
 
-async def test_an_unmeasurable_disk_hides_the_meter(seeded, monkeypatch):
-    """کنترلِ معکوس: شاخهٔ `{% if %}` واقعی است، نه همیشه‌روشن.
-
-    بدونِ این، تستِ بالا با قالبی که نوار را بی‌قیدوشرط رندر کند هم سبز می‌ماند.
-    """
+async def test_an_unmeasurable_disk_says_so(seeded, monkeypatch):
+    """کنترلِ معکوس: شاخهٔ «نسنجیده» واقعی است، نه نوارِ همیشه‌روشن."""
     from app import admin_web as aw
 
     def boom(_p):
         raise OSError("no such directory")
 
     monkeypatch.setattr(aw.shutil, "disk_usage", boom)
-    assert (await aw._health(_app(seeded)))["disk_total"] == 0
-    assert "G" not in page_text(await _fetch(seeded, "/health")).split("دیسک")[-1][:40]
+    shows(await _fetch(seeded, "/system"), _f().t("sy.disk.none"))
 
 
-# ── کارتِ نسخهٔ موتورها ─────────────────────────────────────────────────────
+# ── موتورها ──────────────────────────────────────────────────────────────────
 async def test_the_engine_versions_reach_the_page(seeded):
     """اولین سؤالِ «پاسخِ نامعتبر»: موتور عقب افتاده یا سشن مرده؟
 
-    اگر این کارت بی‌صدا بیفتد، آن سؤال دوباره بی‌جواب می‌شود.
+    ورکرِ مستر با نامِ خوانا («مستر») نشان داده می‌شود، نه شناسهٔ خامِ `master`.
     """
-    from app import admin_web as aw
-
-    health = await aw._health(_app(seeded))
-    assert health["engines"], "پیش‌شرط: `dlver:*` کاشته شده باشد"
-    e = health["engines"][0]
-    shows(await _fetch(seeded, "/health"), e["who"], e["gallery-dl"], e["yt-dlp"])
+    f = _f()
+    shows(await _fetch(seeded, "/system"), f.t("ck.exit.master"), "1.29", "2026.07.04")
 
 
 async def test_a_worker_that_never_reported_says_so(seeded):
     """شاخهٔ خالی هم باید حرف بزند، نه اینکه کارت را ساکت کند."""
     await seeded.redis.delete("dlver:master")
-    shows(await _fetch(seeded, "/health"), "هنوز ورکرِ دانلودی نسخه‌اش را گزارش نکرده")
+    shows(await _fetch(seeded, "/system"), _f().t("sy.engines.none"))
 
 
-# ── کارتِ استخرِ کوکی ───────────────────────────────────────────────────────
-async def test_the_cookie_pool_line_reports_each_platform_and_its_count(seeded):
-    """پلتفرم و شمارِ سالمش کنارِ هم — نه یکی از آن دو.
+# ── استخرِ کوکی (کارتِ داشبورد) ───────────────────────────────────────────────
+async def test_the_cookie_pool_card_reports_each_platform_and_its_ready_count(seeded):
+    """پلتفرم و «آماده از کل» کنارِ هم؛ «آماده» همان `cookies.USABLE` است.
 
-    عدد به‌تنهایی در این صفحه ضعیف است و نامِ پلتفرم به‌تنهایی حذفِ شمارش را
-    نمی‌گیرد، پس ادعا روی **جفت** بسته می‌شود. برچسبِ «سالم» واژگانِ پایدارِ
-    دامنه است؛ اگر §۵ عوضش کند این تست قرمز می‌شود و همان‌جا یک خط به‌روز
-    می‌شود — یعنی یک اعلانِ بازبینی، نه یک از‌دست‌رفتنِ خاموش.
+    هفت اکانتِ اینستاگرام، یکی از هر وضعیت: آماده = سالم + بی‌سابقه + مشکوک.
     """
-    from app import admin_web as aw
-    from app import cookies as ck_pool
+    from app import cookies as ck
 
-    summary = await ck_pool.pool_summary(seeded.redis)
-    assert summary, "پیش‌شرط: اکانتِ کوکی کاشته شده باشد"
-    html = await _fetch(seeded, "/health")
-    for platform, d in summary.items():
-        live = d["healthy"] + d["suspect"]
-        shows(html, aw._PLATFORM_FA.get(platform, platform), f"{live} سالم")
+    accs = await ck.accounts(seeded.redis)
+    ready = sum(1 for a in accs if a["status"] in ck.USABLE)
+    assert (ready, len(accs)) == (3, 7), f"پیش‌شرطِ کاشت: {ready}/{len(accs)}"
+    f = _f()
+    html = await _fetch(seeded, "/")
+    card = html.split('class="card d-pool"', 1)[1].split("</section>", 1)[0]
+    shows(card, f.plat("instagram"), f.t("d.pool.ready", a=f.num(ready), b=f.num(len(accs))))
 
 
 async def test_an_empty_pool_says_so(panel):
     """کنترلِ معکوس روی `panel`ِ بی‌داده: شاخهٔ خالی هم رندر می‌شود."""
-    shows(await _fetch(panel, "/health"), "کوکی‌ای ثبت نشده")
+    shows(await _fetch(panel, "/"), _f().t("d.pool.none"))

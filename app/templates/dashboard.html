@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% block content %}
+<div class="dash">
+  <div class="page-h"><div><h1>{{ t('nav.dashboard') }}</h1><div class="sub">{{ period }} · {{ cmp }}</div></div>
+    <div class="actions">{{ m.range_seg(ranges, key, '/') }}</div></div>
+
+  <div class="kpis">{% for k in kpis %}{{ m.kpi(k) }}{% endfor %}</div>
+
+  <div class="grid">
+    {# activity per bucket #}
+    <section class="card d-act">
+      {% set leg = m.legend([{'label': t('d.s.dl'), 'color': 'var(--c1)', 'value': f.num(act_tot[0])},
+                             {'label': t('d.s.up'), 'color': 'var(--c2)', 'value': f.num(act_tot[1])}]) %}
+      {{ m.card_head(t(unit_title), leg, m.view_toggle()) }}
+      <div class="card-b">
+        <div class="chart-view">{{ m.chart(act_spec) }}</div>
+        <div class="table-view" style="max-height:300px;overflow:auto"><div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>{{ t('d.col.period') }}</th><th class="end">{{ t('d.s.dl') }}</th><th class="end">{{ t('d.s.up') }}</th><th class="end">{{ t('c.total') }}</th></tr></thead>
+          <tbody>{% for r in act_rows %}<tr><td>{{ r.label }}{% if r.partial %} <span class="muted fs-12">· {{ t('d.partial.s') }}</span>{% endif %}</td><td class="end num">{{ f.num(r.dl) }}</td><td class="end num">{{ f.num(r.up) }}</td><td class="end num"><b>{{ f.num(r.dl + r.up) }}</b></td></tr>{% endfor %}</tbody>
+        </table></div></div>
+      </div>
+    </section>
+
+    {# needs attention #}
+    {% set alerts = shell.alerts %}
+    <section class="card d-att">
+      {% set n_badge %}{% if alerts %}<span class="badge bad num">{{ f.num(alerts|length) }}</span>{% endif %}{% endset %}
+      {{ m.card_head(t('d.attn'), '', n_badge) }}
+      <div class="card-b">{% if alerts %}<div class="att-list">{% for a in alerts[:5] %}
+        <a class="alert-item" href="{{ a.href }}"><span class="alert-ic {{ a.sev }}">{{ ic(a.icon, 'ic-16') }}</span><span class="grow"><div class="t">{{ a.title }}</div>{% if a.sub %}<div class="s">{{ a.sub }}</div>{% endif %}</span>{{ ic('chevron-right', 'ic-16 faint flip') }}</a>{% endfor %}</div>
+        {% else %}{{ m.empty('circle-check', t('d.attn.none'), ok=True) }}{% endif %}</div>
+      <div class="card-f"><span class="svc-strip"><span class="row" style="gap:4px">{% for s in services %}<span class="sdot {{ 'good' if s.ok else 'bad' if s.ok is sameas false else '' }}" title="{{ t('sy.svc.' + s.key) }}"></span>{% endfor %}</span>{{ t('d.svc', a=f.num(svc_ok), b=f.num(services|length)) }}</span>
+        <a class="link-more" href="/system">{{ t('nav.system') }}{{ ic('chevron-right', 'ic-14 flip') }}</a></div>
+    </section>
+
+    {# downloads per platform #}
+    <section class="card d-plat">
+      {{ m.card_head(t('d.plat'), t('d.plat.sub')) }}
+      <div class="card-b">{% if plat_rows %}
+        <div class="donut-wrap">{{ m.chart(donut, 'donut') }}
+          <div class="grow plat-tbl"><div class="tbl-wrap"><table class="tbl compact">
+            <thead><tr><th>{{ t('c.platform') }}</th><th class="end">{{ t('d.req.col') }}</th><th class="end">{{ t('c.share') }}</th><th class="end">{{ t('c.success') }}</th></tr></thead>
+            <tbody>{% for r in plat_rows %}{% set v = r.ok / r.att if r.att else none %}
+              <tr><td class="nowrap"><span class="row"><i class="swatch" style="background:{{ PLAT_COLOR.get(r.p, 'var(--c0)') }}"></i>{{ f.plat(r.p) }}</span></td>
+                <td class="end num">{{ f.num(r.att) }}</td><td class="end num">{{ f.ratio(r.att, plat_total) }}</td>
+                <td class="end"><div class="row" style="justify-content:flex-end;gap:10px"><div class="bar {{ rate_cls(v) }}" style="width:56px"><i style="width:{{ '%.1f'|format((v or 0) * 100) }}%"></i></div><span class="num" style="min-width:44px;text-align:end">{{ f.pct(v) if v is not none else '—' }}</span></div></td></tr>
+            {% endfor %}</tbody></table></div></div>
+        </div>
+        {% else %}{{ m.empty('download', t('d.plat.none')) }}{% endif %}</div>
+    </section>
+
+    {# operations #}
+    <section class="card d-ops">
+      {{ m.card_head(t('d.ops'), t('d.ops.sub', n=f.num(jobs[0]), f=f.num(jobs[1]))) }}
+      <div class="card-b">{% if ops %}<div class="hbars">{% for o in ops %}
+        <div class="hbar"><div class="top"><span>{{ f.op(o.op) }}<span class="s">{% if o.avg %}{{ t('d.avg', t=f.secs(o.avg)) }}{% endif %}</span></span><span class="v num">{{ f.num(o.n) }}</span></div>
+          <div class="bar {{ f.otint(o.op) }}"><i style="width:{{ '%.1f'|format(o.n / ops_max * 100) }}%;background:var(--tint)"></i></div></div>
+      {% endfor %}</div>{% else %}{{ m.empty('wand-sparkles', t('d.ops.none')) }}{% endif %}</div>
+      <div class="card-f"><span></span><a class="link-more" href="/reports">{{ t('nav.reports') }}{{ ic('chevron-right', 'ic-14 flip') }}</a></div>
+    </section>
+
+    {# recent activity #}
+    <section class="card d-recent">
+      {# `~` بینِ رشته و Markup رشته را escape می‌کند؛ HTMLِ ابزارِ سربرگ با بلوکِ set ساخته می‌شود. #}
+      {% set more %}<a class="link-more" href="/activity">{{ t('c.view_all') }}{{ ic('chevron-right', 'ic-14 flip') }}</a>{% endset %}
+      {{ m.card_head(t('d.recent'), '', more) }}
+      <div class="card-b flush"><div class="feed">{% for x in recent %}{{ m.feed_item(x) }}{% else %}{{ m.empty('activity', t('d.recent.none')) }}{% endfor %}</div></div>
+    </section>
+
+    {# cookie pool #}
+    <section class="card d-pool">
+      {{ m.card_head(t('d.pool')) }}
+      <div class="card-b">{% if pool %}{% for r in pool %}
+        <div class="pool-row"><span class="k row"><span class="sq xs tint {{ f.ptint(r.p) }}">{{ ic(f.picon(r.p), 'ic-14') }}</span>{{ f.plat(r.p) }}</span>
+          <div class="segbar" role="img" aria-label="{{ t('d.pool.ready', a=f.num(r.ready), b=f.num(r.n)) }}">{% for n, col in r.segs %}<i style="flex:{{ n }};background:{{ col }}"></i>{% endfor %}</div>
+          <span class="v num">{{ t('d.pool.ready', a=f.num(r.ready), b=f.num(r.n)) }}</span></div>{% endfor %}
+        <div class="legend mt-12" style="font-size:12.5px;color:var(--muted)">{% for k, col in (('ok', 'var(--good)'), ('warn', 'var(--warn)'), ('rest', 'var(--neutral)'), ('bad', 'var(--bad)')) %}<span class="li"><i class="swatch" style="background:{{ col }}"></i>{{ t('d.leg.' + k) }}</span>{% endfor %}</div>
+        {% else %}{{ m.empty('cookie', t('d.pool.none')) }}{% endif %}</div>
+      <div class="card-f"><span></span><a class="link-more" href="/cookies">{{ t('d.pool.manage') }}{{ ic('chevron-right', 'ic-14 flip') }}</a></div>
+    </section>
+  </div>
+</div>
+{% endblock %}

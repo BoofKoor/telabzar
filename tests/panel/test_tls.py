@@ -137,31 +137,51 @@ def caddy_data(panel, tmp_path, monkeypatch):
 
 
 def _https_card(html: str) -> str:
-    """فقط کارتِ HTTPS — ادعاها نباید از بجِ کارتِ دیگری سبز شوند."""
-    start = html.index("HTTPS</h3>")
-    end = html.find("<div class=card>", start)
-    return html[start:end if end != -1 else None]
+    """فقط کارتِ گواهی‌ها در `/system` — ادعاها نباید از اعلان یا نوارِ سرویس سبز شوند."""
+    start = html.index('id="certs"')
+    return html[start:html.index("</section>", start)]
+
+
+def _f():
+    from app.admin_web import Fmt
+    return Fmt("fa")
 
 
 async def test_the_card_shows_each_domain_and_its_certificate(panel, domains, caddy_data):
     await domains.set("link_domain", LINK)
     _write_cert(caddy_data, "acme-v02.api.letsencrypt.org-directory", PANEL, days=80,
                 org="Let's Encrypt")
-    expires = (datetime.now(timezone.utc) + timedelta(days=80)).strftime("%Y-%m-%d")
-    html = await _fetch(panel, "/health")
+    rows = {r["role"]: r for r in await panel.aw._tls_status()}
+    html = await _fetch(panel, "/system")
     card = _https_card(html)
-    shows(card, PANEL, f"معتبر تا {expires}", LINK, "هنوز صادر نشده")
-    assert "badge ok" in card
+    f = _f()
+    shows(card, PANEL, f.day_long(rows["panel"]["expires_ts"]), "Let's Encrypt",
+          LINK, f.t("sy.c.none"))
+    assert rows["panel"]["sev"] == "" and rows["link"]["sev"] == "warn"
     shows(card, "telabzar logs caddy")          # راهنما فقط وقتی چیزی صادر نشده
     assert not undefined_in(html), undefined_in(html)
 
 
 async def test_a_soon_expiring_certificate_is_a_warning(panel, domains, caddy_data):
-    _write_cert(caddy_data, "acme-v02.api.letsencrypt.org-directory", PANEL, days=3,
+    """یک قاعده برای کارت، اعلان و نوارِ سرویس: ≤۱۴ روز هشدار، ≤۳ روز بد."""
+    _write_cert(caddy_data, "acme-v02.api.letsencrypt.org-directory", PANEL, days=10,
                 org="Let's Encrypt")
-    card = _https_card(await _fetch(panel, "/health"))
-    assert "badge warn" in card and "badge ok" not in card
+    html = await _fetch(panel, "/system")
+    card = _https_card(html)
+    f = _f()
+    assert f'<span class="warn">{f.t("sy.c.days", n=f.num(9))}</span>' in card or \
+        f'<span class="warn">{f.t("sy.c.days", n=f.num(10))}</span>' in card, card
     assert "telabzar logs caddy" not in page_text(card)     # همه صادر شده‌اند → بی‌راهنما
+    shows(html, f.t("al.tls.exp", d=f.iso(PANEL), n=f.num((await panel.aw._tls_status())[0]["days"])))
+
+
+async def test_the_card_and_the_alert_agree_on_severity(panel, domains, caddy_data):
+    """کنترلِ ناسازگاریِ قبلی: کارت زیرِ ۱۴ روز قرمز بود و اعلان فقط زرد."""
+    from app import admin_web as aw
+
+    for days, want in ((80, ""), (20, ""), (14, "warn"), (4, "warn"), (3, "bad"), (1, "bad")):
+        assert aw._cert_sev({"cert": {"x": 1}, "days": days}) == want, days
+    assert aw._cert_sev({"cert": None}) == "warn"
 
 
 async def test_of_two_issuers_the_later_expiry_wins(panel, domains, caddy_data):
@@ -177,13 +197,15 @@ async def test_a_corrupt_certificate_file_does_not_break_the_page(panel, domains
     d = caddy_data / "caddy" / "certificates" / "x" / PANEL
     d.mkdir(parents=True)
     (d / f"{PANEL}.crt").write_text("not a certificate")
-    card = _https_card(await _fetch(panel, "/health"))
-    shows(card, PANEL, "هنوز صادر نشده")
+    card = _https_card(await _fetch(panel, "/system"))
+    shows(card, PANEL, _f().t("sy.c.none"))
 
 
-async def test_no_domain_means_no_https_card(panel, caddy_data, monkeypatch):
+async def test_no_domain_means_no_certificate_rows(panel, caddy_data, monkeypatch):
     monkeypatch.setattr(panel.aw.settings, "panel_domain", "")
-    assert "HTTPS</h3>" not in await _fetch(panel, "/health")
+    card = _https_card(await _fetch(panel, "/system"))
+    shows(card, _f().t("sy.certs.none"))
+    assert "telabzar logs caddy" not in card
 
 
 # ── صدورِ پیش‌دستانه بعد از ذخیره ────────────────────────────────────────────
@@ -318,12 +340,15 @@ async def test_two_clients_behind_caddy_get_two_login_buckets(panel, clock):
     یک سطل ورودِ ادمینِ واقعی را می‌بست. (آستانهٔ ۳۰ = سقفِ per-IPِ verify.)"""
     aid = str(panel.admin_id)
 
+    # از بازطراحیِ ۲۰۲۶-۱۰ ورود PRG است: `/auth/verify` همیشه ریدایرکت می‌کند و
+    # نتیجه در `?e=` است (`rl_ip` = سقفِ per-IP).
     async def verify(ip):
         r = await panel.client.post("/auth/verify", data={"admin_id": aid, "code": "000000"},
                                     headers={"X-Forwarded-For": ip}, allow_redirects=False)
-        return await r.text()
+        assert r.status == 302
+        return r.headers["Location"]
 
     for _ in range(30):
         await verify("198.51.100.66")
-    assert "از این آدرس" in await verify("198.51.100.66")       # سطلِ مهاجم پر شد
-    assert "از این آدرس" not in await verify("198.51.100.7")    # ادمین سطلِ خودش را دارد
+    assert "e=rl_ip" in await verify("198.51.100.66")       # سطلِ مهاجم پر شد
+    assert "e=rl_ip" not in await verify("198.51.100.7")    # ادمین سطلِ خودش را دارد
