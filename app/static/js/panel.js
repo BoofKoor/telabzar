@@ -27,10 +27,10 @@
   const ic = (name, cls) => `<svg class="ic${cls ? ' ' + cls : ''}" aria-hidden="true"><use href="${SPRITE()}#i-${name}"></use></svg>`;
 
   /* ── toast ── */
-  function toast(text, icon) {
+  function toast(text, icon, bad) {
     let w = $('.toast-wrap');
     if (!w) { w = doc.createElement('div'); w.className = 'toast-wrap'; w.setAttribute('aria-live', 'polite'); doc.body.appendChild(w); }
-    const el = doc.createElement('div'); el.className = 'toast'; el.innerHTML = ic(icon || 'circle-check') + esc(text);
+    const el = doc.createElement('div'); el.className = bad ? 'toast bad' : 'toast'; el.innerHTML = ic(icon || 'circle-check') + esc(text);
     w.appendChild(el);
     setTimeout(() => el.remove(), 2800);
   }
@@ -116,9 +116,6 @@
         () => { f._confirmed = true; if (f.requestSubmit) f.requestSubmit(e.submitter || undefined); else f.submit(); });
       return;
     }
-    if (f.dataset.onlyChanged != null) {        // texts: post only the fields that changed
-      $$('textarea[data-tx]', f).forEach((el) => { if (el.value === el.defaultValue) el.disabled = true; });
-    }
     const b = e.submitter;
     if (b && b.dataset.skip) {                    // e.g. «download the file» must not send a pasted pack in the URL
       const off = $$(b.dataset.skip.split(',').map((n) => `[name="${n.trim()}"]`).join(','), f).filter((x) => !x.disabled);
@@ -128,11 +125,10 @@
     if (b && b.dataset.busy) { b._html = b.innerHTML; b.disabled = true; b.innerHTML = `<span class="spinner"></span>${esc(b.dataset.busy)}`; }
   });
   // Back/forward cache restores the page as it was at the moment of submitting: give the
-  // busy buttons and the fields we disabled for that one submission back to the user.
+  // busy buttons back to the user.
   addEventListener('pageshow', (e) => {
     if (!e.persisted) return;
     $$('button[data-busy]').forEach((b) => { if (b._html != null) { b.innerHTML = b._html; b.disabled = false; b._html = null; } });
-    $$('textarea[data-tx][disabled]').forEach((el) => { el.disabled = false; });
   });
 
   /* ── sheets: a row or link fetches an HTML fragment and slides it in ── */
@@ -344,7 +340,9 @@
   }
   addEventListener('resize', debounce(() => { for (const el of charts.keys()) drawChart(el); }, 120));
 
-  /* ── forms with a save bar: count changed fields, show the bar, cancel = reset ── */
+  /* ── forms with a save bar: count changed fields, show the bar, cancel = reset ──
+     `form._note` (set by a save that failed) replaces the count until the next edit, and
+     the bar turns red; `form._busy` keeps Save disabled while a request is in flight. */
   function fieldValue(el) { return el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value; }
   function trackDirty(form) {
     const fields = $$('input:not([type=hidden]):not([data-ignore]),select:not([data-ignore]),textarea:not([data-ignore])', form);
@@ -360,17 +358,28 @@
         if (el.classList.contains('err')) bad++;
       });
       if (form.dataset.extraDirty) n += +form.dataset.extraDirty;
+      form._dirty = n;
       if (!bar) return;
-      bar.hidden = n === 0;
+      const note = n ? form._note : '';
+      // `data-savebar-keep`: the bar keeps its place and only fades, so showing and hiding it
+      // never changes the page height (no jump when the page is scrolled to its end)
+      if (bar.dataset.savebarKeep != null) { bar.hidden = false; bar.classList.toggle('idle', n === 0); } else bar.hidden = n === 0;
+      bar.classList.toggle('bad', !!(note || bad));
       const msg = $('[data-savebar-msg]', bar);
-      if (msg) msg.textContent = bad ? t('st.fix', { n: num(bad) }) : t('c.unsaved', { n: num(n) });
+      if (msg) msg.textContent = note || (bad ? t(form.dataset.fixMsg || 'st.fix', { n: num(bad) }) : t('c.unsaved', { n: num(n) }));
+      const use = $('.msg use', bar);
+      if (use) use.setAttribute('href', `${SPRITE()}#i-${note || bad ? 'circle-alert' : 'square-pen'}`);
+      const link = $('[data-savebar-link]', bar);
+      if (link) link.hidden = !(note && form._noteLink);
       const sv = $('[data-savebar-save]', bar);
-      if (sv) sv.disabled = bad > 0;
+      if (sv) sv.disabled = bad > 0 || !!form._busy;
     };
     form._update = update;
-    form.addEventListener('input', update);
-    form.addEventListener('change', update);
+    const touched = () => { form._note = ''; update(); };
+    form.addEventListener('input', touched);
+    form.addEventListener('change', touched);
     form.addEventListener('reset', () => setTimeout(() => {
+      form._note = '';
       $$('[data-int]', form).forEach(validateInt);
       if (form._afterReset) form._afterReset();
       update();
@@ -429,26 +438,299 @@
     }
   }
 
-  /* ── texts page: autosize, live placeholder checks, post only what changed ── */
-  function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 2 + 'px'; }
-  function phCheck(ta) {
-    const row = ta.closest('.txt-row');
-    if (!row) return;
-    const want = new Set((row.dataset.ph || '').split(' ').filter(Boolean));
-    const have = new Set(ta.value.match(/\{\w+\}/g) || []);
-    const missing = [...want].filter((x) => !have.has(x)), unknown = [...have].filter((x) => !want.has(x));
-    $$('.js-ph', row).forEach((x) => x.remove());
-    const box = ta.parentElement;
-    missing.forEach((v) => box.insertAdjacentHTML('beforeend', `<div class="field-err js-ph" style="color:var(--warn-ink)">${ic('triangle-alert', 'ic-14')}${esc(t('tx.missing', { v }))}</div>`));
-    unknown.forEach((v) => box.insertAdjacentHTML('beforeend', `<div class="field-err js-ph">${ic('circle-alert', 'ic-14')}${esc(t('tx.unknown', { v }))}</div>`));
-    ta.classList.toggle('err', unknown.length > 0);
+  /* ── texts page ──
+     Every text is in the page; a filter (search, category, «edited only») only hides rows, in
+     place. Nothing reloads, so an unsaved edit is never lost and the page never jumps to the top.
+     Save and «restore» go out with fetch: the rows that changed are updated where they stand, and
+     a refused text keeps what the admin typed, with the reason under its own box. A row that is
+     unsaved, has an error or was just saved stays on screen whatever the filter says. Without
+     JS the GET form filters on the server and the two POST forms save and restore as before. */
+  const FIELD_SIZING = !!(window.CSS && CSS.supports && CSS.supports('field-sizing', 'content'));
+  // the same fold as `admin_web._fold`: the in-place filter and the server give one answer
+  const fold = (s) => String(s).toLowerCase().replace(/[\u064a\u0649]/g, 'ی').replace(/\u0643/g, 'ک').replace(/[\u200c-\u200f]/g, '');
+  // placeholders the way `str.format` reads them: `{{` and `}}` are literal braces, not a field
+  const fieldsOf = (s) => { const out = new Set(); String(s).replace(/\{\{|\}\}|\{(\w+)\}/g, (m, n) => { if (n) out.add(`{${n}}`); return m; }); return out; };
+  // without `field-sizing` every box is sized here: read every height first, then write
+  function sizeBoxes(tas) {
+    if (FIELD_SIZING) return;
+    const vis = tas.filter((ta) => ta.offsetParent !== null);
+    vis.forEach((ta) => { ta.style.height = 'auto'; });
+    const hs = vis.map((ta) => ta.scrollHeight + ta.offsetHeight - ta.clientHeight);
+    vis.forEach((ta, i) => { ta.style.height = hs[i] + 'px'; });
   }
   function mountTexts(r) {
-    const tas = $$('textarea[data-tx]', r);
-    // read every height first, then write: one layout pass instead of one per row
-    tas.forEach((ta) => { ta.style.height = 'auto'; });
-    const hs = tas.map((ta) => ta.scrollHeight + 2);
-    tas.forEach((ta, i) => { ta.style.height = hs[i] + 'px'; ta.addEventListener('input', () => { autosize(ta); phCheck(ta); }); });
+    const form = $('form[data-tx-form]', r), bar = $('form[data-tx-filter]', r);
+    if (!form || !bar) return;
+    const list = $('[data-tx-list]', form), rf = $('#tx-reset', r), tpl = $('#tx-tpl', r);
+    const rows = $$('.txt-row[data-f]', list), groups = $$('[data-tx-group]', list), none = $('[data-tx-none]', list);
+    const chips = $$('a[data-tx-cat]', r), chipBox = $('.tx-chips', r);
+    const qIn = $('[data-tx-q]', bar), edIn = $('[data-tx-ed]', bar), langSel = $('[data-tx-lang]', bar);
+    const sv = $('[data-savebar-save]', form), cancel = $('[data-savebar] button[type=reset]', form);
+    const box = (row) => $('textarea[data-tx]', row);
+    const rowOf = (key) => rows.find((x) => x.dataset.f === key);
+    const st = { q: qIn ? qIn.value : '', cat: list.dataset.cat || 'all', edited: !!(edIn && edIn.checked) };
+    const pins = new Set();   // just saved or refused: on screen until the next filter change
+    const touch = matchMedia('(hover: none)').matches;
+    let busy = false, leaving = false, lastBox = null;
+
+    const msg = (text, cls, icon) => `<div class="field-err ${cls}">${ic(icon, 'ic-14')}<span>${esc(text)}</span></div>`;
+    function check(row) {
+      const ta = box(row);
+      const want = new Set((row.dataset.ph || '').split(' ').filter(Boolean)), have = fieldsOf(ta.value);
+      const empty = !ta.value.trim();
+      const unknown = [...have].filter((x) => !want.has(x)), missing = empty ? [] : [...want].filter((x) => !have.has(x));
+      $$('.js-ph', row).forEach((x) => x.remove());
+      let html = empty ? msg(t('tx.empty'), 'js-ph', 'circle-alert') : '';
+      unknown.forEach((v) => { html += msg(t('tx.unknown', { v }), 'js-ph', 'circle-alert'); });
+      missing.forEach((v) => { html += msg(t('tx.missing', { v }), 'js-ph warn', 'triangle-alert'); });
+      if (html) ta.insertAdjacentHTML('afterend', html);
+      // a saved text that no longer fits (its default lost a placeholder in an update) is reported,
+      // but blocks Save only once it is being edited — it must not lock every other text on the page
+      ta.classList.toggle('err', ((empty || unknown.length > 0) && ta.value !== ta._init) || !!$('.js-srv', row));
+      $$('[data-tx-ins]', row).forEach((b) => b.classList.toggle('miss', missing.includes(b.dataset.txIns)));
+    }
+    // an edited row carries a pill and the default box; both come from #tx-tpl, the same markup the server renders
+    function mark(row, edited, def) {
+      row.classList.toggle('edited', edited);
+      let pill = $('[data-tx-pill]', row), dbox = $('[data-tx-defbox]', row);
+      if (!edited) { if (pill) pill.remove(); if (dbox) dbox.remove(); return; }
+      if (!pill && tpl) $('.tx-k', row).appendChild(tpl.content.querySelector('[data-tx-pill]').cloneNode(true));
+      if (!dbox && tpl) { dbox = tpl.content.querySelector('[data-tx-defbox]').cloneNode(true); $('.tx-v', row).appendChild(dbox); }
+      if (dbox) { $('[data-tx-def]', dbox).textContent = def; $('[data-tx-restore]', dbox).value = row.dataset.f; }
+    }
+    const visible = (el) => { const b = el.getBoundingClientRect(); return b.bottom > 0 && b.top < innerHeight; };
+
+    /* filters */
+    function url(over) {
+      const s = Object.assign({}, st, over);
+      const u = new URL('/texts', location.href);
+      const lang = s.lang || new URL(location.href).searchParams.get('lang');
+      if (lang) u.searchParams.set('lang', lang);
+      if (s.q.trim()) u.searchParams.set('q', s.q.trim());
+      if (s.cat !== 'all') u.searchParams.set('cat', s.cat);
+      if (s.edited) u.searchParams.set('edited', '1');
+      return u.pathname + u.search;
+    }
+    function apply() {
+      const ql = fold(st.q.trim()), counts = { all: 0 }, shownNow = [];
+      let shown = 0;
+      rows.forEach((row) => {
+        const ta = box(row), def = $('[data-tx-def]', row);
+        const hit = (!ql || fold(`${row.dataset.f}\n${ta.value}\n${def ? def.textContent : ''}`).includes(ql))
+          && (!st.edited || row.classList.contains('edited'));
+        if (hit) { counts.all++; counts[row.dataset.cat] = (counts[row.dataset.cat] || 0) + 1; }
+        const show = (hit && (st.cat === 'all' || row.dataset.cat === st.cat)) || pins.has(row)
+          || row.classList.contains('dirty') || ta.classList.contains('err');
+        if (show && row.hidden) shownNow.push(ta);
+        row.hidden = !show;
+        if (show) shown++;
+      });
+      groups.forEach((g) => { g.hidden = !$$('.txt-row', g).some((x) => !x.hidden); });
+      if (none) none.hidden = shown > 0;
+      chips.forEach((c) => {
+        const n = $('[data-tx-n]', c);
+        if (n) n.textContent = num(counts[c.dataset.txCat] || 0);
+        if (c.dataset.txCat === st.cat) c.setAttribute('aria-current', 'true'); else c.removeAttribute('aria-current');
+        c.setAttribute('href', url({ cat: c.dataset.txCat }));
+      });
+      list.dataset.cat = st.cat;
+      const cin = $('[data-tx-cat-in]', bar);
+      if (cin) { cin.value = st.cat === 'all' ? '' : st.cat; cin.disabled = st.cat === 'all'; }
+      $$('[data-tx-keep]', r).forEach((x) => {
+        const k = x.dataset.txKeep;
+        x.value = k === 'q' ? st.q.trim() : k === 'cat' ? (st.cat === 'all' ? '' : st.cat) : (st.edited ? '1' : '');
+      });
+      sizeBoxes(shownNow);
+    }
+    // a new filter starts at the top of its results — only when the list is scrolled under the filter bar
+    function filtered() {
+      pins.clear();
+      apply();
+      history.replaceState(history.state, '', url());
+      const d = form.getBoundingClientRect().top - bar.getBoundingClientRect().bottom;
+      if (d < -1) scrollBy(0, d);
+    }
+    function reveal(c) {   // keep the current chip inside its scrolling row, without moving the page
+      if (!chipBox) return;
+      const a = chipBox.getBoundingClientRect(), b = c.getBoundingClientRect();
+      if (b.left < a.left + 20) chipBox.scrollBy({ left: b.left - a.left - 20 });
+      else if (b.right > a.right - 20) chipBox.scrollBy({ left: b.right - a.right + 20 });
+    }
+    bar.addEventListener('submit', (e) => { e.preventDefault(); if (qIn) st.q = qIn.value; filtered(); });
+    if (qIn) qIn.addEventListener('input', debounce(() => { if (st.q === qIn.value) return; st.q = qIn.value; filtered(); }, 150));
+    if (edIn) edIn.addEventListener('change', () => { st.edited = edIn.checked; filtered(); });
+    chips.forEach((c) => c.addEventListener('click', (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      st.cat = c.dataset.txCat;
+      filtered();
+      reveal(c);
+    }));
+    const cur = chips.find((c) => c.dataset.txCat === st.cat);
+    if (cur) reveal(cur);
+    // another language is another page: ask before it throws away unsaved edits
+    if (langSel) {
+      const was = langSel.value;
+      langSel.addEventListener('change', () => {
+        const want = langSel.value;
+        const go = () => { leaving = true; location.href = url({ lang: want }); };
+        if (!form._dirty) { go(); return; }
+        langSel.value = was;
+        confirmThen({ title: t('tx.leave.title'), text: t('tx.leave.text'), ok: t('tx.leave.ok'), danger: true }, () => { langSel.value = want; go(); });
+      });
+    }
+    addEventListener('beforeunload', (e) => { if (!leaving && form._dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+    /* editing */
+    list.addEventListener('input', (e) => {
+      const ta = e.target.closest('textarea[data-tx]');
+      if (!ta) return;
+      const row = ta.closest('.txt-row');
+      $$('.js-srv', row).forEach((x) => x.remove());
+      check(row);
+      sizeBoxes([ta]);
+    });
+    list.addEventListener('focusin', (e) => { if (e.target.matches('textarea[data-tx]')) lastBox = e.target; });
+    list.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-tx-ins]');
+      if (!b) return;
+      const ta = box(b.closest('.txt-row'));
+      if (lastBox !== ta) ta.setSelectionRange(ta.value.length, ta.value.length);   // a box never touched: append
+      ta.focus({ preventScroll: true });
+      // execCommand keeps the box's own undo history; setRangeText is the fallback
+      if (!(doc.execCommand && doc.execCommand('insertText', false, b.dataset.txIns))) {
+        ta.setRangeText(b.dataset.txIns, ta.selectionStart, ta.selectionEnd, 'end');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+    form._afterReset = () => {
+      $$('.js-srv', list).forEach((x) => x.remove());
+      rows.forEach(check);
+      sizeBoxes(rows.map(box));
+    };
+
+    /* saving */
+    function setBusy(on) {
+      busy = on;
+      form._busy = on;
+      if (sv) {
+        if (on) { sv._html = sv.innerHTML; sv.innerHTML = `<span class="spinner"></span>${esc(sv.textContent.trim())}`; }
+        else if (sv._html != null) { sv.innerHTML = sv._html; sv._html = null; }
+      }
+      if (cancel) cancel.disabled = on;
+      $$('[data-tx-restore]', list).forEach((b) => { b.disabled = on; });
+      if (form._update) form._update();
+    }
+    async function send(entries, opts) {
+      setBusy(true);
+      const body = new URLSearchParams();
+      body.append('lang', ($('input[name=lang]', form) || {}).value || '');
+      entries.forEach(([k, v]) => body.append('v:' + k, v));
+      let res = null, status = 0;
+      try {
+        const resp = await fetch(form.action, { method: 'POST', body, credentials: 'same-origin', headers: { Accept: 'application/json' } });
+        status = resp.status;
+        res = await resp.json();
+      } catch (err) { res = null; }
+      setBusy(false);
+      if (res && res.ok) saved(res, new Map(entries), opts); else refused(res, status);
+    }
+    function saved(res, sent, opts) {
+      const done = [];
+      Object.entries(res.saved || {}).forEach(([key, s]) => {
+        const row = rowOf(key);
+        if (!row) return;
+        const ta = box(row);
+        // typed on while the request was out? keep that: the row simply stays unsaved
+        if (opts.force || ta.value === sent.get(key)) ta.value = s.value;
+        ta.defaultValue = s.value;        // «cancel» now returns to what is saved, not to the page load
+        ta._init = s.value;
+        $$('.js-srv', row).forEach((x) => x.remove());
+        mark(row, s.edited, s.default);
+        check(row);
+        pins.add(row);
+        done.push(row);
+      });
+      const sub = $('[data-tx-sub]'), n = $('[data-tx-ed-n]', bar);
+      if (sub && res.sub) sub.textContent = res.sub;
+      if (n && res.n_edited_t != null) n.textContent = res.n_edited_t;
+      form._note = '';
+      if (form._update) form._update();
+      apply();
+      sizeBoxes(done.map(box));
+      done.forEach((row) => {
+        row.classList.remove('just-saved');
+        void row.offsetWidth;          // restart the highlight when the same row is saved twice
+        row.classList.add('just-saved');
+      });
+      setTimeout(() => done.forEach((row) => row.classList.remove('just-saved')), 1700);
+      toast(res.msg, opts.restore ? 'rotate-ccw' : 'circle-check');
+      // the bar that held the focused Save button fades out: hand the focus back to the last box
+      // the admin typed in — only when it is on screen, so a keystroke never lands somewhere unseen
+      const fa = doc.activeElement;
+      if (!touch && !opts.restore && lastBox && lastBox.offsetParent !== null && visible(lastBox)
+          && (fa === doc.body || (fa && fa.closest('[data-savebar]')))) lastBox.focus({ preventScroll: true });
+    }
+    function refused(res, status) {
+      const login = status === 401 || !!(res && res.login);
+      const note = (res && res.msg) || t(login ? 'tx.err.session' : 'tx.err.net');
+      const bad = [];
+      Object.entries((res && res.errors) || {}).forEach(([key, m]) => {
+        const row = rowOf(key);
+        if (!row) return;
+        const ta = box(row);
+        $$('.js-srv', row).forEach((x) => x.remove());
+        ta.insertAdjacentHTML('afterend', msg(m, 'js-srv', 'circle-alert'));
+        ta.classList.add('err');
+        pins.add(row);
+        bad.push(row);
+      });
+      if (bad.length) apply();
+      form._note = note;
+      form._noteLink = login;
+      if (form._update) form._update();
+      if (!form._dirty) toast(note, 'circle-alert', true);   // a refused «restore» has no save bar to speak through
+      if (bad.length && !bad.some(visible)) {
+        bad[0].scrollIntoView({ block: 'center' });
+        if (!touch) box(bad[0]).focus({ preventScroll: true });
+      }
+    }
+    function trySave() {
+      if (busy) return;
+      const dirty = rows.filter((row) => box(row).value !== box(row)._init);
+      if (!dirty.length || dirty.some((row) => box(row).classList.contains('err'))) return;   // the bar says what to fix
+      send(dirty.map((row) => [row.dataset.f, box(row).value]), {});
+    }
+    form.addEventListener('submit', (e) => { e.preventDefault(); trySave(); });
+    if (rf) rf.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const row = e.submitter && rowOf(e.submitter.value), def = row && $('[data-tx-def]', row);
+      if (!def || busy) return;
+      send([[row.dataset.f, def.textContent]], { restore: true, force: true });
+    });
+    doc.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+      if (e.code !== 'KeyS' && (e.key || '').toLowerCase() !== 's') return;
+      e.preventDefault();
+      trySave();
+    });
+
+    /* layout */
+    rows.forEach(check);
+    if (form._update) form._update();
+    if (!FIELD_SIZING) {
+      sizeBoxes(rows.map(box));
+      addEventListener('resize', debounce(() => sizeBoxes(rows.map(box)), 150));
+      if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(() => sizeBoxes(rows.map(box)));
+    }
+    let tick = 0;
+    const stuck = () => {
+      tick = 0;
+      const cs = getComputedStyle(bar);
+      bar.classList.toggle('stuck', cs.position === 'sticky' && bar.getBoundingClientRect().top <= parseFloat(cs.top) + 0.5 && scrollY > 0);
+    };
+    addEventListener('scroll', () => { if (!tick) tick = requestAnimationFrame(stuck); }, { passive: true });
+    stuck();
   }
 
   /* ── button editor: drag or Alt+arrow to reorder, live Telegram preview ── */

@@ -554,7 +554,8 @@ def _safe_back(value: str) -> str:
 #: کلیدهایی که `panel.js` لازم دارد — فقط همین‌ها به صفحه می‌روند، نه کلِ جدول.
 _JS_KEYS = ("c.copied", "c.copy_manual", "c.total", "c.confirm", "c.unsaved", "c.no_results",
             "st.fix", "st.err.num", "st.err.neg", "st.err.max", "tx.missing", "tx.unknown",
-            "srch.hint")
+            "tx.empty", "tx.fix", "tx.err.net", "tx.err.session", "tx.leave.title",
+            "tx.leave.text", "tx.leave.ok", "srch.hint")
 
 
 def _strip_params(path_qs: str, *names: str) -> str:
@@ -2453,6 +2454,10 @@ _TEXT_CATS: tuple[tuple[str, frozenset[str]], ...] = (
                         "welcome", "choose", "language", "list"})),
 )
 _TEXT_CAT_IDS = tuple(c for c, _ in _TEXT_CATS) + ("other",)
+#: آیکونِ سرِ هر دسته در فهرستِ متن‌ها.
+_TEXT_CAT_ICON = {"btn": "keyboard", "cl": "captions", "dl": "download", "pr": "activity",
+                  "meta": "music", "wm": "stamp", "media": "image", "asr": "audio-lines",
+                  "card": "message-square-text", "other": "list"}
 _PH = re.compile(r"\{(\w+)\}")
 #: زبان‌های راست‌به‌چپ (کدِ پایه) — جهتِ جعبهٔ ویرایشِ متن و برچسبِ دکمه.
 _RTL = frozenset({"fa", "ar", "he", "ur", "ps", "ckb", "sd", "ug", "yi", "dv"})
@@ -2475,30 +2480,45 @@ def _text_cat(key: str) -> str:
     return "other"
 
 
+#: شکلِ جست‌وجوپذیرِ متن — **همان** قاعده‌ای که `fold`ِ `panel.js` دارد، تا فیلترِ
+#: سمتِ سرور (بی‌JS) و فیلترِ درجا یک جواب بدهند: حروفِ کوچک، «ي/ى/ك»ِ عربی →
+#: «ی/ک»ِ فارسی، و بی‌نیم‌فاصله و نشانهٔ جهت — وگرنه «میشود» «می‌شود» را پیدا نمی‌کرد.
+_FOLD = str.maketrans({"\u064a": "\u06cc", "\u0649": "\u06cc", "\u0643": "\u06a9",
+                       "\u200c": None, "\u200d": None, "\u200e": None, "\u200f": None})
+
+
+def _fold(s: str) -> str:
+    return s.lower().translate(_FOLD)
+
+
 def _texts_rows(lang: str, q: str, cat: str, edited_only: bool) -> tuple[list[dict], dict[str, int]]:
-    """ردیف‌های صفحهٔ متن‌ها + شمارِ هر دسته (با همان جست‌وجو و فیلترِ «ویرایش‌شده»)."""
+    """**همهٔ** متن‌های یک زبان به ترتیبِ دسته، هر کدام با `shown` + شمارِ هر دسته.
+
+    فیلتر ردیف را حذف نمی‌کند، فقط `shown=False` می‌دهد (قالب `hidden` می‌گذارد):
+    `panel.js` همان فیلتر را درجا اعمال می‌کند، پس عوض‌کردنِ دسته یا جست‌وجو دیگر
+    صفحه را از نو نمی‌سازد — قبلاً می‌ساخت و ویرایشِ ذخیره‌نشده بی‌صدا از بین می‌رفت.
+    بی‌JS همین `hidden` همان فیلترِ سمتِ سرور است. شمارِ هر دسته با جست‌وجو و
+    «فقط ویرایش‌شده‌ها» حساب می‌شود، نه با خودِ دسته (تراشه‌ها همین را نشان می‌دهند).
+    """
     ov = textstore.lang_texts(lang)
-    ql = q.strip().lower()
+    ql = _fold(q.strip())
     counts: dict[str, int] = {"all": 0}
-    rows: list[dict] = []
+    by_cat: dict[str, list[dict]] = {c: [] for c in _TEXT_CAT_IDS}
     for key in _TEXT_KEYS:
         default = _text_default(lang, key)
         override = ov.get(key)
         current = override if override is not None else default
-        if ql and ql not in key.lower() and ql not in default.lower() and ql not in current.lower():
-            continue
-        if edited_only and override is None:
-            continue
         c = _text_cat(key)
-        counts["all"] += 1
-        counts[c] = counts.get(c, 0) + 1
-        if cat != "all" and c != cat:
-            continue
-        rows.append({"key": key, "cat": c, "default": default, "current": current,
-                     "edited": override is not None,
-                     "ph": sorted({"{%s}" % m for m in _PH.findall(default)}),
-                     "lines": min(8, max(1, current.count("\n") + 1))})
-    return rows, counts
+        hit = (not ql or any(ql in _fold(x) for x in (key, default, current))) \
+            and (override is not None or not edited_only)
+        if hit:
+            counts["all"] += 1
+            counts[c] = counts.get(c, 0) + 1
+        by_cat[c].append({"key": key, "cat": c, "default": default, "current": current,
+                          "edited": override is not None, "shown": hit and cat in ("all", c),
+                          "ph": sorted({"{%s}" % m for m in _PH.findall(default)}),
+                          "lines": min(8, max(1, current.count("\n") + 1))})
+    return [r for c in _TEXT_CAT_IDS for r in by_cat[c]], counts
 
 
 def _texts_state(lang: str, q: str, cat: str, edited: bool) -> dict:
@@ -2516,18 +2536,27 @@ async def texts_page(request: web.Request) -> web.Response:
     cat = _choice(request.query.get("cat"), ("all",) + _TEXT_CAT_IDS, "all")
     edited = request.query.get("edited") == "1"
     rows, counts = _texts_rows(lang, q, cat, edited)
+    groups = [{"id": c, "rows": [r for r in rows if r["cat"] == c]} for c in _TEXT_CAT_IDS]
+    groups = [dict(g, shown=any(r["shown"] for r in g["rows"])) for g in groups if g["rows"]]
     n_edited = sum(1 for k in textstore.lang_texts(lang) if k in langpack.TEXT_KEYS)
     state = _texts_state(lang, q, cat, edited)
     return await _page(request, "texts", "texts", admin_id=admin_id, lang_sel=lang, langs=langs,
-                       q=q, cat=cat, edited=edited, rows=rows, counts=counts,
-                       cats=("all",) + _TEXT_CAT_IDS, total=len(_TEXT_KEYS), n_edited=n_edited,
-                       state=state, qs=lambda **kw: _qs(state, **kw), text_dir=_text_dir(lang))
+                       q=q, cat=cat, edited=edited, groups=groups, counts=counts,
+                       n_shown=sum(1 for r in rows if r["shown"]),
+                       cats=("all",) + _TEXT_CAT_IDS, cat_icons=_TEXT_CAT_ICON, total=len(_TEXT_KEYS),
+                       n_edited=n_edited, state=state, qs=lambda **kw: _qs(state, **kw),
+                       text_dir=_text_dir(lang))
 
 
 def _texts_back(form, lang: str) -> dict:
     return _texts_state(lang, str(form.get("q") or "")[:80],
                         _choice(str(form.get("cat") or ""), ("all",) + _TEXT_CAT_IDS, "all"),
                         str(form.get("edited") or "") == "1")
+
+
+def _wants_json(request: web.Request) -> bool:
+    """درخواستِ `fetch`ِ `panel.js` که پاسخِ JSON می‌خواهد — نه فرمِ معمولیِ بی‌JS."""
+    return "application/json" in request.headers.get("Accept", "")
 
 
 async def texts_save(request: web.Request) -> web.Response:
@@ -2537,9 +2566,21 @@ async def texts_save(request: web.Request) -> web.Response:
     نامعتبر یعنی هیچ‌کدام ذخیره نمی‌شود و فهرستِ کلید+دلیل برمی‌گردد. مقدارِ برابر
     با پیش‌فرض یعنی «override را بردار». فرمِ قدیمیِ تک‌کلیدی (`key`+`value`) هم
     پذیرفته می‌شود.
+
+    دو پاسخ، یک قاعده: فرمِ بی‌JS ریدایرکت می‌گیرد (`_result`)، و `fetch`ِ
+    `panel.js` (`Accept: application/json`) JSON — تا صفحه **رفرش نشود و به بالا
+    نپرد**: ردیف‌های ذخیره‌شده درجا به‌روز می‌شوند و خطای هر کلید زیرِ همان ردیف
+    می‌نشیند، با متنی که ادمین نوشته. پیش از این هر ذخیره صفحه را از نو می‌ساخت،
+    اسکرول به بالا می‌رفت و ردِ اعتبارسنجی متنِ تایپ‌شده را دور می‌ریخت. نشستِ
+    منقضی در JSON ۴۰۱ است نه ریدایرکت به `/login`، وگرنه fetch صفحهٔ ورود را با
+    ۲۰۰ می‌گرفت و ویرایش‌ها بی‌دلیلِ گفته‌شده ذخیره نمی‌شدند.
     """
-    _need_admin(request)
     ui = _PREFS.get()[0]
+    as_json = _wants_json(request)
+    if as_json and not _session_admin(request):
+        return web.json_response({"ok": False, "login": True, "msg": pt(ui, "tx.err.session")},
+                                 status=401)
+    _need_admin(request)
     form = await request.post()
     langs = await _languages(refresh=True)
     raw_lang = (form.get("lang") or "").strip()
@@ -2547,37 +2588,68 @@ async def texts_save(request: web.Request) -> web.Response:
     back = _texts_back(form, lang)
     # زبانِ ناشناخته و کلیدِ ناشناخته دو خطای متفاوت‌اند و باید متفاوت گفته شوند.
     if raw_lang not in langs:
-        raise _result("/texts", err=pt(ui, "tx.err.lang", l=raw_lang), **back)
+        msg = pt(ui, "tx.err.lang", l=raw_lang)
+        if as_json:
+            return web.json_response({"ok": False, "msg": msg, "errors": {}}, status=400)
+        raise _result("/texts", err=msg, **back)
     posted: list[tuple[str, str]] = [(k[2:], str(v)) for k, v in form.items() if k.startswith("v:")]
     if form.get("key") is not None:
         posted.append((str(form.get("key") or "").strip(), str(form.get("value") or "")))
     changes: dict[str, str | None] = {}
-    errors: list[str] = []
+    defaults: dict[str, str] = {}
+    errors: dict[str, str] = {}
     for key, value in posted:
         if key not in langpack.TEXT_KEYS:
-            errors.append(pt(ui, "tx.err.key", k=key[:60]))
+            errors[key[:60]] = pt(ui, "tx.err.key", k=key[:60])
             continue
         value = value.replace("\r\n", "\n")
-        default = _text_default(lang, key)
+        default = defaults[key] = _text_default(lang, key)
         if value.strip() == default.strip():          # برابرِ پیش‌فرض = حذفِ override
             changes[key] = None
             continue
-        err = textstore.validate(default, value)
+        err = textstore.validate(default, value, lang=ui)
         if err:
-            errors.append(f"{key}: {err}")
+            errors[key] = err
         else:
             changes[key] = value
     if errors:
-        raise _result("/texts", err=" · ".join(errors[:3]), **back)
+        if as_json:
+            return web.json_response({"ok": False, "errors": errors,
+                                      "msg": pt(ui, "tx.err.n", n=Fmt(ui).num(len(errors)))}, status=400)
+        shown = [msg if k not in langpack.TEXT_KEYS else f"{k}: {msg}" for k, msg in errors.items()]
+        raise _result("/texts", err=" · ".join(shown[:3]), **back)
     ov = textstore.lang_texts(lang)
     sets = {k: v for k, v in changes.items() if v is not None and ov.get(k) != v}
     clears = [k for k, v in changes.items() if v is None and k in ov]
     if sets or clears:
         await textstore.set_texts(lang, sets, clear=clears)
-        keys = list(sets) + clears
-        await _audit(request, "text_save", target=keys[0] if len(keys) == 1 else "",
-                     lang=lang, n=len(keys))
-    raise _result("/texts", ok="tx.saved.ok", **back)
+        # برگرداندن به پیش‌فرض «ویرایش» نیست: با JS دکمهٔ «برگرداندن» هم از همین مسیر
+        # ذخیره می‌شود، و بدونِ این تفکیک لاگِ ادمین آن را «ویرایشِ متن» می‌نوشت.
+        if sets:
+            await _audit(request, "text_save", target=next(iter(sets)) if len(sets) == 1 else "",
+                         lang=lang, n=len(sets))
+        if clears:
+            await _audit(request, "text_reset", target=clears[0] if len(clears) == 1 else "",
+                         lang=lang, n=len(clears))
+    if not as_json:
+        raise _result("/texts", ok="tx.saved.ok", **back)
+    f = Fmt(ui)
+    ov = textstore.lang_texts(lang)
+    n_set, n_clear = len(sets), len(clears)
+    if not (n_set or n_clear):
+        msg = f.t("tx.saved.none")
+    elif not n_set:
+        msg = f.t("tx.reset.ok") if n_clear == 1 else f.t("tx.reset.n", n=f.num(n_clear))
+    else:
+        msg = f.t("tx.saved.one") if n_set + n_clear == 1 else f.t("tx.saved.n", n=f.num(n_set + n_clear))
+    n_edited = sum(1 for k in ov if k in langpack.TEXT_KEYS)
+    return web.json_response({
+        "ok": True, "msg": msg,
+        "saved": {k: {"value": ov.get(k, defaults[k]), "edited": k in ov, "default": defaults[k]}
+                  for k in changes},
+        "n_edited": n_edited, "n_edited_t": f.num(n_edited),
+        "sub": f.t("tx.sub", n=f.num(len(_TEXT_KEYS)), e=f.num(n_edited)),
+    })
 
 
 async def texts_reset(request: web.Request) -> web.Response:

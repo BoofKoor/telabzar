@@ -320,52 +320,79 @@ def _fields(text: str) -> set[str]:
     return out
 
 
+#: پیام‌های اعتبارسنجی به دو زبانِ پنل. پیش‌فرض فارسی است (ربات، `/admin` و بستهٔ
+#: زبان همان را می‌گیرند)؛ پنل زبانِ خودش را می‌دهد، وگرنه ادمینِ پنلِ انگلیسی
+#: خطای ذخیرهٔ یک متن را فارسی می‌دید.
+_MSG: dict[str, tuple[str, str]] = {
+    "empty": ("متن نمی‌تواند خالی باشد.", "The text cannot be empty."),
+    "long": ("متن خیلی بلند است (بیشینه {n}).", "The text is too long (at most {n})."),
+    "syntax": ("نحوِ placeholder نادرست است ({{ }} را بررسی کن).",
+               "Broken placeholder syntax (check the {{ }})."),
+    "unsafe": ("placeholder فقط به شکلِ {{نام}} مجاز است، بدونِ «.» «[ ]» «:» «!» — {bad}",
+               "A placeholder may only be {{name}}, without . [ ] : ! — {bad}"),
+    "unknown": ("placeholderِ ناشناخته: {names}", "Unknown placeholder: {names}"),
+    "gone": ("placeholderِ جاافتاده: {names}", "Missing placeholder: {names}"),
+    "format": ("متن تمیز فرمت نمی‌شود ({{ }} را بررسی کن).",
+               "The text does not format cleanly (check the {{ }})."),
+    "tag": ("تگِ غیرمجاز: {tag}", "Tag not allowed: {tag}"),
+    "mismatch": ("تگِ ناهماهنگ: {tag}", "Mismatched tag: {tag}"),
+    "unclosed": ("تگِ بسته‌نشده: {tag}", "Unclosed tag: {tag}"),
+    "html": ("HTMLِ نامعتبر: {err}", "Invalid HTML: {err}"),
+}
+
+
+def _msg(lang: str, code: str, **kw) -> str:
+    fa, en = _MSG[code]
+    return (en if lang == "en" else fa).format(**kw)
+
+
 class _HTMLCheck(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.stack: list[str] = []
-        self.err: str | None = None
+        self.err: tuple[str, str] | None = None   # (کدِ پیام, تگ)
 
     def handle_starttag(self, tag: str, attrs) -> None:
         if self.err:
             return
         if tag not in _ALLOWED_TAGS:
-            self.err = f"تگِ غیرمجاز: <{tag}>"
+            self.err = ("tag", f"<{tag}>")
             return
         self.stack.append(tag)
 
     def handle_startendtag(self, tag: str, attrs) -> None:  # <br/> و…
         if not self.err and tag not in _ALLOWED_TAGS:
-            self.err = f"تگِ غیرمجاز: <{tag}>"
+            self.err = ("tag", f"<{tag}>")
 
     def handle_endtag(self, tag: str) -> None:
         if self.err:
             return
         if tag not in _ALLOWED_TAGS:
-            self.err = f"تگِ غیرمجاز: </{tag}>"
+            self.err = ("tag", f"</{tag}>")
             return
         if not self.stack or self.stack[-1] != tag:
-            self.err = f"تگِ ناهماهنگ: </{tag}>"
+            self.err = ("mismatch", f"</{tag}>")
             return
         self.stack.pop()
 
 
-def _html_error(value: str) -> str | None:
+def _html_error(value: str, lang: str = "fa") -> str | None:
     p = _HTMLCheck()
     try:
         p.feed(value)
         p.close()
     except Exception as exc:  # noqa: BLE001
-        return f"HTMLِ نامعتبر: {exc}"
+        return _msg(lang, "html", err=exc)
     if p.err:
-        return p.err
+        return _msg(lang, p.err[0], tag=p.err[1])
     if p.stack:
-        return f"تگِ بسته‌نشده: <{p.stack[-1]}>"
+        return _msg(lang, "unclosed", tag=f"<{p.stack[-1]}>")
     return None
 
 
-def validate(default_text: str, value: str, *, require_all_placeholders: bool = False) -> str | None:
-    """پیامِ خطا (فارسی) اگر value نامعتبر است، وگرنه None.
+def validate(default_text: str, value: str, *, require_all_placeholders: bool = False,
+             lang: str = "fa") -> str | None:
+    """پیامِ خطا اگر value نامعتبر است، وگرنه None — به زبانِ `lang` (fa/en، پیش‌فرض fa).
 
     `require_all_placeholders` فقط برای **import** روشن می‌شود و شکافِ
     اندازه‌گیری‌شدهٔ زیر را می‌بندد: قاعدهٔ پایه فقط placeholderِ **اضافه** را رد
@@ -375,28 +402,28 @@ def validate(default_text: str, value: str, *, require_all_placeholders: bool = 
     چون افتادنِ یک placeholder محتمل‌ترین خطای آن است و **کاملاً خاموش**.
     """
     if not value.strip():
-        return "متن نمی‌تواند خالی باشد (برای حذفِ override از «بازگشت به پیش‌فرض» استفاده کن)."
+        return _msg(lang, "empty")
     if len(value) > _MAX_LEN:
-        return f"متن خیلی بلند است (بیشینه {_MAX_LEN})."
+        return _msg(lang, "long", n=_MAX_LEN)
     # placeholderها: فقط از placeholderهای موجود در پیش‌فرض استفاده شود
     try:
         vfields = _fields(value)
     except ValueError:
-        return "نحوِ placeholder نادرست است ({ } را بررسی کن)."
+        return _msg(lang, "syntax")
     bad = unsafe_placeholder(value)
     if bad:
-        return f"placeholder فقط به شکلِ {{نام}} مجاز است، بدونِ «.» «[ ]» «:» «!» — {bad}"
+        return _msg(lang, "unsafe", bad=bad)
     dfields = _fields(default_text)
     extra = vfields - dfields
     if extra:
-        return "placeholderِ ناشناخته: " + ", ".join("{" + e + "}" for e in sorted(extra))
+        return _msg(lang, "unknown", names=", ".join("{" + e + "}" for e in sorted(extra)))
     if require_all_placeholders:
         gone = dfields - vfields
         if gone:
-            return "placeholderِ جاافتاده: " + ", ".join("{" + g + "}" for g in sorted(gone))
+            return _msg(lang, "gone", names=", ".join("{" + g + "}" for g in sorted(gone)))
     # با مقادیرِ ساختگی تمیز فرمت شود (کشفِ { } خراب)
     try:
         value.format(**{f: "" for f in _fields(default_text)})
     except (KeyError, IndexError, ValueError):
-        return "متن تمیز فرمت نمی‌شود ({ } را بررسی کن)."
-    return _html_error(value)
+        return _msg(lang, "format")
+    return _html_error(value, lang)
