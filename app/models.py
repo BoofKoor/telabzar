@@ -69,7 +69,7 @@ class File(Base):
     #: آخرین باری که مالک لینکِ عمومی را خواست — مبدأِ انقضای `dl_link_days`.
     dl_token_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cover_id: Mapped[str | None] = mapped_column(String(256), nullable=True)  # کاورِ ویدیو
-    source: Mapped[str | None] = mapped_column(String(16), nullable=True)  # None/tg=آپلود · dl=دانلودی
+    source: Mapped[str | None] = mapped_column(String(16), nullable=True)  # None/tg=آپلود · dl=دانلودی · op=خروجیِ یک عملیات (از ۲۰۲۶-۱۰؛ قدیمی‌ترها None‌اند)
     # متنِ اصلیِ پستِ مبدأ (کپشنِ اینستاگرام، عنوان/توضیحِ یوتیوب) — خامِ **بدونِ HTML**؛
     # حالتِ جمع‌شدهٔ کارت آن را در بلاک‌کوتِ بسته نشان می‌دهد (سرِ رندر escape می‌شود).
     post_caption: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -30,7 +30,7 @@ Multiple processes over shared Redis + Postgres. Entry points:
 - **Download worker** — master runs `MasterDownloadWorkerSettings` (queue `arq:queue:dl:master`, via the compose `command:`); a **download node** runs `DownloadWorkerSettings` (queue `arq:queue:dl`). `routers/download.py:_dl_queue` sends `run_download` to `arq:queue:dl` when a download node is live (so it runs on the node's **clean IP**), else `arq:queue:dl:master`. No node → master does all downloads (zero regression). Both run `run_download`.
 - **Caddy** (compose service `caddy`, config `docker/caddy/Caddyfile`, since 2026-10) — the HTTPS front door on host ports 80/443. It gets and renews Let's Encrypt certificates **on demand** for exactly two names, both approved by the panel's `/tls/ask`: the panel domain (`PANEL_DOMAIN`, written by `install.sh`) → `admin:8080`, and the link domain (runtime key `link_domain`, set in the panel) → `gateway:8080`. Panel and gateway speak plain HTTP inside compose. See §6 «HTTPS».
 - **Gateway** (`python -m app.gateway`) — aiohttp file server for `/dl` + `/s` (stream) links; public through Caddy on the link domain.
-- **Admin panel** (`python -m app.admin_web`) — aiohttp web panel, Telegram-code login.
+- **Admin panel** (`python -m app.admin_web`) — aiohttp web panel, Telegram-code login; server-rendered Jinja, bilingual fa/en, light/dark, phone-first (rebuilt 2026-10; the Next.js `/console` is gone — §5 «Panel UI»).
 - **TG janitor** (`python -m app.tg_janitor`, compose service `tg-janitor`) — keeps the local Bot API server's file directory (`tg-bot-api-data`) from filling the disk; the only service besides `local-bot-api` that mounts it writable, and deliberately without `depends_on` (see §7).
 - **Node** (optional, remote) — a **worker on another machine**, joined over WireGuard, consuming one of the master's queues and heartbeating to the master's Redis. Three roles today: **download** (`arq:queue:dl`, `DownloadWorkerSettings`), **processing** (`arq:queue:proc`, `ProcessingWorkerSettings` = `run_op` on a dedicated queue), and **gateway** (a public `/dl` + `/s` reverse proxy, `python -m app.gateway_node` — **not** an ARQ worker). Download/processing are workers run with `NODE_ROLE` set (`bot.py` flips to `is_local=False`; `worker.py` spawns a heartbeat); the gateway node runs `gateway_node.py` (its own heartbeat). Heavy CPU ops route to a live processing node at enqueue time (`ops._op_queue` + `nodes.OFFLOAD_OPS`); link/stream traffic points at a gateway node via the `stream_base` setting; no node → everything stays on the master (zero regression). Master-side glue in `app/nodes.py` + panel; see §Nodes below.
 
@@ -45,31 +45,36 @@ processing (`processing.py`, `downloader.py`) → delivery (`cards.py`, or `gate
 | `app/bot.py` | `Bot`/`Dispatcher` factories; router order **start → admin → ops → download → files** |
 | `app/config.py` | `Settings` (pydantic-settings) — all env vars; `admin_id_set` property |
 | `app/db.py` | Async engine/sessionmaker; `init_models()` = `create_all` + lightweight `_MIGRATIONS` (no Alembic) |
-| `app/models.py` | ORM: `User`, `File` (+`post_caption` = متنِ خامِ پستِ مبدأ، `platform` = پلتفرمِ مبدأ), `Setting`, `DownloadCache`, `Job`, `TextOverride`, `ButtonStyle`, `MenuButton`, `Node`, `Language` (زبانِ **افزوده‌شده** — فقط نامِ نمایشی؛ fa/en ردیف ندارند). `LANG_LEN = 16` = عرضِ **هر سه** ستونِ کدِ زبان (`User.lang`, `TextOverride.lang`, `Language.code`) |
-| `app/middlewares.py` | `DataMiddleware`: per-update DB session, get/create user, inject `lang`+`is_admin`, block-gate; `get_or_create_user` در برابرِ درجِ هم‌زمانِ کاربرِ تازه تحمل‌پذیر است (rollback + خواندنِ دوباره، فاز ۲ِ ممیزی) |
+| `app/models.py` | ORM: `User`, `File` (+`post_caption` = متنِ خامِ پستِ مبدأ، `platform` = پلتفرمِ مبدأ), `Setting`, `DownloadCache`, `Job`, `TextOverride`, `ButtonStyle`, `MenuButton`, `Node`, `Language` (زبانِ **افزوده‌شده** — فقط نامِ نمایشی؛ fa/en ردیف ندارند), `DownloadEvent` (یک ردیف به‌ازای هر **پایانِ** یک دانلود: `ok`/`fail`/`blocked`/`refused`/`cancelled`؛ `owner_id` عمداً FK نیست چون لاگ است)، `AdminAction` (لاگِ کارهای ادمین در پنل؛ `detail` هرگز راز ندارد). `User.username`/`full_name` = نامِ تلگرامی، فقط برای پنل. `File.source` = تهی/`tg` آپلود · `dl` دانلود · `op` خروجیِ یک عملیات (از ۲۰۲۶-۱۰؛ خروجی‌های قدیمی‌تر تهی‌اند). `LANG_LEN = 16` = عرضِ **هر سه** ستونِ کدِ زبان (`User.lang`, `TextOverride.lang`, `Language.code`) |
+| `app/middlewares.py` | `DataMiddleware`: per-update DB session, get/create user, inject `lang`+`is_admin`, block-gate; `get_or_create_user` در برابرِ درجِ هم‌زمانِ کاربرِ تازه تحمل‌پذیر است (rollback + خواندنِ دوباره، فاز ۲ِ ممیزی)، و یوزرنیم/نامِ تلگرامی را با همان commitِ `last_seen` فقط وقتی عوض شده می‌نویسد (`_tg_names` به عرضِ ستون می‌بُرد)؛ یوزرنیمِ **برداشته‌شده** پاک می‌شود، چون یوزرنیمِ رهاشده در تلگرام به کسِ دیگری می‌رسد |
 | `app/routers/start.py` | `/start`، انتخابِ زبان، و منوهای کاربر (خوش‌آمد ↔ تنظیمات ↔ آموزش ↔ زبان). فهرستِ زبان از `i18n.available_languages()` می‌آید نه هاردکد؛ تفکیکِ «انتخابِ اول» از «تغییر از تنظیمات» از **حالتِ** `user.lang` مشتق می‌شود نه از callback |
 | `app/routers/admin.py` | `/admin` (list/get/set/reset/health) + `/panel`, admin-only; کوکیِ تلگرامی: `cookie_paste` (پیامِ هم‌اندازهٔ سقفِ ۴۰۹۶ واحدِ UTF-16 ذخیره **نمی‌شود**) و `cookie_file` (همان کوکی به‌صورتِ ‎.txt)، هر دو پشتِ همان گیتِ `ckwait:` و `SkipHandler` |
 | `app/routers/files.py` | `on_file` intake → `File` row → card; text fallback |
 | `app/routers/ops.py` | All op button/FSM handlers; `_enqueue`; `_op_queue` (routes heavy ops to a live processing node's `arq:queue:proc`); limits; collection (zip/merge/img_pdf/vjoin) flow; `_link_base` = پایهٔ لینک به این ترتیب: `stream_base` (فقط با نودِ gatewayِ زنده) → `https://<link_domain>` → `public_base`ِ قدیمی |
-| `app/routers/download.py` | URL intake, platform UX (probe/quick), dl limits, `Dl` menu |
+| `app/routers/download.py` | URL intake, platform UX (probe/quick), dl limits, `Dl` menu; تحویلِ آنی از کش هم یک ردیفِ `download_events` می‌گیرد (`_record_cached`) — جابی ساخته نمی‌شود، پس ثبتش همین‌جاست نه در ورکر |
 | `app/keyboards.py` | `OPS_BY_KIND` menus, card/collection/download keyboards; `file_card_kb` applies the admin menu layout (order + hidden + per-button width→rows via `_rows_from_widths`); منوهای کاربر از دو فهرستِ **اعلانیِ** `HOME_ITEMS`/`SETTINGS_ITEMS` ساخته می‌شوند (`home_kb`/`settings_kb`/`back_kb` روی `_nav_kb`)، و `lang_keyboard(langs, lang, …)` فهرست را **پارامتر** می‌گیرد تا sync بماند |
 | `app/callbacks.py` | Typed `CallbackData` factories (<64 B): `Act,Conv,Meta,Cmp,Wm,Rsz,Rot,Spd,Tr,Dl,Lang,Nav` |
 | `app/states.py` | FSM states (rename, meta edit, watermark, trim, screenshot, collect, …) |
 | `app/cards.py` | Send/update the card (file + keyboard), spawn new cards, progress note; **two caption views** — `card_caption()` (open: plain name + info line, no wrapper quote) and `post_view()` (collapsed: the source post's own text in a closed `<blockquote expandable>`), picked by `view_caption(collapsed=…)`; `_video_extra()` forwards duration/dims/cover to Telegram; `message_media_mime()` = mimeِ پیامی که تلگرام واقعاً نگه داشت — منبعِ `File.mime` بعد از هر تحویل (فاز ۴) |
-| `app/tasks.py` | `run_op` (ARQ) + `_do_op` op dispatch; live status ticker; `_localize()` resolves every input to a local path — disk path on the master, HTTP download on a remote node (the only remote-input seam); `_outgoing_paths()`+`_too_big_to_send()` = the upload-ceiling gate, one check ahead of all four delivery branches; `_safe_stem()` strips only a **real** extension (`\.[A-Za-z0-9]{1,5}`), so «Mr. Brightside» stays whole |
-| `app/tasks_download.py` | `run_download` (ARQ): probe→menu / fetch→size-check→spawn; rich-post/album delivery. **خواندنِ خطای یوتیوب** (۲۰۲۶-۰۹): `_yt_kind` (فقط یوتیوب/پلتفرمِ ماچ) → `_error_class` (نگاشتِ `_YT_KIND_CLASS`، وگرنه `ck.classify_error`) و `_is_cookie_error` (اول نوع، بعد نشانه‌های عمومی)؛ `_YT_NOT_ACCOUNT_KINDS` = نوع‌هایی که نه تقصیرِ اکانت‌اند نه خروجی (نه `failures`، نه `note_exit`)؛ `_yt_fail_text` پیامِ مشخصِ کاربر؛ `_ytauth_metric` → `dlstat:ytauth:<phase>:<anon\|cookie>:<outcome>:<day>` (TTL **هشت** روز) |
+| `app/tasks.py` | `run_op` (ARQ) + `_do_op` op dispatch; live status ticker; `_localize()` resolves every input to a local path — disk path on the master, HTTP download on a remote node (the only remote-input seam); `_outgoing_paths()`+`_too_big_to_send()` = the upload-ceiling gate, one check ahead of all four delivery branches; `_safe_stem()` strips only a **real** extension (`\.[A-Za-z0-9]{1,5}`), so «Mr. Brightside» stays whole; the spawned card's `File` row gets `source="op"` so the panel does not count an op output as an upload |
+| `app/tasks_download.py` | `run_download` (ARQ): probe→menu / fetch→size-check→spawn; rich-post/album delivery. `run_download` is a thin shell around `_run_download` that writes one `download_events` row for whatever outcome an exit path settled (`dl_events.start`/`settle`/`record`; the **first** settle wins, so an outer `finally` never overwrites a precise inner outcome with «crash»). **خواندنِ خطای یوتیوب** (۲۰۲۶-۰۹): `_yt_kind` (فقط یوتیوب/پلتفرمِ ماچ) → `_error_class` (نگاشتِ `_YT_KIND_CLASS`، وگرنه `ck.classify_error`) و `_is_cookie_error` (اول نوع، بعد نشانه‌های عمومی)؛ `_YT_NOT_ACCOUNT_KINDS` = نوع‌هایی که نه تقصیرِ اکانت‌اند نه خروجی (نه `failures`، نه `note_exit`)؛ `_yt_fail_text` پیامِ مشخصِ کاربر؛ `_ytauth_metric` → `dlstat:ytauth:<phase>:<anon\|cookie>:<outcome>:<day>` (TTL **هشت** روز) |
 | `app/processing.py` | ffmpeg/Pillow ops; `_run` subprocess contract (progress/cancel/`ProcessingCancelled`); `start_cancel_watcher`/`CancelWatch` = the **single** cancel-polling mechanism, shared with `downloader._run_dl`; `_run` errors name the **actual** tool (`cmd[0]`), not «ffmpeg»; `_DELIVERY_VF` = 8-bit 4:2:0 + even dims for every re-encode meant for delivery (trim/convert/watermark); `_upright()` = the **only** `Image.open` in the module (EXIF orientation applied); `_exclusive()` = Whisper/rembg thread runner whose semaphore is held until the **thread** ends, with cooperative `stop`; `_meta_plan()` = audio-tag container chosen from the **codec**; RAR goes through `UNRAR` (`unrar-free`), everything else through 7z |
 | `app/downloader.py` | Engine routing (`platform_of`/`engine_for`), yt-dlp/gallery-dl/cobalt, and the shared **match** path for DRM platforms (`download_matched` + `_resolve_reference` → `spotify_resolve` / `apple_resolve`), YT-match scorer; **direct-file engine** (`probe_direct`/`download_direct`/`is_direct_response`/`direct_filename`, `DirectTooLarge`) for plain download links; **کست‌باکس** (`castbox_ids`/`castbox_target` خالص و بی‌شبکه + `resolve_castbox` که گاردِ SSRF را سوار می‌کند)؛ **نوعِ خطای یوتیوب** — `YT_*` + `_YT_KIND_HINTS` + `youtube_error_kind()` (تنها خوانندهٔ متنِ خطای یوتیوب؛ `is_youtube_botcheck` رویش سوار است) و `YT_CONTENT_KINDS`؛ `is_pot_crash()` = تنها گیتِ «یک‌بار بدونِ pot» (fetch **و** `download_matched`)؛ `_stderr_summary` = خلاصهٔ stderrِ موتور (`\r` خط نمی‌شکند — §۷)؛ `_common_flags` = `--playlist-items 1` (لینکِ پلی‌لیست/کانال فقط آیتمِ اول) و `GALLERY_MAX_ITEMS` = سقفِ `--range`ِ gallery-dl (۲۰، سقفِ کاروسلِ اینستاگرام)؛ `normalize_probe` پوستهٔ پلی‌لیستِ تک‌آیتمی را باز می‌کند |
 | `app/settings_store.py` | Runtime config: Postgres (durable) + Redis (live, read-through); `RUNTIME_KEYS`/`ENUM_VALUES`; پرکردنِ کشِ read-through با `SET NX` (نویسنده همیشه برنده) و هر کلیدِ `cfg:` با TTLِ `_CACHE_TTL` (فاز ۴)؛ **دامنه‌ها (۲۰۲۶-۱۰):** `normalize_domain` (شکلِ کانونیک: حروفِ کوچک، بی نقطهٔ پایانی، punycode؛ پورت/مسیر/IP/wildcard رد) · `panel_domain()` (از env، عمداً runtime نیست) · `link_domain()` = **تنها خوانندهٔ** کلیدِ `link_domain` (هم `_link_base`ِ ربات هم `/tls/ask`ِ پنل) · اعتبارسنجی‌اش در `validate_value` (نه برابرِ دامنهٔ پنل، نه روی نصبِ `TLS_CERT`دار) |
 | `app/textstore.py` | Runtime UI overrides: bot texts/labels, per-op button `style`+`icon_emoji_id`, **and per-kind card menu layout** (`TextOverride`/`ButtonStyle`/`MenuButton`, Postgres) via one in-process dict reloaded on the Redis `txtver` counter; `validate(…, require_all_placeholders=)`, `clean_button()`, `get_menu_layout()`; **نوشتنِ دسته‌ای** `set_texts(lang, mapping, replace=)` (یک تراکنش، **یک** bump — نه `set_text` در حلقه)، `lang_texts()`, `drop_lang()`, و ثبتِ زبان (`languages`/`add_language`/`remove_language`); `unsafe_placeholder()` = placeholder فقط `{نام}` (بدونِ صفت/اندیس/spec/conversion) — هم `validate` و هم `i18n._fmt` می‌پرسندش؛ `set_texts(clear=)` (فاز ۴) |
-| `app/admin_web.py` | Web panel: settings/texts/buttons/health/users/stats/cookies/**nodes**/**langs**; `_languages()` = پوستهٔ نازک روی `i18n.available_languages()` (فقط `refresh_if_stale` را اضافه می‌کند؛ **سازنده از فاز C به `i18n` منتقل شد** چون ربات هم همان فهرست را می‌خواهد و نمی‌تواند این ماژول را import کند) + `_pick_lang()`؛ `/langs` + `/langs/{export,import,delete}`; `_rate_limit`/`_client_ip` = سقفِ نرخِ مسیرِ لاگین (per-admin **و** per-IP؛ `_client_ip` از ۲۰۲۶-۱۰ `X-Forwarded-For` را **فقط از همتای داخلی** — یعنی Caddy — می‌خواند)؛ **HTTPS:** `tls_ask` (`/tls/ask`، عمومی — گیتِ صدورِ Caddy، فقط دامنهٔ پنل و `link_domain`؛ خواندنِ تنظیمات کران‌دار و روی خطا «نه») · `_tls_status`/`_cert_info` (کارتِ HTTPSِ سلامت از انبارِ Caddy روی `/caddy-data`، بی‌شبکه) · `_tls_warm`/`_schedule_tls_warm` (یک handshake با SNIِ دامنهٔ لینک بعد از هر ذخیره، تا سرتیفیکیت همان لحظه صادر شود)؛ `_pot_health`/`_pot_refresh` = سلامتِ pot-provider از کش، با تازه‌سازیِ پس‌زمینه (هرگز روی مسیرِ درخواست)؛ `_users_cached` + شمارندهٔ نسخهٔ `userscache:ver`; `GROUPS` = ردیف‌های **برچسب‌خوردهٔ** فرمِ تنظیمات و `_setting_groups()` = همان به‌علاوهٔ گروهِ خودکارِ ته‌مانده‌های `RUNTIME_KEYS` (تنها منبعِ **هم** رندر **هم** `save()`); `_badge_of()` = کلاسِ بجِ وضعیتِ اکانت، تنها جایی که پیش‌فرضِ ناشناخته تعریف می‌شود; `_CSS` = فقط **خواندنِ** `app/static/css/panel.css` (طراحی آن‌جاست، نه این‌جا — §Panel UI)؛ `_TEMPLATE_DIR`/`_STATIC_DIR` هر دو به `__file__` لنگر می‌خورند و `..` ندارند; node join API (`/node/join`) + install-script (`/node/install.sh`) + `/node/peers` (WG peer config for host `wg-sync`, gated by `NODE_SECRET`); `console_page` + `_CONSOLE_DIR` = سرو کردنِ کنسولِ Next از `app/static/console/` (فقط HTML گِیتِ نشست دارد، دارایی‌ها نه)؛ `console_api` = دادهٔ **واقعیِ** کنسول روی `/api/console` (۴۰۱ می‌دهد نه ریدایرکت، و محاسبه را از `_stats_cached`/`_health` **قرض می‌گیرد** نه اینکه تکرار کند) + `_CONSOLE_GAPS` = فهرستِ **نام‌بردهٔ** پنل‌هایی که منبعِ واقعی ندارند، که در payload می‌رود تا صفحه به‌جای عددِ ساختگی علتش را نشان بدهد؛ `console_page_api` + `_CONSOLE_PAGES` = دادهٔ اختصاصیِ نُه صفحهٔ دیگر روی `/api/console/<page>` (نگاشتِ **صریح** است نه `getattr` روی نامِ صفحه، وگرنه یک مسیرِ کاربر هر تابعی را در ماژول صدا می‌زند)، و هر سازنده از همان تابعی می‌خواند که صفحهٔ Jinja می‌خواند — `_page_keyboard` مشخصاً `keyboards._resolved_menu`/`_rows_from_widths` را صدا می‌زند تا **کپیِ نهمِ** قراردادِ کیبورد ساخته نشود. **Preloads + per-page-refreshes `textstore`** so a restart never shows/saves defaults over real overrides. Known gap (2026-10-08 review): `_render` defaults `mesh` to `()` and no handler fills it, so the rail's node-mesh block always reads «بدونِ نود» even with nodes online |
-| `panel/` (Next.js) | کنسولِ `/console` — **ده صفحه** به زبانِ طراحیِ واحد. `lib/nav.ts` تنها منبعِ ناوبری (و `legacy` هر ردیف به صفحهٔ Jinja متناظر گره خورده، با گاردِ دوطرفه)، `lib/zones.ts` سه لهجهٔ رنگیِ **مکان‌محور** (SYSTEM سبز / CONTROL آبی / PIPE بنفش) که پوسته به‌شکلِ `--zone` روی ریشه می‌گذارد و همه از همان می‌خوانند — به‌علاوهٔ `PLATFORM_HUE` که رنگِ هر پلتفرم را در رادار و جدول یکی نگه می‌دارد؛ **قیدِ سخت: رنگِ ناحیه هرگز جای رنگِ وضعیت را نمی‌گیرد** (خوب/هشدار/بد همیشه سبز/زرد/قرمز می‌مانند، وگرنه صفحهٔ بنفش خطا را بنفش نشان می‌دهد)، `lib/theme.ts` تنها منبعِ رنگ (عیناً از سورسِ طرح)، `lib/data.ts` ریاضیِ **قطعیِ** `noise/gauge/spark/bigRows`، `lib/pages.ts` دادهٔ نمایشیِ صفحاتِ دیگر، `lib/useConsole.ts` حلقهٔ زنده (دو تایمر، فقط بعد از mount)، `components/Shell.tsx` پوستهٔ مشترک که **تنها** حلقهٔ زنده را دارد و با render-prop به صفحه می‌دهد (دو حلقه یعنی عددِ نوارِ بالا با بدنه فرق کند)، `components/Section.tsx` جعبهٔ کادرِ ۲پیکسلی با برچسبِ **روی خط**، `components/ui.tsx` قطعاتِ مشترک — از جمله `<Fa>` که **هر** دادهٔ فارسی باید از آن رد شود (فونتِ متنی + `dir=rtl` + ایزوله؛ فارسیِ داخلِ مونو حروفش نمی‌چسبد). خروجی `output: 'export'` است، پس **صفر Node در تولید** — مرحلهٔ Node فقط در `docker/admin.Dockerfile` می‌دود. **کد حقیقت است (بازبینیِ ۲۰۲۶-۱۰-۰۸):** با وجودِ دادهٔ واقعیِ `/api/console`، چند ویجت هنوز مقدارِ **هاردکد یا ساختگی** رندر می‌کنند: ساعت و `uid:10345298`ِ `Header.tsx`، نوارِ رویدادِ `ticker` و `latNow`/`latSpark`ِ `useConsole.ts`، اسپارک‌لاینِ KPIها و جدولِ پلتفرم (`spark(seed)`)، چندضلعیِ PREVِ رادار، `17/min` و `p50 41s`ِ `Pipeline.tsx`، پاورقیِ `wg0 10.8.0.1/24`ِ `Sidebar.tsx`، نشانِ `TRENDING` و دکمه‌های بی‌هندلرِ FREEZE/EXPORTِ `Hero.tsx`، و بج‌های ثابتِ `5/6`/`1↓`/`2!`/`3` در `lib/nav.ts` |
-| `app/panel_i18n.py` | متن‌های **خودِ پنل** (نه ربات): `STRINGS` (fa/en)، `pt(lang, key)` (کلیدِ ناشناخته → خودِ کلید، تا جاافتادگی دیده شود)، `LANGS`/`DIR`/`THEMES` و `normalize_lang`/`normalize_theme` برای کوکی‌های `/prefs`. بی‌دیتابیس و بی‌وابستگی به `admin_web`، تا jobِ اصلیِ تست ببیندش |
-| `app/panel_glyphs.py` | `lcd(text)` = عددِ کانونیِ پنل به‌شکلِ شبکهٔ نقطه‌ایِ ۵×۷ (اسلبِ `/health` و `/stats`) |
-| `app/nodes.py` | Distributed **master-side** node layer: `ROLES` (download, processing, gateway), `OFFLOAD_OPS`, `role_online()`, `reap_orphan_jobs()` (proc→master when no proc node) + `note_job_done()`/`reaped_count()` counters, signed one-time WireGuard join token, WG-IP allocation, live registry (Redis `node:{id}` heartbeat, 45 s TTL), WG peer add/remove + `render_peers()` (declarative peer config from the `Node` table), `node_config()` (join reply — worker roles carry `queue`+`settings`, service roles carry `command`) |
+| `app/admin_web.py` | پنلِ وب (aiohttp + Jinja، server-rendered، دوزبانه fa/en، روشن/تیره، گوشی‌محور) — از بازطراحیِ ۲۰۲۶-۱۰ **تنها** پنل است (کنسولِ Next حذف شد). صفحه‌ها: `/` داشبورد · `/activity` (تبِ دانلودها/عملیات/لاگِ ادمین، با sheetِ جزئیات) · `/reports` · `/users` · `/cookies` · `/nodes` · `/system` · `/texts` · `/buttons` · `/langs` · `/settings` · `/search` (+`/api/search`)؛ `/health` و `/stats` به `/system` و `/reports` ریدایرکت می‌شوند (`moved_health`/`moved_stats`). **فقط رندر می‌کند: هر عدد از `panel_data` می‌آید** و هر قالب‌بندی از `Fmt` (پوستهٔ نازک روی `panel_fmt` به زبانِ پنل). `NAV` = منوی اعلانی (هر آیتم ته‌رنگِ `nN`ِ خودش؛ `_NAV_TINT` همان را `tN` می‌کند)؛ `_shell` = هرچه پوسته روی هر صفحه لازم دارد (ادمین، استخر، نودها، صف‌ها، دیسک، کارِ گیرکرده، TLS، سرویس‌ها، هشدارها) و `_page`/`_render` رندرِ صفحه (`_JS_KEYS` = متن‌هایی که به‌شکلِ `js_i18n` به `panel.js` می‌روند). نگاشت‌های ته‌رنگ/آیکونِ **موجودیت**: `_PLAT_TINT`, `_KIND_TINT`, `_OP_ICON`, `_ROLE_ICON`, `_LOG_ICON`؛ پیلِ وضعیت: `_JOB_PILL`/`_DL_PILL`/`_CK_PILL` از راهِ `Fmt.job_pill`/`dl_pill`/`ck_pill` (وضعیتِ کوکیِ **ناشناخته** عمداً `info` است نه `neutral` — جانشینِ `_badge_of`ِ قدیمی). **دارایی‌ها:** `_VERSIONED` (`css/panel.css`, `js/panel.js`, `icons.svg`, `favicon.svg`) از حافظه سرو می‌شوند؛ `asset_url()` = `?v=<sha256[:10]>`، نسخهٔ درست `immutable` یک‌ساله و نسخهٔ دیگر `no-cache`، gzip یک‌بار سرِ بارگذاری؛ فونت از دیسک با گاردِ پیمایشِ ساختاری. CSS دیگر **درون‌خطی تزریق نمی‌شود** (لینکِ هش‌دار). `_compress` = gzipِ HTML/JSONِ بالای ۱ کیلوبایت. **سرویس‌ها:** `_services` (+`_svc_cached`, `_probe_botapi`, `_probe_clamav`؛ `PROBES_ENABLED` را تست خاموش می‌کند) · `_pot_health`/`_pot_refresh` = سلامتِ pot از کش با تازه‌سازیِ پس‌زمینه (هرگز روی مسیرِ درخواست) · **HTTPS:** `tls_ask` (`/tls/ask`، عمومی — گیتِ صدورِ Caddy، فقط دامنهٔ پنل و `link_domain`؛ خواندنِ تنظیمات کران‌دار و روی خطا «نه») · `_tls_status`/`_cert_info` (از انبارِ Caddy روی `/caddy-data`، بی‌شبکه) · `_cert_sev` = **تنها** قاعدهٔ شدتِ سرتیفیکیت (≤`_CERT_WARN_DAYS`=۱۴ روز یا صادرنشده هشدار، ≤`_CERT_BAD_DAYS`=۳ بد) که کارت و هشدار هر دو از آن می‌خوانند · `_tls_warm`/`_schedule_tls_warm`. **کوکی‌ها:** `_known_cookie` = گیتِ هر کارِ روی یک اکانت (نامِ امن **و** حاضر در `ck_pool.list_names`)؛ بی آن، فرمِ کهنه یا POSTِ دست‌ساز متای شبح می‌نوشت (که `ckseen:` را هم مسلح می‌کرد) و «جایگزینی» اکانتِ حذف‌شده را زنده می‌کرد · `_mirror_all_cookies` (آینهٔ Redis سرِ استارت). **لاگِ ادمین:** `_audit(request, action, target, **detail)` → `admin_actions`، بهترین‌تلاش؛ `_audit_value` مقدارِ کلیدِ راز و userinfoِ پروکسی را می‌پوشاند؛ نامِ یک جزئیات نباید با پارامترهای خودِ `_audit` یکی شود (گاردش امضا را کشف می‌کند). **تنظیمات:** `_settings_sections()` = `panel_settings.SECTIONS` + بخشِ خودکارِ «بدون دسته» (`_settings_auto_keys`)، **تنها منبعِ هم رندر هم `save()`** (`/settings/save`؛ `/save` نامِ قدیمیِ همان هندلر است و تست‌ها هنوز از آن می‌روند). `_result()` تنها سازندهٔ ریدایرکتِ `ok=`/`err=` و `_flash` تنها خوانندهٔ آن (`ok` فقط کلیدِ شناخته‌شده)؛ `_safe_back` = مقصدِ بازگشت (کاراکترِ کنترلی، `//` و `\` رد). `_languages()` = پوستهٔ نازک روی `i18n.available_languages()` (فقط `refresh_if_stale` را اضافه می‌کند؛ سازنده در `i18n` است چون ربات هم همان فهرست را می‌خواهد) + `_pick_lang()`؛ `_menu_editor_items`/`_menu_preview` از خودِ `keyboards` می‌خوانند (`_resolved_menu`/`_rows_from_widths`). **امنیت:** `_session_admin` (عضویت در `admin_id_set` روی هر درخواست) · `_fernet` بی fallback به `BOT_TOKEN` (`_require_admin_secret`) · `_rate_limit`/`_client_ip` (per-admin **و** per-IP؛ `X-Forwarded-For` فقط از همتای داخلی، یعنی Caddy) · `_csrf_guard` (`_CSRF_EXEMPT = {"/node/join"}`) · `_SECURITY_HEADERS` (CSP `script-src 'self'` — صفر اسکریپت و هندلرِ درون‌خطی؛ تنها `<script>`ِ درون‌خطی `type=application/json` است، یعنی داده) · خروج **فقط POST**. `_users_cached` + شمارندهٔ نسخهٔ `userscache:ver`. node join API (`/node/join`) + install-script (`/node/install.sh`) + `/node/peers` (WG peer config for host `wg-sync`, gated by `NODE_SECRET`). **Preloads + per-page-refreshes `textstore`** so a restart never shows/saves defaults over real overrides. `_TEMPLATE_DIR`/`_STATIC_DIR` هر دو به `__file__` لنگر می‌خورند و `..` ندارند |
+| `panel/` (Next.js) | **حذف شد ۲۰۲۶-۱۰-۰۹** همراهِ مسیرهای `/console` و `/api/console*`، مرحلهٔ Node در `docker/admin.Dockerfile`، jobِ `console`ِ CI و تست‌هایش. پنلِ Jinja (`app/admin_web.py`) همهٔ کارکردهایش را دارد؛ آنچه کنسول با دادهٔ ساختگی نشان می‌داد (ساعت، نوارِ رویداد، اسپارک‌لاین‌ها، بج‌های ثابتِ منو) بی‌جایگزین کنار رفت، چون منبعِ واقعی نداشت |
+| `app/panel_i18n.py` | متن‌های **خودِ پنل** (نه ربات): `STRINGS` (fa/en، ~۷۰۰ کلید)، `pt(lang, key, **kw)` (زبانِ ناشناخته → پیش‌فرض؛ کلیدِ ناشناخته → خودِ کلید، تا جاافتادگی دیده شود)، `LANGS`/`DIR`/`THEMES` و `normalize_lang`/`normalize_theme` برای کوکی‌های `/prefs`. بی‌دیتابیس و بی‌وابستگی به `admin_web`، تا jobِ اصلیِ تست ببیندش |
+| `app/panel_glyphs.py` | **حذف شد ۲۰۲۶-۱۰-۰۹** — عددِ نقطه‌ایِ ۵×۷ (`lcd`) با طراحیِ تازه کنار رفت؛ عددِ کانونیِ کارت‌ها حالا متنِ معمولی با رقمِ فارسی است (`panel_fmt`) |
+| `app/panel_data.py` | **دادهٔ** صفحه‌های پنل (داشبورد، فعالیت، گزارش‌ها، کاربران، جست‌وجو، کارِ گیرکرده) — `admin_web` فقط رندر می‌کند. **تعریفِ هر عدد فقط همین‌جاست** (docstringِ ماژول): آپلود = `File.source` نه `dl` و نه `op` · از لینک = `source == "dl"` · کاربرِ فعال = مالکِ متمایزِ `File`/`DownloadEvent`/`Job` در بازه · موفقیتِ دانلود = `ok / (ok + fail)` از `download_events` (`blocked`/`refused`/لغو در مخرج نیستند؛ `ev_coverage` می‌گوید جدول از کِی پر شده و صفحه «از تاریخِ …» می‌نویسد) · کارِ گیرکرده = `queued` > `STUCK_QUEUED` (۳۰ دقیقه) یا `running` > `STUCK_RUNNING` (۵۴۰۰+۶۰۰ ثانیه). مرزِ سطل‌ها به ساعتِ **تهران** است (روز از نیمه‌شب، هفته از شنبه — `make_range`) ولی پیش از SQL به UTC می‌رود (`_bind`)، چون SQLiteِ تست‌ها ساعتِ دیواریِ UTC را بی منطقه نگه می‌دارد. خروجی JSON‌پذیر است (زمان = epoch) تا پنل چند ثانیه در Redis کشش کند؛ `column_spec` مشخصاتِ نمودار را **پیش‌قالب‌شده** به `panel.js` می‌دهد. `PLATS`/`PLAT_COLOR`/`KINDS`/`KIND_COLOR` = هویتِ رنگیِ موجودیت (پلتفرمِ هفتم به «سایر» تا می‌خورد). بی jinja2/cryptography، پس jobِ اصلیِ تست import‌ش می‌کند |
+| `app/panel_fmt.py` | **تنها** قالب‌بندیِ پنل (عدد، درصد، حجم، مدت، تاریخ، زمانِ نسبی) — قالب‌ها فیلتر از این‌جا می‌گیرند و برچسب‌های نمودار هم پیش‌قالب‌شده از همین‌جا به JS می‌روند، پس دو پیاده‌سازیِ «عددِ فارسی» وجود ندارد. قرارداد: **کمیت** با رقمِ فارسی (`num`/`pct`/`size`/`secs`)، **شناسه و رشتهٔ فنی** با رقمِ لاتین (هیچ تابعی لمسشان نمی‌کند). ساعتِ نمایش `TEHRAN` با آفستِ ثابتِ ‎+۰۳:۳۰ (ایران از ۲۰۲۲ ساعتِ تابستانی ندارد و ایمیجِ slim پایگاهِ منطقهٔ زمانی را تضمین نمی‌کند)؛ تاریخِ فارسی شمسی (`to_jalali`). `ascii_digits` = رقمِ فارسی/عربیِ ورودیِ کاربر (کدِ ورود، شناسه، عددِ تنظیمات) → لاتین. خالص و بی‌وابستگی |
+| `app/panel_settings.py` | چیدمانِ صفحهٔ تنظیمات: `SECTIONS` (بخش → زیربخش → ردیف) با برچسب/راهنمای دوزبانه، `fields()`/`setting_keys()`/`field()`. **فقط «کجا و با چه برچسبی»** — نوع و پیش‌فرض از `settings_store.RUNTIME_KEYS` و کران از `settings_store.BOUNDS` می‌آیند؛ تنها نوع‌های افزوده نمایشی‌اند (`enum` با برچسب، `secret` = ورودیِ پنهان که مقدارش هرگز در HTML نمی‌آید، `list` = متنِ چندخطی). جانشینِ `admin_web.GROUPS`؛ خالص است تا سه تستِ jobِ اصلی مستقیم import‌ش کنند (پیش از این با AST از سورسِ پنل بیرون کشیده می‌شد). کلیدِ `RUNTIME_KEYS` که این‌جا نیست گم نمی‌شود: در بخشِ خودکارِ «بدون دسته» می‌آید |
+| `app/static/js/panel.js` | **بهبودِ تدریجی** روی صفحه‌های server-rendered — هر صفحه بی این فایل هم کار می‌کند (فرم POST می‌کند، لینک باز می‌شود). نمودارها (`columns`, `donut`, `mountCharts`؛ رنگ از متغیرهای CSS، پس با عوض‌شدنِ پوسته خودشان بازرنگ می‌شوند)، منو/دیالوگ/sheet، نوارِ ذخیرهٔ زنده (`trackDirty`)، اعتبارسنجیِ عدد، ویرایشگرِ دکمه‌ها، جعبه‌های کدِ ورود و جست‌وجو. **هیچ هندلرِ درون‌خطی**: همه‌چیز با delegation بسته می‌شود تا CSP `script-src 'self'` بماند. در `<head>` بار می‌شود (تا `html.js` پیش از اولین paint ست شود)، پس آدرسِ sprite و جدولِ متن (`#panel-i18n`) را تنبل می‌خواند |
+| `app/static/icons.svg` + `tools/panel_icons.py` | sprite‌ِ آیکونِ پنل (Lucide، ISC، با اعلامیهٔ مجوز داخلِ فایل)؛ هر آیکون `<use href="…icons.svg?v=…#i-<name>">`. فهرستِ آیکون‌ها **کشف می‌شود** نه دست‌نویس: اسکریپت هر رشته‌ای در قالب‌ها، ماژول‌های پنل و `panel.js` را که نامِ یک آیکونِ Lucide است برمی‌دارد و sprite را از نو می‌سازد (روی ماشینِ توسعه با بستهٔ `lucide-static`، نه روی سرور). `tests/panel/test_panel_icons.py` وقتی کد نامِ آیکونی را می‌برد که sprite ندارد (یعنی اسکریپت دوباره اجرا نشده) قرمز می‌شود — هم ایستا هم روی صفحهٔ رندرشده |
+| `app/nodes.py` | Distributed **master-side** node layer: `ROLES` (download, processing, gateway), `OFFLOAD_OPS`, `role_online()`, `reap_orphan_jobs()` (proc→master when no proc node) + `note_job_done()`/`reaped_count()` counters, signed one-time WireGuard join token, WG-IP allocation, live registry (Redis `node:{id}` heartbeat, 45 s TTL, carrying `at`; plus the TTL-less `nodeseen:{id}` read by `last_seen()` so an offline node shows when it was last heard from; `forget()` drops both on removal; heartbeat `load` is the role's **queue depth**, not CPU), WG peer add/remove + `render_peers()` (declarative peer config from the `Node` table), `node_config()` (join reply — worker roles carry `queue`+`settings`, service roles carry `command`) |
 | `app/instagram_anon.py` | **مسیرِ ناشناسِ اینستاگرام — وصل، پشتِ `dl_ig_anon_enabled` (پیش‌فرض خاموش).** دو نیمه. **resolve** (فاز ۱، بی‌حالت و بدونِ کوکی): `resolve()` → رسانه یا `None`؛ `resolve_detailed()` همان به‌علاوهٔ `RungReport` هر رده و یک `verdict` (`ok`/`unsupported`/`blocked`/`network`). نردبون: oEmbed (تشخیصی، پیش‌فرض خاموش) → صفحهٔ `/embed/captioned/` با **دو زیرشاخهٔ ترتیبی** — `contextJSON.gql_data` و در صورتِ تهی‌بودن `<img class="EmbeddedMediaImage" srcset>`. **fetch** (فاز ۲): `download_anonymous()` → `InstagramAnonFetch(paths, caption, bucket)` — بایت‌ها را `downloader.download_direct` می‌کشد (ارثِ SSRF/پروکسی/سقفِ دولایه/cancel و بی‌اعتنا به `opts["cookies"]`)، هر آیتم در `<workdir>/igan/<NN>/`، ترتیب از **ساختِ** فهرست، سقفِ **تجمعی** و بودجهٔ زمانیِ `ANON_FETCH_BUDGET`. `BUCKETS` = چهار verdict + `skipped` + `fetch_failed`. سشن/SSRF از `downloader._direct_connector` می‌آید (یک سیاست، نه دو کپی) |
 | `app/gateway.py` | `/dl` + `/s` file serving (Range, faststart-friendly, token→path cache); پشتِ Caddy روی HTTPِ ساده (`TLS_CERT`ِ خودش فقط مالِ نصب‌های قدیمی است); `_lookup` لینکِ **مالکِ بلاک‌شده** و لینکِ **منقضی** (`dl_link_days` از `File.dl_token_at`) را ۴۰۴ می‌کند (فاز ۴) |
-| `app/tg_janitor.py` | پاک‌سازیِ پوشهٔ سرورِ محلیِ Bot API: هر `INTERVAL` ثانیه فایل‌های رسانهٔ قدیمی‌تر از `tg_files_max_age_hours` را پاک می‌کند و اگر فضای آزاد زیرِ `tg_files_min_free_gb` بود قدیمی‌ترین‌ها را زودتر. فقط فایل‌های **داخلِ زیرپوشه‌های** `<dir>/<token>/` نامزدند (نه `td.binlog`)، نامِ شبیهِ binlog/sqlite هرگز، و هیچ فایلِ نوشته‌شده در `GUARD_SEC` اخیر. خواندنِ تنظیمات کران‌دار و روی هر خطا پیش‌فرض است، چون دیسکِ پر یعنی Postgres/Redisِ خراب. فقط stdlib + `settings_store`، پس در ایمیجِ لاغرِ ربات اجرا می‌شود |
+| `app/tg_janitor.py` | پاک‌سازیِ پوشهٔ سرورِ محلیِ Bot API: هر `INTERVAL` ثانیه فایل‌های رسانهٔ قدیمی‌تر از `tg_files_max_age_hours` را پاک می‌کند و اگر فضای آزاد زیرِ `tg_files_min_free_gb` بود قدیمی‌ترین‌ها را زودتر. فقط فایل‌های **داخلِ زیرپوشه‌های** `<dir>/<token>/` نامزدند (نه `td.binlog`)، نامِ شبیهِ binlog/sqlite هرگز، و هیچ فایلِ نوشته‌شده در `GUARD_SEC` اخیر. خواندنِ تنظیمات کران‌دار و روی هر خطا پیش‌فرض است، چون دیسکِ پر یعنی Postgres/Redisِ خراب. هر دور نتیجه‌اش (پاک‌شده، مانده، فضای آزاد، `at`) را در `janitor:last` می‌نویسد — بی‌TTL، و صفحهٔ «سیستم» سنش را از `at` می‌خواند تا پاک‌کنندهٔ مرده «دیر» دیده شود نه «سالم»؛ نوشتنش هم کران‌دار و بی‌صداست. فقط stdlib + `settings_store`، پس در ایمیجِ لاغرِ ربات اجرا می‌شود |
 | `app/gateway_node.py` | **Gateway-node** (Phase N3): a public reverse proxy that forwards `/dl` + `/s` to the master's gateway over WG (streams body + Range/Content-Range/status), giving a clean streaming IP off the master. Needs no DB/bot (token resolves on master); own heartbeat (role `gateway`) Upstream pool is **uncapped** (`_UPSTREAM_LIMIT=0` — aiohttp's default 100 made the 101st live stream wait 15 s then 502) and a client that stops reading for `_CLIENT_STALL` s is aborted so it cannot pin an upstream connection forever (phase 4). |
 | `app/security.py` | ClamAV INSTREAM scan — **only** `OK`/`FOUND` leave `_scan_sync`; clamd's own `ERROR` and an empty reply raise `ScanUnavailable` (phase 4: they used to reach the user as «infected») |
 | `app/safety.py` | فیلترِ محتوای بزرگسال — سه لایه: `check_url` (دامنه/TLD/کلیدواژه)، `check_meta`/`check_text` (`age_limit`ِ yt-dlp + عنوان/توضیحات/تگ/نامِ فایل)، `scan_file` (NudeNet روی onnxruntime؛ ویدیو = نمونهٔ چند فریم). `Policy`/`load_policy()` عکسِ فوریِ تنظیماتِ پنل، `report_block()` شمارش + گزارشِ ادمین + مسدودیِ خودکار؛ `norm_host()` تنها شکلِ کانونیکِ هاست (NFKC، نقطهٔ پایانی، نقطهٔ CJK، punycode→یونیکد) برای URL **و** فهرست‌های پنل؛ `HOST_STRONG_TOKENS` ردهٔ چهارم (زیررشته‌ای، **فقط** روی نامِ دامنه)؛ strikeها ZSETِ پنجرهٔ لغزانِ واقعی زیرِ `nsfw:strikes:` (فاز ۴) |
@@ -78,6 +83,7 @@ processing (`processing.py`, `downloader.py`) → delivery (`cards.py`, or `gate
 | `app/langpack.py` | بستهٔ زبان (export/import): `normalize_code` (BCP 47، فرمت‌محور نه طول‌محور، با شکلِ کانونیک)، `TEXT_KEYS` (تنها فهرستِ کلیدها)، `effective_texts`, `build_pack`/`parse_pack` (پاکتِ JSON + بردباری نسبت به فنس/BOM)، `review()` → `Review` (خطای per-key، پوشش، شمارشِ changed/same). **خالص و بی‌دیتابیس**، تا jobِ اصلیِ تست بتواند بسنجدش (مثلِ `cookies.py` و `dl_active.py`)؛ `review(defaults=)` → `Review.defaulted`/`overrides`: مقدارِ برابر با پیش‌فرض override نمی‌شود و overrideِ موجودش پاک می‌شود (فاز ۴) |
 | `app/cookies.py` | استخرِ اکانتِ کوکی + **ورودیِ پیست** (`_normalize_cookie_text`/`_check_required`/`_save_cookie` — از پنل به این‌جا منتقل شدند تا رباتْ هم بتواند کوکی بپذیرد)؛ `classify_error()`/`needs_human()`، وضعیتِ `frozen` + `unfreeze()`/`needs_attention()`: محتوا روی دیسکِ مستر + آینهٔ Redis (نود)، متادیتا در Redis (`ckmeta:`), وضعیت (`healthy/suspect/invalid/cooldown/disabled`), `pick()` (اولویت + LRU + exclude برای چرخش), `materialize()`, `mark_ok/mark_fail` (کول‌داونِ پلکانی), `healthy_count`؛ **سهمیه** — `Limits`/`default_limits()`/`load_limits()` (عکسِ فوریِ مقادیرِ پنل) + ریاضیِ همگامِ `hourly_cap`/`warmup_factor`/`budget_of`/`over_budget`؛ **خواندنِ دسته‌ای** `_mget`/`get_metas`/`cooldowns` (تعدادِ فرمانِ `pick()` مستقل از تعدادِ اکانت) |
 | `app/dl_active.py` | شمارشِ **خودترمیمِ** دانلودهای هم‌زمان: ZSETِ `dl:active:z` با مهرِ زمانِ سرورِ Redis + `enter`/`leave`/`keepalive`/`count`. عمداً بی‌وابستگیِ سنگین، چون هم ورکرِ دانلود و هم پروسهٔ پنل از آن می‌خوانند |
+| `app/dl_events.py` | لاگِ ماندگارِ پایانِ دانلودها (جدولِ `download_events`). `start(payload)` رکوردِ آغازین، `settle(ev, outcome, …)` نتیجه — **اولین نتیجه برنده است** — و `record(ev)` نوشتن؛ ev بی نتیجه (منوی کیفیتی که هنوز pick نشده) نوشته نمی‌شود. نوشتن بهترین‌تلاش است و **هرگز دانلود را نمی‌شکند**: خطا بلعیده می‌شود، زمان با `WRITE_TIMEOUT` کران دارد، فقط اولین شکستِ هر پروسه WARNING می‌دهد، و مسیرِ لغو `record_soon` را صدا می‌زند که منتظر نمی‌ماند (await وسطِ لغو همان «لغوِ خودت را ببلع»ِ §۷ است). `outcome`: `ok` (از کش هم، `cached=True`) · `fail` · `blocked` (سیاستِ محتوا) · `refused` (سقف/حجم/مدت/شلوغی/دیسک) · `cancelled` |
 | `app/counters.py` | `incr_window(redis, key, ttl, amount)` — **تنها** پیاده‌سازیِ «INCR و بعد EXPIRE» با ترمیمِ TTLِ گم‌شده؛ پنل (`_rate_limit`)، سقف‌های `routers/ops` (`rate:`/`quota:`/`dlop:`) و رزروِ دانلود (`dlq:cnt`) از آن رد می‌شوند. عمداً بی‌وابستگی (مثلِ `dl_active.py`)، چون هم ربات می‌خواندش هم پنل |
 | `app/dl_cache.py` | کشِ تحویلِ آنی: `_cache_url()` (نرمال‌سازیِ URL) + `cache_key`/`_legacy_key`، `put_cached` (**هر نوع فایل**)، `put_album_cached`/`collect_album_items` (کاروسل)، `deliver_from_cache` → bool (False = file_idِ باطل، ردیف پاک شد) |
 | `app/probe_stats.py` | شمارندهٔ فازِ probe — هفت سطل زیرِ `dlstat:probe:<bucket>:<day>` با همان TTLِ دوروزهٔ `_metric`، به‌علاوهٔ نشانگرِ گذرای `probemenu:{ref}` که pick را dedupe می‌کند و cancelِ منو را از cancelِ فازِ fetch جدا می‌کند. عمداً **بی‌وابستگی** (مثلِ `dl_active.py`): هم ورکرِ دانلود می‌نویسد هم پروسهٔ ربات، و `routers/download.py` نمی‌تواند از `tasks_download` قرض بگیرد چون آن ماژول سرِ import `processing`/`instagram_anon` می‌آورد |
@@ -88,13 +94,13 @@ Two effective tiers only. There is **no** `owner`/`reseller` in code (see Open Q
 
 | Role | Determined by | Can do | Enforced in |
 |---|---|---|---|
-| **admin** | `tg_user_id ∈ ADMIN_IDS` (env), surfaced as `is_admin` | everything a user can + `/admin`, `/panel`, web panel; never blocked | `middlewares.py:50`; `routers/admin.py:65,77`; `admin_web.py:_session_admin` (`admin_web.py:134`) |
+| **admin** | `tg_user_id ∈ ADMIN_IDS` (env), surfaced as `is_admin` | everything a user can + `/admin`, `/panel`, web panel; never blocked | `middlewares.DataMiddleware.__call__` (sets `is_admin`); `routers/admin.panel_cmd`/`admin_cmd`; `admin_web._session_admin` (re-checked on every panel request) |
 | **user** | everyone else (default) | `/start`; send files → op card; send URLs → download | default path |
-| *(blocked)* | `User.is_blocked = true` | nothing — no reply (admins are never blocked) | `middlewares.py:53`; set via web panel users page (`admin_web.py:858`) |
+| *(blocked)* | `User.is_blocked = true` | nothing — no reply (admins are never blocked) | block gate in `middlewares.DataMiddleware.__call__`; set from the panel's users page (`admin_web.users_block`, which refuses to block an admin) |
 
-- `User.role` (`models.py:27`) exists but is **only ever set to `"user"`** (`middlewares.py:23`); no other value is written or read anywhere.
-- **Commands:** `/start` (all; the only command registered via `set_my_commands`, `__main__.py:52`). `/admin` and `/panel` are admin-only and hidden (silent for non-admins, `routers/admin.py:65,77`). No other slash commands — everything else is file/URL messages + inline buttons.
-- **Web panel auth:** login by entering an admin `tg_user_id`; a one-time code is DM'd via the bot; session is a Fernet cookie; every request re-checks membership in `admin_id_set`.
+- `User.role` (`models.User`) exists but is **only ever set to `"user"`** (`middlewares.get_or_create_user`); no other value is written or read anywhere.
+- **Commands:** `/start` (all; the only command registered via `set_my_commands` in `app/__main__.py`). `/admin` and `/panel` are admin-only and hidden (silent for non-admins, `routers/admin.admin_cmd`/`panel_cmd`). No other slash commands — everything else is file/URL messages + inline buttons.
+- **Web panel auth:** login by entering an admin `tg_user_id`; a one-time code is DM'd via the bot; session is a Fernet cookie; every request re-checks membership in `admin_id_set`. Persian/Arabic digits are accepted in both fields; logout is **POST-only** (a GET logout let any page on any site sign the admin out). Every admin action is written to `admin_actions` and shown under Activity → Admin log.
   POSTِ میان‌سایتی را `admin_web._csrf_guard` رد می‌کند (`Sec-Fetch-Site`، و بی آن `Origin`) — §7، بولتِ «`SameSite=Lax` مرزش site است».
 
 ## 4. Tech Stack & Dependencies
@@ -144,38 +150,65 @@ image also installs **Deno** (yt-dlp JS runtime) + ffmpeg. See `docs/telegram-ap
 - **Handlers:** one aiogram `Router` per concern (`app/routers/`); register order in `bot.py:39` is load-bearing (ops text handlers are FSM-state-bound, so a pasted URL mid-FSM stays in the FSM; the URL front door sits after ops, before the `files` fallback).
 - **Callbacks:** typed `CallbackData` factories in `callbacks.py`, kept **<64 bytes**; long option lists live in Redis and the callback carries only a short token (`ref`/`sel`).
 - **The card is the file:** intake re-sends the file with an inline keyboard; the worker owns message mutation (edits caption/note via `cards.py`). Producing a new file spawns a new card (`tasks.py` spawn block).
-- **Runtime config:** never read `settings.X` directly for a tunable value — read via `settings_store.get_int/str/bool(key, default)` so the admin panel/`/admin` take effect live (cross-process via read-through Redis). A panel-exposed key must appear in `settings_store.RUNTIME_KEYS` (and `ENUM_VALUES` if constrained) **and** in `admin_web.GROUPS`.
+- **Runtime config:** never read `settings.X` directly for a tunable value — read via `settings_store.get_int/str/bool(key, default)` so the admin panel/`/admin` take effect live (cross-process via read-through Redis). A panel-exposed key must appear in `settings_store.RUNTIME_KEYS` (and `ENUM_VALUES` if constrained) **and** get a row in `panel_settings.SECTIONS` (until 2026-10 `admin_web.GROUPS`). A key with no row is not lost — it renders in the automatic «بدون دسته» section and is saved — but it has no label, so the row is part of the job.
 - **Errors:** best-effort side paths use `except Exception:  # noqa: BLE001`; cancellation raises `ProcessingCancelled` (poll a Redis `cancel:*` key); surface the real error tail to the user, never a bare traceback.
 - **Adding an op (end-to-end):**
   1. `keyboards.py` → add `(op, "btn_label")` to `OPS_BY_KIND[kind]`; add `btn_label` (+ any strings) to **both** `locales/fa.py` and `locales/en.py`.
   2. `routers/ops.py` → handler: direct `_enqueue`, or a submenu (new `CallbackData` in `callbacks.py`), or an FSM flow (new state in `states.py`).
   3. `tasks.py:_do_op` → add the `if op == "…":` branch; return `{"path","filename","label","kind"}`. Resolve **every** input file_id via `_localize(bot, fid, workdir)` (never `get_file().file_path` directly) so the op runs on a remote node too. Reusing one of the four existing result shapes (`path`/`spawn`/`send_media`/`files`) is free — the upload-ceiling gate already covers it. Inventing a **new** shape that carries a file path means adding it to `tasks._BYTE_KEYS` **and** `tasks._outgoing_paths`, or the op skips that gate; `tests/test_upload_ceiling.py` discovers the shape set and goes red so this cannot happen quietly.
   4. `processing.py` → implement the work via the `_run` contract (`progress`, `cancel`, `ProcessingCancelled`).
-  5. If tunable → `config.py` default + `settings_store.RUNTIME_KEYS` (+`ENUM_VALUES`) + `admin_web.GROUPS` row; read via `settings_store`.
+  5. If tunable → `config.py` default + `settings_store.RUNTIME_KEYS` (+`ENUM_VALUES`, +`BOUNDS` if numeric) + a `panel_settings.SECTIONS` row (bilingual label); read via `settings_store`. A new op also wants an entry in `admin_web._OP_ICON` (icon + tint) — `tests/panel/test_panel_icons.py` fails if the icon is missing from the sprite.
   6. If it is CPU-heavy → add the op to `nodes.OFFLOAD_OPS` so it offloads to a live processing node (skip for light ops and anything needing a master-only service, e.g. `scan`/ClamAV).
 - **Schema changes:** add the column to `models.py` **and** an idempotent `ALTER … IF NOT EXISTS` to `db.py:_MIGRATIONS` (no Alembic). A brand-new **table** needs no migration line — `create_all` creates it.
-- **Panel UI — قالب‌ها در `app/templates/*.html` و طراحی در `app/static/css/panel.css`** (از ۲۰۲۶-۰۸-۱۹؛ پیش از آن رشته‌های پایتونی در `admin_web.py` بودند). CSS از فایل خوانده می‌شود ولی **همچنان درون‌خطی تزریق می‌شود** — رفتن به `<link>` هم بایتِ HTML را عوض می‌کند و هم سه خوانندهٔ `<style>`ِ همان پاسخ را می‌شکند (اندازه‌گیری‌شده ۱۵ تا ۱۹ شکست)، پس تغییرِ جداست. **هر دو زیرِ `app/` می‌مانند — قیدِ سخت:** `docker/admin.Dockerfile` فقط `COPY app` و `COPY node` دارد، پس دارایی بیرونِ `app/` در ایمیج نیست و پنل ۵۰۰ می‌دهد در حالی که CI سبز است (تست از ریشهٔ ریپو می‌دود). **و Jinja دقیقاً یک خطِ جدیدِ پایانی را می‌خورد**، پس فایلی با دو تا یک `\n` به هر صفحه اضافه می‌کند — هر دو گارد دارند (`tests/panel/test_template_files.py`). every class a template uses **must** exist in `panel.css` —
-  an undefined class fails silently as an unstyled, zero-padding element (this is how `.pad`/`.hint`/`.tabs` shipped
-  broken, and later `.err`/`.mute`/`.s-unproven`). **این قاعده از ۲۰۲۶-۰۸-۱۸ گارد دارد:**
-  `tests/panel/test_panel_css_classes.py` هر ۹ صفحهٔ GET را با داده رندر می‌کند و هر کلاسِ خروجی را
-  در `<style>`ِ همان پاسخ دنبال می‌کند — پس کلاسِ مردهٔ بعدی بدونِ یک خط تغییر در آن فایل گرفته
-  می‌شود. کلاسِ **پویا** (مقداری که از پایتون می‌آید، مثلِ `_badge_of`) فقط وقتی پوشش دارد که
-  تست شاخه‌اش را واقعاً بکارد؛ به همین دلیل fixtureِ `seeded` یک اکانت به‌ازای هر هفت وضعیت
-  می‌سازد و تستِ جدا شاخهٔ **ناشناخته** را با وصلهٔ `status_of` می‌زند.
-  Layout primitives: `.card` (+ `.card h3` header) with **either** `.rows` (list rows) or `.pad` (free content)
-  as the body wrapper — never raw children, they go edge-to-edge. **Since the 2026-08-20 rewrite (`8c74ed4`) spacing
-  and type come from tokens in `panel.css`, not hand-written pixels:** `--s-1…--s-9` (gap/rhythm is `--s-5` = 13px,
-  card padding `--s-4`/`--s-5`) and `--fs-3xs…--fs-4xl` (body `--fs-sm` = 12.5px). Shared chips/controls:
-  `.tag`, `.chip`, `.badge`, `.tabs`/`.tab`, `.hint`, `.btn-sm`, `.btn-go` (primary), `.save`/`.save-sm`, `.inp`/`.sel`
-  (both 170px). Responsive: the sidebar becomes a wrapped top nav under 900px; wide tables go in `.tbl-wrap`.
-  The panel's **own** UI strings go through `pt()` (`app/panel_i18n.py`, fa/en); language and theme are cookies set
-  by `/prefs` and rendered server-side into `<html lang dir data-theme>`. Icons are the inline-SVG macro
-  `app/templates/_icons.html`; the dot-matrix focal number is `panel_glyphs.lcd` (a Jinja global).
+- **Panel UI (بازطراحیِ ۲۰۲۶-۱۰) — قالب‌ها در `app/templates/*.html`، طراحی در `app/static/css/panel.css`، رفتار در `app/static/js/panel.js`.**
+  پنل **server-rendered** است و هر صفحه بی JS هم کار می‌کند: فیلترها فرمِ GET‌اند، دیالوگ‌ها آدرسِ `?dlg=<id>`
+  دارند، و sheetِ جزئیات (`/activity?dl=`/`?job=`، `/users?open=`) صفحه را با sheetِ باز رندر می‌کند؛ `panel.js` همان آدرس را با
+  `frag=1` می‌گیرد و فقط قطعهٔ `_sheet_{dl,job,user}.html` را نشان می‌دهد. قطعه‌های مشترک macroهای
+  `_macros.html`اند (`kpi`, `pill`, `empty`, `chart`, `card_head`, `range_seg`, `pager`, `user_cell`, `sheet_head`,
+  `hidden_state`, `feed_item`, …) — کارتِ تازه با همان‌ها ساخته شود نه با HTMLِ دست‌نویسِ دوم.
+  **هر دو زیرِ `app/` می‌مانند — قیدِ سخت:** `docker/admin.Dockerfile` فقط `COPY app` و `COPY node` دارد، پس دارایی
+  بیرونِ `app/` در ایمیج نیست و پنل ۵۰۰ می‌دهد در حالی که CI سبز است. **و Jinja دقیقاً یک خطِ جدیدِ پایانی را
+  می‌خورد** — گارد: `tests/panel/test_template_files.py`.
+  **CSS لینک می‌شود، دیگر درون‌خطی نیست:** `base.html` فایلِ `/static/css/panel.css?v=<هش>` را لینک می‌کند و
+  `static_file` آن را از حافظه با کشِ `immutable` سرو می‌کند (§2، ردیفِ `admin_web`). توکن‌ها روی `:root`اند:
+  سطح/جوهر (`--bg`, `--surface*`, `--border*`, `--ink*`, `--muted`, `--faint`)، اصلی (`--primary*`، نیلی)، وضعیت
+  (`--good`/`--warn`/`--bad`/`--info`/`--neutral` با `-ink`/`-soft`/`-line`)، رنگِ دسته‌ای (`--c1…--c6` و `--c0`
+  برای «سایر»)، شعاع (`--r-sm…--r-xl`)، چیدمان (`--sidebar-w`, `--topbar-h`, `--gutter`). پوستهٔ تیره مقدارهای
+  **خودش** را دارد، یک‌بار زیرِ `prefers-color-scheme` (با گاردِ `:root:not([data-theme="light"])`) و یک‌بار زیرِ
+  `[data-theme="dark"]` — برعکس‌کردنِ خودکار نیست. روشن پیش‌فرض است. نقطه‌های شکست: ۱۲۷۹ / ۱۱۰۰ (منوی کناری
+  کشو می‌شود) / ۸۶۰ / ۶۴۰ پیکسل.
+  **آیکون = یک sprite (`app/static/icons.svg`)، و رنگش از موجودیت می‌آید نه از تزئین.** `<svg class="ic"><use
+  href="…icons.svg?v=…#i-<name>">`؛ فهرست با `tools/panel_icons.py` از کد کشف و ساخته می‌شود (§2). ته‌رنگ با
+  کلاسِ `tN` (`t0…t6` → `--c0…--c6`) یا `tgood`/`twarn`/`tbad`/`tinfo` روی متغیرِ `--tint` می‌نشیند؛ `.tint` =
+  جعبهٔ ملایم (۱۳٪ ترکیب با سطح) و `.tint-ic` = خودِ گلیف. نگاشت‌ها: پلتفرم (`_PLAT_TINT`/`PLAT_COLOR`)، نوعِ
+  فایل (`_KIND_TINT`/`KIND_COLOR`)، گروهِ عملیات (`_OP_ICON`)، نقشِ نود (`_ROLE_ICON`)، کارِ ادمین (`_LOG_ICON`)
+  و صفحه (`nN`ِ `NAV` → `_NAV_TINT`) — پس یک موجودیت همه‌جا یک رنگ دارد. **رنگِ وضعیت مالِ وضعیت است:** خوب/
+  هشدار/بد هرگز رنگِ «سری ۴» نمی‌شود و همیشه با آیکون + برچسب (`pill`) می‌آید، نه رنگِ تنها.
+  **هر کلاسی که صفحه رندر می‌کند باید قاعده داشته باشد یا قلابِ JS باشد** — کلاسِ تعریف‌نشده بی‌صدا یک عنصرِ
+  بی‌استایل می‌شود (پنلِ قدیم سه بار همین را شیپ کرد: `.pad`/`.hint`/`.tabs`، بعد `.err`/`.mute`/`.s-unproven`).
+  گارد: `tests/panel/test_panel_css_classes.py` هر صفحهٔ GET را (با دیالوگ‌ها، تب‌ها و فیلترها) با داده رندر
+  می‌کند، استایل‌شیتی را که **همان پاسخ لینک کرده** می‌خواند (نه مسیرِ هاردکد)، کامنتِ CSS را دور می‌ریزد، و
+  کلاسی را که در رشتهٔ سلکتورِ `panel.js` آمده قلاب می‌شمارد. کلاسِ **پویا** (مقداری که از پایتون می‌آید، مثلِ
+  پیلِ وضعیت) فقط وقتی پوشش دارد که fixture شاخه‌اش را واقعاً بکارد — `seeded` یک اکانت به‌ازای هر وضعیت می‌سازد.
+  **صفر JSِ درون‌خطی:** نه `on*=`، نه `<script>` جز `type="application/json"` (داده)؛ رفتار با delegation در
+  `panel.js` به `data-*` بسته می‌شود (`data-act`, `data-dialog`, `data-sheet`, `data-copy`, …) تا CSP `script-src
+  'self'` بماند. **سه قاعدهٔ Jinja که هر سه گارد دارند:** کلیدِ دیکشنری‌ای که هم‌نامِ یک متدِ dict است با نقطه
+  خوانده نشود (`x.items` خودِ متد است — `x['items']`؛ `test_template_guards.py` فهرستِ متدها را از خودِ `dict`
+  کشف می‌کند)؛ کلیدِ اختیاری با `x.get('k')`، چون هر صفحه زیرِ `StrictUndefined` هم باید رندر شود
+  (`test_strict_undefined.py`، با داده، روی نصبِ خالی و به انگلیسی)؛ و هیچ `|safe`ی نیست — داده‌ای که HTML
+  است باید در پایتون ساخته و escape شود.
+  متن‌های **خودِ** پنل از `pt()`/`t()` می‌آیند (`app/panel_i18n.py`، fa/en) و آنچه JS لازم دارد در `#panel-i18n`؛
+  زبان و پوسته کوکی‌اند (`/prefs`) و سمتِ سرور در `<html lang dir data-theme>` رندر می‌شوند. عدد، درصد، حجم و
+  تاریخ **فقط** از `Fmt` (`panel_fmt`) می‌آیند: کمیت با رقمِ فارسی، شناسه و رشتهٔ فنی با رقمِ لاتین داخلِ
+  `<bdi class="ltr">`.
 - **RTL is the default (`<html dir=rtl>`) — isolate every Latin/numeric run.** A date, size, IP, version or shell
   command dropped raw into RTL text gets **reordered** by the bidi algorithm (`2026-07-24 22:12` → `22:12 2026-07-24`,
-  `975.0 MB` → `MB 975.0`). Wrap it in `<bdi>`, or use `.mono`/`.num`/`.ltr` (all `unicode-bidi:isolate`; `.num` and
-  `.ltr` also force `direction:ltr`). **`.num`/`.ltr` are only for a *pure* LTR run** — putting mixed Persian+number
-  text in them reorders the Persian instead. Code textareas (`.ta`, `.cmd`) additionally set `dir=ltr`.
+  `975.0 MB` → `MB 975.0`). Wrap it in `<bdi>` (`<bdi class="ltr">` for IDs/versions/IPs, `<bdi class="mono">` for
+  code and paths). **Since the 2026-10 redesign only `.ltr` isolates** (`direction:ltr; unicode-bidi:isolate`); `.num` is
+  just tabular digits and `.mono` just the font, so neither protects a run on its own any more. **`.ltr` is only for a
+  *pure* LTR run** — mixed Persian+number text in it reorders the Persian instead. Quantities need none of this:
+  `panel_fmt` writes them with Persian digits and Persian units, which the bidi algorithm keeps in place. LTR inputs and
+  textareas use `.input.ltr`/`.textarea.ltr`.
 - **User-facing strings are runtime-editable:** every string lives in `locales/{fa,en}.py` as the default and is overridable per-(lang,key) from the panel `/texts` page (`textstore`). Keep placeholders (`{n}`, …) stable when adding/renaming a string — the override validator rejects unknown placeholders, and `t()` silently falls back to the default if an override fails to format.
 - **Adding a *language* is data, not code.** فقط `fa`/`en` کاتالوگِ کد دارند؛ هر زبانِ دیگری از پنل (`/langs`) import می‌شود و **صفر خطِ کد** لازم دارد — `t()` هیچ عضویت‌سنجی‌ای نمی‌کند و هر `(lang, key)`ی که override داشته باشد را می‌دهد. پس فهرستِ زبان‌ها باید همیشه از **`i18n.available_languages()`** بیاید، نه یک تاپلِ تازه — از فاز C این هم شاملِ **ربات** است (`routers/start.py`)، نه فقط پنل. **افزودنِ کلیدِ متن** همچنان کارِ کد است (`locales/{fa,en}.py`، با پاریتیِ کامل) و کلیدِ تازه برای زبان‌های افزوده خودبه‌خود **انگلیسی** رندر می‌شود تا وقتی بستهٔ تازه import شود.
 - **هر رشتهٔ تازهٔ ربات باید در **هر دو** کاتالوگ باشد، و از ۲۰۲۶-۰۸-۱۹ گارد دارد.** پیش از آن هیچ assertی روی برابریِ مجموعهٔ کلیدها نبود و ادعای «۲۱۴ کلید، صفر یک‌طرفه» یک **اندازه‌گیریِ یک‌باره** بود. شکستش خاموش است: `langpack.TEXT_KEYS` **اجتماعِ** دو کاتالوگ است، پس کلیدِ یک‌طرفه رد نمی‌شود بلکه از زنجیرهٔ `en → FALLBACK → DEFAULT` رد می‌شود و **متنِ فارسی را داخلِ بستهٔ انگلیسی‌مبدأ** export می‌کند (اجراشده). `tests/test_locale_parity.py` سه چیز را کشف‌محور می‌سنجد: مجموعهٔ کلیدها (هر دو جهت)، مجموعهٔ placeholderها per-key، و توالیِ تگ‌های HTML per-key.
@@ -747,6 +780,10 @@ Pin the quoted `'3.12'` — unquoted `3.10` becomes the float
   «گارد خودش را می‌گیرد» بعد از دو گاردِ ASTی که داکس‌استرینگِ خودشان را
   می‌گرفتند. **قاعدهٔ عام: هر چکی که روی متنِ یک زبانِ دیگر کار می‌کند اول باید
   کامنت‌های آن زبان را دور بریزد، وگرنه توضیحاتِ خودت به داده تبدیل می‌شوند.**
+  **از ۲۰۲۶-۱۰ استایل‌شیت لینک می‌شود نه درون‌خطی**، پس گارد همان فایلی را می‌خواند که
+  `<link>`ِ همان پاسخ نام می‌برد (نه یک مسیرِ هاردکد — وگرنه روزی که صفحه فایلِ دیگری لینک کند
+  گارد فایلِ اشتباه را می‌سنجد و سبز می‌ماند)، و کلاسی را که عمداً استایل ندارد فقط وقتی قلابِ
+  JS می‌شمارد که در یک **رشتهٔ سلکتورِ** `panel.js` آمده باشد. قاعدهٔ دور ریختنِ کامنت سرِ جایش است.
 - **`_STATUS_BADGE.get(status, «پیش‌فرض»)` دو کپیِ دست‌نویس داشت و هر دو به
   کلاسِ ناموجودِ `mute` می‌رفتند — و پیش‌فرض نباید با «غیرفعال» یکی شود.**
   «ادمین خودش خاموشش کرد» یک تصمیم است و «وضعیتی که نمی‌شناسیم» یک نقص؛
@@ -754,6 +791,11 @@ Pin the quoted `'3.12'` — unquoted `3.10` becomes the float
   `_badge_of()` تنها جایی است که پیش‌فرض تعریف می‌شود و آن پیش‌فرض `unk` است
   (بنفش، عمداً بیرونِ خانوادهٔ سبز/زرد/قرمز/خاکستری). رنگِ پایهٔ `.sdot` هم
   همان بنفش است تا وضعیتِ بی‌`.s-*` نقطهٔ **نامرئی** نگیرد.
+  **به‌روزرسانیِ ۲۰۲۶-۱۰-۰۹ — کد حقیقت است:** `_badge_of`، `.sdot` و `unk` با بازطراحی رفتند.
+  جایشان `_CK_PILL` + `Fmt.ck_pill` است: پیلِ وضعیت با آیکون و برچسب، و پیش‌فرضِ ناشناخته `info`
+  (آبی، آیکونِ `circle-help`، و خودِ نامِ وضعیت به‌جای برچسبِ ترجمه‌شده). تفکیکِ اصلی حفظ شد:
+  `disabled` خاکستری (`neutral`) است و ناشناخته آبی، پس «ادمین خاموشش کرد» و «نمی‌شناسیمش» هنوز
+  یک ظاهر ندارند — `test_an_unknown_status_does_not_look_like_a_deliberate_one` همین را می‌سنجد.
 - **کارتِ «نرخِ موفقیتِ دانلود» پنجرهٔ ثابتِ یک‌روزهٔ UTC دارد و با `dlstat`ِ
   دوروزه قابلِ مقایسهٔ مستقیم نیست.** `_health` کلیدِ `dlstat:{p}:ok:{روزِ جاریِ
   UTC}` را می‌خواند، در حالی که `_metric` (`tasks_download.py`) با TTLِ **دو
@@ -764,6 +806,12 @@ Pin the quoted `'3.12'` — unquoted `3.10` becomes the float
   به «امروز (UTC)» رفت، چون روزِ تهران با روزِ UTC یکی نیست و ساعت‌های اولِ شب
   از قبل فردای UTCاند. برای مقایسه، کلیدِ **همان روز** را بخوان:
   `GET dlstat:<platform>:ok:$(date -u +%Y%m%d)`.
+  **از ۲۰۲۶-۱۰-۰۹ پنل اصلاً `dlstat` نمی‌خواند**، پس این کارت و این ناهمخوانی دیگر وجود ندارند:
+  نرخِ موفقیتِ هر پلتفرم (داشبورد و گزارش‌ها) از جدولِ ماندگارِ `download_events` می‌آید، روی
+  بازه‌هایی که به روزِ **تهران** هم‌ترازند (`panel_data.make_range`)، و `blocked`/`refused`/لغو در
+  مخرج نیستند. آن جدول از روزِ استقرار پر می‌شود، پس برای بازه‌ای که پیش از آن شروع می‌شود صفحه
+  «از تاریخِ …» می‌نویسد و مقایسه با دورهٔ قبل را نشان نمی‌دهد (`ev_coverage`). `dlstat:*` هنوز
+  نوشته می‌شود و برای ابزارهای خط‌فرمان (`tools/yt_client_matrix.py --stats`) معتبر است.
 - **جدولِ `jobs` هیچ دانلودی را نمی‌شمارد، و هشت سطحِ پنل روی آن سوارند.**
   `Job()` فقط در `routers/ops.py` ساخته می‌شود (دو نقطه) و
   `tasks_download.py:7` صریح می‌گوید «جابِ دانلود، رکوردِ File/Job از پیش
@@ -778,6 +826,11 @@ Pin the quoted `'3.12'` — unquoted `3.10` becomes the float
   است نه نبودِ عدد؛ گزینهٔ ساختنِ Job با هزینه‌اش در Open Questions ثبت شد.
   مرزِ درست **منبعِ داده** است نه موضوع: هرچه از `files` می‌آید دانلودها را
   دارد، هرچه از `jobs` می‌آید ندارد.
+  **از ۲۰۲۶-۱۰-۰۹ دانلودها جدولِ خودشان را دارند (`download_events`، یک ردیف به‌ازای هر پایانِ
+  دانلود — شکست‌ها هم)**، پس پنل دیگر مجبور نیست دانلود را از `files` حدس بزند: کارت‌های دانلود
+  از آن جدول می‌خوانند و کارت‌های «عملیات» از `jobs`، و هر کدام همان را می‌گوید که می‌شمارد
+  (`tests/panel/test_scope_labels.py`). `Job` همچنان برای دانلود ساخته نمی‌شود — همان تصمیمِ
+  ۲۰۲۶-۰۸-۱۸ — و این جدول دادهٔ **پیش از** استقرار را نمی‌سازد.
 - **مسیرِ لاگینِ پنل محدودیتِ نرخ **داشت** — فرضِ «ندارد» غلط بود، و عددِ واقعی
   ۳۰ حدس در ۶۰۰ ثانیه بود.** این را اول بخوان تا کسی دوباره از صفر شروع نکند.
   اندازه‌گیریِ ۲۰۲۶-۰۸-۱۸ روی هندلرهای واقعی با ساعتِ مدل‌شده: `panelreq:<id>`
@@ -817,6 +870,10 @@ Pin the quoted `'3.12'` — unquoted `3.10` becomes the float
   `TypeError` می‌دهد در حالی که `'۱۲۳۴۵۶'.isdigit()` صادق است — یعنی مقایسهٔ
   زمان‌ثابت **باید روی بایت** باشد، وگرنه کدِ با رقمِ فارسی ۵۰۰ می‌شود جایی که
   `!=`ِ قدیمی درست «کد نادرست» می‌داد.
+  **از ۲۰۲۶-۱۰-۰۹ کدِ با رقمِ فارسی/عربی پذیرفته می‌شود:** `_form_id` شناسه و کد را پیش از هر
+  چیز با `panel_fmt.ascii_digits` لاتین می‌کند (کیبوردِ فارسیِ گوشی همان را می‌زند)، و مقایسهٔ
+  بایتی برای هر نویسهٔ غیرعددیِ باقی‌مانده سرِ جایش است — کدِ «۱۲۳۴۵ک» «نادرست» است نه ۵۰۰
+  (هر دو تست دارند، `tests/panel/test_login_rate_limit.py`).
 - **`INCR` بعد `EXPIRE` دو فرمانِ جداست، و مرگِ بینشان یک شمارندهٔ جاودان می‌سازد.**
   فرمِ رایجِ `if n == 1: expire(...)` فقط روی اولین فراخوان TTL می‌گذارد، پس اگر
   پروسه دقیقاً همان‌جا بمیرد کلید بی‌انقضا می‌ماند و شمارنده تا ابد بالا می‌رود —
@@ -1219,6 +1276,11 @@ Pin the quoted `'3.12'` — unquoted `3.10` becomes the float
   ۳۴ کلیدِ `int`: هیچ‌کدام با `get_str`/`get_bool` خوانده نمی‌شوند. پس نرمال‌سازی
   یک تغییرِ رفتار بود بدونِ هیچ سودِ اندازه‌گیری‌شده، و برای پنلی که کاملاً فارسی و
   `dir=rtl` است حتی بدترش می‌کرد. **ثبت شد، ساخته نشد.**
+  **به‌روزرسانیِ ۲۰۲۶-۱۰-۰۹ — حالا نرمال‌سازی می‌شود، چون مقدمه عوض شد:** صفحهٔ تازه هر عدد را با
+  رقمِ فارسی و جداکنندهٔ هزارگان **نشان می‌دهد** («۲٬۰۰۰»)، پس بی‌نرمال‌سازی هر ذخیرهٔ بی‌تغییر آن را
+  با پیش‌فرضِ `"2000"` متفاوت می‌دید و ردیف می‌نوشت، و `int("۲٬۰۰۰")` اصلاً نمی‌شود. `admin_web._clean_int`
+  پیش از اعتبارسنجی رقمِ فارسی/عربی را لاتین می‌کند و `٬`/`,`/`_`/فاصله را برمی‌دارد؛ آنچه ذخیره
+  می‌شود همیشه ASCII است. `/admin`ِ تلگرام هنوز همان رفتارِ قدیم را دارد (نرمال‌سازی نمی‌کند).
 - **سرورِ محلیِ Bot API هیچ فایلی را پاک نمی‌کند، و دیسکِ پر کلِ استک را می‌خواباند — نه فقط دانلود را (۲۰۲۶-۱۰-۰۴، تولید).**
   هر `getFile` فایل را کامل در `tg-bot-api-data/<token>/<type>/` می‌نویسد و همان‌جا می‌ماند، و ربات زیاد
   `getFile` می‌زند: هر ویدیو/عکسِ آپلودی برای فیلترِ محتوا (`run_screen`)، هر ورودیِ عملیات (`_localize`) و
@@ -2534,7 +2596,8 @@ usable accounts drop below `cookie_alert_min`.
     **همان** گزینه‌ها و با `getent`/`curl`/`ss`/`docker`ِ جعلی روی `PATH` اجرا کنند
     (`tests/test_installer.py`). و هم‌خانواده‌اش در bash: آپاستروف داخلِ `${…:-…}` بقیهٔ
     اسکریپت را می‌شکند (`bash -n` روی یک `done`ِ دورتر می‌افتد).
-  - **partialِ تازهٔ سلامت باید در *دو* جا include شود.** `/health` (`health.html`) partialها
+  - **(تا ۲۰۲۶-۱۰-۰۹؛ با بازطراحی بی‌موضوع شد — `/health` حالا به `/system` ریدایرکت می‌شود و کارت‌های
+    سیستم یک قالب دارند، `system.html`.) partialِ تازهٔ سلامت باید در *دو* جا include شود.** `/health` (`health.html`) partialها
     را تک‌تک include می‌کند و داشبورد (`settings.html`) از `_health_cards.html`؛ کارتِ HTTPS
     اول فقط در دومی بود و تستِ `/health` گرفتش.
   - **Caddy دامنهٔ لینکِ عوض‌شده را تا ری‌استارتِ بعدی از حافظه سرو می‌کند** — گیت (`/tls/ask`)
@@ -2577,6 +2640,28 @@ usable accounts drop below `cookie_alert_min`.
     چیزی است که ردیفِ کهنه را بازنویسی می‌کند؛ گیت‌کردنش ردیف‌های کهنه را بعد از روشن‌شدن زنده می‌کرد.
   - **متنِ کاربر در هر پیامِ HTMLِ ادمین escape شود** — `reason` هم، چون `urlparse` در hostname
     `<` را نگه می‌دارد.
+- **بازطراحیِ پنل (۲۰۲۶-۱۰-۰۹) — هر کدام یک قاعدهٔ کوتاه، و هر کدام روی کدِ پیش از رفع تستِ قرمز دارد.**
+  دو تای اول و خروجِ GET در تولید هم بودند؛ ۵۰۰ِ cooldown، ۵۰۰ِ `/system`، پلتفرمِ ناپدید و دو شدتِ
+  سرتیفیکیت فقط در کدِ تازهٔ همین کار بودند و پیش از استقرار گرفته شدند.
+  - **کارِ روی یک موجودیت اول باید وجودِ آن را بسنجد، نه فقط امن‌بودنِ نامش را.** `get_meta` برای نامِ
+    ناموجود متای تازه می‌سازد و `set_meta` آن را می‌نویسد، پس یک فرمِ کهنه (اکانتی که در تبِ دیگر حذف شد)
+    یا یک POSTِ دست‌ساز «متای شبح» می‌کاشت — و چون `set_meta` ردِ ماندگارِ `ckseen:` را هم می‌نویسد، سطلِ
+    هرگز‌پرنشده «زمانی پر بوده» خوانده می‌شد و هشدارِ کاذبِ «کوکی نمانده» می‌گرفت. «جایگزینی» بدتر بود:
+    فایلِ **تازه** می‌ساخت، یعنی اکانتِ حذف‌شده زنده می‌شد. `admin_web._known_cookie` گیتِ هر کارِ اکانت است.
+  - **«ذخیره شد» فقط وقتی که چیزی واقعاً عوض شد.** reset متن روی زبان/کلیدِ ناشناخته، resetِ دکمه روی
+    kindِ ناشناخته و حذفِ نودی که دیگر نیست همه بنرِ سبز می‌دادند؛ حالا یا خطای روشن یا ریدایرکتِ خنثی.
+  - **پارامترِ helperی که `**kwargs` را جلو می‌برد با نامِ آن kwargها برخورد می‌کند.** `/cookies/cooldown`
+    همیشه ۵۰۰ می‌داد چون جزئیاتِ `action=` به `_audit(request, action, …)` می‌رسید؛ حالا `mode=` است و
+    `test_no_audit_call_passes_a_detail_named_like_a_parameter` نامِ پارامترها را از **امضا** کشف می‌کند.
+  - **ردیفِ اختیاری در Jinja با `.get()` خوانده شود.** `/system` هر بار که pot سالم بود ۵۰۰ می‌داد چون
+    ردیفِ سالم کلیدِ `ms` نداشت؛ گارد: هر صفحه زیرِ `StrictUndefined` (با داده، روی نصبِ خالی، به انگلیسی).
+  - **فهرستی که از «جاهایی که موفقیت داشتند» ساخته شود، شکستِ کامل را پنهان می‌کند.** پلتفرمی که همهٔ
+    دانلودهایش افتاده بود از فهرستِ پلتفرم‌های گزارش ناپدید می‌شد؛ فهرست حالا اجتماعِ همهٔ پیامدهاست.
+  - **یک قاعده، یک جا:** شدتِ سرتیفیکیت در کارت و در هشدار دو عددِ متفاوت داشت؛ `_cert_sev` تنها قاعده است.
+  - **خروج با GET یعنی هر سایتی می‌تواند ادمین را بیرون بیندازد** (`<img src=…/logout>`)؛ گاردِ CSRF فقط
+    روی POST است، پس `/logout` فقط POST است.
+  - **`download_events` در تست‌ها در حافظه ضبط می‌شود** (`tests/conftest.dl_event_rows`، autouse)، پس
+    تستِ `run_download` هم می‌تواند ببیند **چه** ثبت شد، و هیچ تستی به Postgresِ ناموجود وصل نمی‌شود.
 
 ## 8. Reference Docs
 - `docs/telegram-api.md` — recent Telegram Bot API changelog (10.0→10.2), project-relevant, with sources.
@@ -2595,8 +2680,11 @@ usable accounts drop below `cookie_alert_min`.
   §۷ را لازم دارد). **فاز ۳ فقط با تأییدِ جدا:** بازاستفادهٔ `--load-info-json`ِ probe در fetch، و
   خروجیِ تمیزِ per-platform (WARP/پروکسی). اگر عددِ بی‌کوکی با 2026.08.19 پایین ماند، مشکل IP
   است نه کد، و فاز ۳ جلو می‌افتد.
-- **۳۴ موردِ دفترچهٔ سابوتاژ «الگو رُت کرده» می‌دهند — همه روی `app/admin_web.py`، ثبت شد، رفع نشد
-  (۲۰۲۶-۰۹-۲۶).** **به‌روزرسانیِ ۲۰۲۶-۱۰-۰۳: حالا ۳۳ تاست** — یکی (`phase2 headers: add an external CDN
+- ~~**۳۴ موردِ دفترچهٔ سابوتاژ «الگو رُت کرده» می‌دهند — همه روی `app/admin_web.py`، ثبت شد، رفع نشد
+  (۲۰۲۶-۰۹-۲۶).**~~ **بسته شد ۲۰۲۶-۱۰-۰۹:** بازطراحیِ پنل همهٔ قالب‌ها و CSS را از نو نوشت، پس هر موردِ پنلی
+  یا به نشانه‌گذاریِ تازه بازلنگر شد (۵۹) یا با دلیلِ نوشته‌شده بازنشسته شد (۱۱)، و ۲۲ موردِ تازه آمد.
+  دفترچه حالا **۴۲۸ مورد و صفر الگوی رُت‌شده** دارد، و هر ۸۴ موردی که این کار لمس کرد در یک worktreeِ
+  جدا (بعد از کامیت، §۶) replay شد: **۸۴ از ۸۴ طبقِ ثبت**. متنِ اصلی برای تاریخ: **به‌روزرسانیِ ۲۰۲۶-۱۰-۰۳: حالا ۳۳ تاست** — یکی (`phase2 headers: add an external CDN
   reference`) در فاز ۲ِ ممیزی به قالب بازلنگر و replay شد؛ شمارش با همان روش (الگو در فایل) روی کدِ فاز ۳. روی کدِ فاز ۴ هم (۳۷۶ مورد در کلِ دفترچه) **همان ۳۳ است و فقط همین‌ها** — هیچ فایلِ دیگری الگوی رُت‌شده ندارد. سنجیده روی `HEAD` (`85f133b`، بعد از #132) با شمارشِ الگوی هر مورد در فایلش، نه
   با اجرا: هر ۳۴ الگو متنِ قالب/CSS است (`.err{background:…}`، `gallery-dl {{ e['gallery-dl'] … }}`،
   `<title>{% block title %}…`) که در استخراجِ ۲۰۲۶-۰۸-۱۹ به `app/templates/*.html` و
@@ -2605,7 +2693,9 @@ usable accounts drop below `cookie_alert_min`.
   همان مورد را replay کن (بازلنگرِ بی‌replay همان «سابوتاژی که اعمال شد ولی چیزِ دیگری را شکست» را
   پنهان می‌کند). شکستشان **بلند** است (`SabotageError`) نه خاموش، پس هیچ ادعای سبزی را جعل نمی‌کنند —
   فقط آن ۳۴ نگهبان تا رفع اثبات‌نشده‌اند. عمداً در کارِ یوتیوب نیامد: بی‌ربط و پنلی.
-- **پنج گروهِ CSSِ مرده — ثبت شد، عمداً حذف نشد (۲۰۲۶-۰۸-۱۹، تصمیمِ اپراتور).**
+- ~~**پنج گروهِ CSSِ مرده — ثبت شد، عمداً حذف نشد (۲۰۲۶-۰۸-۱۹، تصمیمِ اپراتور).**~~ **بی‌موضوع شد
+  ۲۰۲۶-۱۰-۰۹:** `panel.css` از نو نوشته شد و هیچ‌کدام از این پنج گروه و دو توکن در آن نیست (`.kpis`ِ
+  امروز کلاسِ تازهٔ داشبورد است، نه همان). درسِ «رندر فقط حضور را اثبات می‌کند نه غیاب» سرِ جایش است.
   اندازه‌گیری‌شده با رندرِ هر ۹ صفحهٔ GET + `/login` و تفکیکِ «تعریف‌شده منهای
   رندرشده»: `.bar-row` (`panel.css` — قواعدِ سه‌گانه)، `.hist` (+`.hist .b`,
   `i`, `em`, `span`)، `.kpi2` (+سه قاعده)، `.kpis` (+media query)، و
@@ -2634,26 +2724,46 @@ usable accounts drop below `cookie_alert_min`.
   (سندِ خودش روی ۱۰۹۳ دنباله سنجیده)، یعنی دقیقاً وضعیتِ «امروز یکی‌اند، فردا
   نه» — و **هیچ تستی دو طرف را گره نمی‌زند**. هم‌ردهٔ `remove_cookie_file` و
   `_search_queries` و `kill_orphan`، با این تفاوت که هشت‌برابر است.
-- **برداشتنِ `script-src 'unsafe-inline'` هزینه‌اش ۸ نقطه در ۵ قالب است، نه
-  یکی.** کامنتِ CSP این را دست‌کم گرفته بود و ۲۰۲۶-۰۸-۱۹ تصحیح شد. علاوه بر
+  **به‌روزرسانیِ ۲۰۲۶-۱۰-۰۹: از هشت به شش.** دو کپی رفت: نگاشتِ عرض→ظرفیت حالا از خودِ
+  `keyboards._WIDTH_CAP` می‌آید (`data-width-cap` روی فرم؛ JS فقط یک fallbackِ همان مقادیر دارد) و
+  واژگانِ عرض خودِ `textstore.BUTTON_WIDTHS` است؛ اولین رندرِ پیش‌نمایش هم سمتِ سرور با
+  `keyboards` ساخته می‌شود (`_menu_preview`). شش‌تا مانده: بسته‌بندیِ ردیف، پیش‌فرضِ `third`، «بستن
+  ردیفِ خودش» و «پنهان‌ها پیش از بسته‌بندی» در `mountButtons`ِ `panel.js`؛ رنگِ هر سبک که از
+  `_STYLE_HEX` به `panel.css` رفت (`.tg-kb .b.primary`…)؛ و `admin_web._STYLE_IDS` که
+  `textstore._BUTTON_STYLES` را بازنویسی می‌کند. هنوز هیچ تستی بسته‌بندیِ JS را به
+  `keyboards._rows_from_widths` گره نمی‌زند.
+- ~~**برداشتنِ `script-src 'unsafe-inline'` هزینه‌اش ۸ نقطه در ۵ قالب است، نه
+  یکی.**~~ **انجام شد ۲۰۲۶-۱۰-۰۹:** CSP حالا `script-src 'self'` است؛ هر هشت نقطه با بازنویسیِ قالب‌ها
+  رفت و رفتارشان در `panel.js` با delegation بسته می‌شود، و دادهٔ قالب‌شده با `data-*` یا
+  `<script type="application/json">` می‌رسد. `style-src` عمداً `unsafe-inline` مانده، چون عرضِ نوار
+  و رنگِ تکه‌ها `style="…"`ِ درون‌خطی‌اند. متنِ اصلی: کامنتِ CSP این را دست‌کم گرفته بود و ۲۰۲۶-۰۸-۱۹ تصحیح شد. علاوه بر
   بلوکِ `<script>`ِ `buttons.html` (۴۸ خط)، **۷ هندلرِ رویدادِ درون‌خطی** هست:
   دو `onsubmit` و دو `onclick` در `cookies.html`، یک `onchange` در
   `texts.html`، یک `onchange` در `buttons.html`، و یک `onsubmit` در
   `nodes.html`. ضمناً آن بلوک **قالب‌شده** است (`{{ close_label|tojson }}`)، پس
   فایلِ استاتیک‌شدنش یک `data-*` هم لازم دارد.
-- **`*{…font-family:…}` بلوکه‌کنندهٔ کلِ بُعدِ فونت است.** سلکتورِ سراسری در
+- ~~**`*{…font-family:…}` بلوکه‌کنندهٔ کلِ بُعدِ فونت است.**~~ **بی‌موضوع شد ۲۰۲۶-۱۰-۰۹:** `panel.css`ِ
+  تازه سلکتورِ سراسریِ فونت ندارد؛ `body` فونت را از `var(--font)` می‌گیرد و کنترل‌ها `font:inherit`.
+  متنِ اصلی: سلکتورِ سراسری در
   `panel.css` فونت را روی **هر عنصر** ست می‌کند، پس یک قاعدهٔ `body{font-family:…}`
   در فایلِ پوسته **هیچ اثری ندارد** (در Chromiumِ واقعی اندازه‌گیری شد). باید به
   `var(--font-ui)` تبدیل شود وگرنه هیچ پوسته‌ای نمی‌تواند فونت را عوض کند.
-- **`999px` و `50%` شکل‌اند نه مقیاس.** از ۱۴ مقدارِ متمایزِ `border-radius`،
+- **`999px` و `50%` شکل‌اند نه مقیاس.** (۲۰۲۶-۱۰-۰۹: هنوز درست است، ولی پنلِ تازه سیستمِ «پوسته»ای
+  ندارد که یک‌کاسه‌شان کند؛ شعاعِ مقیاس `--r-sm…--r-xl` است و قرص/دایره عمداً لفظی نوشته می‌شوند.) از ۱۴ مقدارِ متمایزِ `border-radius`،
   این دو معنیِ «قرص» و «دایره» می‌دهند (`.pill`, `.tg`, `.meter`, `.dot`,
   `.tg::after`). یک پوستهٔ `radius: 0` که همه را یک‌کاسه کند، قرص و دایره را
   نابود می‌کند — توکنِ جدا می‌خواهند.
-- **`.nav a.on{box-shadow:inset 3px 0 0 …}` تنها نشانگرِ آیتمِ فعالِ منوست.**
+- ~~**`.nav a.on{box-shadow:inset 3px 0 0 …}` تنها نشانگرِ آیتمِ فعالِ منوست.**~~ **بی‌موضوع شد
+  ۲۰۲۶-۱۰-۰۹:** صفحهٔ جاری حالا `aria-current="page"` می‌گیرد و نشانگرش پس‌زمینه + رنگِ اصلی است،
+  نه سایه. متنِ اصلی:
   از ۸ `box-shadow`، سه‌تا **معنایی**‌اند نه تزئینی. یک پوستهٔ `--shadow:none`
   بی‌صدا ناوبری را کور می‌کند: کاربر دیگر نمی‌بیند کدام صفحه باز است.
 - **عددِ تاریخیِ یکپارچهٔ «کارِ انجام‌شده» وجود ندارد، چون دانلودها ردیفِ `Job`
-  نمی‌سازند. برچسب‌گذاری شد، ساخته نشد (۲۰۲۶-۰۸-۱۸).** شرحِ خودِ شکاف در §۷
+  نمی‌سازند. برچسب‌گذاری شد، ساخته نشد (۲۰۲۶-۰۸-۱۸).** **به‌روزرسانیِ ۲۰۲۶-۱۰-۰۹ — گزینهٔ چهارمی
+  ساخته شد که هیچ‌کدام از سه‌تای زیر نبود:** جدولِ جدای `download_events` (`app/dl_events.py`)، یک ردیف
+  به‌ازای هر پایانِ دانلود، **شکست‌ها هم**، با کاربر و علت. پس از روزِ استقرار به بعد نرخ و حجمِ
+  دانلود تاریخچهٔ کامل دارند و `Job` دست‌نخورده ماند؛ آنچه هنوز نیست دادهٔ **پیش از** استقرار است
+  (صفحه «از تاریخِ …» می‌نویسد). شرحِ خودِ شکاف در §۷
   است. سه گزینه با هزینه‌شان سنجیده شد و اپراتور **«پ»** را گرفت (برچسبِ صریح
   روی کارت‌های jobs-محور)، به این استدلال که «مسئله گمراهی است نه نبودِ عدد».
   دو گزینهٔ دیگر برای روزی که واقعاً عددِ یکپارچه لازم شود:
@@ -2695,6 +2805,10 @@ usable accounts drop below `cookie_alert_min`.
   `job_timeout`ی گذشته. رفعش دو نیمه دارد — یک کارت/شمارنده بر اساسِ
   `created_at` کهنه، و تصمیم دربارهٔ اینکه چنین جابی `failed` علامت بخورد یا
   دست‌نخورده بماند.
+  **نیمهٔ اول ساخته شد ۲۰۲۶-۱۰-۰۹:** `panel_data.stuck_jobs` کارِ `queued` بیش از `STUCK_QUEUED`
+  (۳۰ دقیقه) و `running` بیش از `STUCK_RUNNING` (۵۴۰۰+۶۰۰ ثانیه) را جدا می‌شمارد، صفحهٔ «سیستم»
+  تعداد و قدیمی‌ترین را نشان می‌دهد و داشبورد یک هشدار می‌گیرد — پس دیگر در «در صف» گم نمی‌شوند.
+  **نیمهٔ دوم عمداً ساخته نشد:** پنل هیچ جابی را `failed` علامت نمی‌زند؛ آن تصمیم هنوز با اپراتور است.
 - ~~**ربات فایلی را می‌پذیرد که نمی‌تواند خروجی‌اش را پس بدهد:**~~ **بسته شد ۲۰۲۶-۰۸-۱۸.** گاردِ بعد-از-تولید در `tasks.run_op` نشست (`_outgoing_paths` + `_too_big_to_send`، پیش از کلِ زنجیرهٔ تحویل). جزئیات در §۷. **سه تصحیح روی متنِ زیر که با اجرا معلوم شدند و برای هرکسی که این تاریخ را می‌خواند مهم‌اند:** (الف) بندِ **(۳)** غلط بود — `_vjoin_cap_mb()` با پیش‌فرض مقدارِ **۲۰۰۰** می‌دهد نه بی‌کران (اجراشده)، چون `_max_mb()` برابرِ `max_file_mb` است که پیش‌فرضش ۲۰۰۰ است؛ آنچه #۱۲۲ عوض کرد نبودِ **کرانِ `BOUNDS`** برای آن کلید است، پس لبه **نهفته** است و فقط وقتی مسلح می‌شود که ادمین `max_file_mb` را بالای ۲۰۰۰ ببرد. (ب) چیزی که **امروز با پیش‌فرض** به پرتگاه می‌خورد vjoin نیست، `rename` و `zip_many` است — چون `_too_large` هفت هندلر را گیت می‌کند و این‌ها را نمی‌کند (فهرست در §۷). (پ) رفع «یک گارد + یک رشتهٔ locale» نبود: چهار شاخهٔ تحویل وجود دارد و **دو تایشان** (`spawn`, `files`) شکستِ ارسال را به `done` + برچسبِ changelog ترجمه می‌کردند، یعنی موفقیتِ کاذب. متنِ اصلی برای تاریخ نگه داشته شد:
 
   **ربات فایلی را می‌پذیرد که نمی‌تواند خروجی‌اش را پس بدهد — هیچ گاردی نیست و پیامِ روشنی هم نمی‌آید.** `--local` دانلود را بی‌سقف می‌کند، پس کاربر می‌تواند ۳٫۹ گیگابایت بفرستد و کارت بگیرد (اندازه‌گیریِ تولید: ۴۴ ردیفِ بالای ۲۰۰۰ مگ در جدولِ `files`). ولی **هر عملیاتی که خروجیِ تازه می‌سازد** — `compress`, `convert`, `trim`, `zip`, `vjoin`, … — نتیجه را با `FSInputFile` آپلود می‌کند و آپلود سقفِ **۲۰۰۰ مگابایتی** دارد. اگر خروجی از آن رد شود، کار تمام می‌شود و بعد **در ارسال** می‌شکند: کاربر وقتِ پردازش را داده و یک خطای خام می‌گیرد، نه یک «این فایل بزرگ‌تر از آن است که بتوانم برگردانم». هیچ‌جا این را از قبل چک نمی‌کند. سه نکتهٔ لازم برای هرکسی که بسازدش. **(۱)** چکِ ورودی کافی نیست، چون رابطهٔ ورودی→خروجی به op بستگی دارد: `compress` کوچک می‌کند، `zip` روی مدیای فشرده تقریباً هم‌اندازه می‌ماند، و `convert` می‌تواند **بزرگ‌تر** کند. **(۲)** تنها نقطهٔ قطعی، **بعد از** تولید و **پیش از** ارسال است (همان جایی که `tasks_download` برای دانلود دارد: «چکِ قطعیِ حجم روی دیسک قبل از آپلود»)، پس رفعِ درست یک گاردِ هم‌شکل در `tasks.run_op` است به‌علاوهٔ یک رشتهٔ locale. **(۳)** یک تعاملِ ظریف که با همین کار وارد شد: `vjoin_max_mb = 0` (پیش‌فرض) به `_max_mb()` برمی‌گردد، و حالا که `max_file_mb` می‌تواند از ۲۰۰۰ رد شود، پیکربندیِ پیش‌فرضِ چسباندن یک سقفِ **بی‌کران** به ارث می‌برد — یعنی این مسیر از بقیه زودتر به آن می‌خورد. **ثبت شد، ساخته نشد** (رفتارِ امروز است، نه رگرسیونِ این PR).
@@ -2975,9 +3089,10 @@ usable accounts drop below `cookie_alert_min`.
   writes only `if url and f.file_id` (`:544`), so **no cache row is written at all** — the version
   question does not arise there. And `put_album_cached` sits behind `engine == "gallerydl"` (`:1072`),
   i.e. Instagram/Pinterest carousels only, which correctly stay unversioned because gallery-dl does not
-  choose a target. `get_cached` is also the **only** key-resolving read path: the panel touches the
-  table only through aggregates (`admin_web.py:1403-1407`) and the gateway never touches it at all
-  (`/dl` resolves `File.dl_token`, `gateway.py:33`).
+  choose a target. `get_cached` is also the **only** key-resolving read path: the panel touched the
+  table only through aggregates (the old stats page) and since the 2026-10 redesign does not read it at
+  all — cache deliveries are counted from `download_events.cached` — and the gateway never touches it
+  (`/dl` resolves `File.dl_token` in `gateway._lookup`).
   The one-time cost of landing this: the pre-existing Spotify rows become permanently orphaned, because
   the table has **no eviction** — `created_at` exists (`models.py:165`) but nothing implements a TTL,
   and the only delete is `_drop` on an invalid `file_id`. So the deploy carries a single
@@ -3231,6 +3346,17 @@ usable accounts drop below `cookie_alert_min`.
 - **Why does `wg0` exist but carry no IP? — unknown, and it blocks bringing nodes back.** Observed on the master (2026-08-10): after the nodes were deleted from the panel, the stack would not come up because `.nodes-enabled` was still present, so the CLI kept applying `docker-compose.nodes.yml`, whose `local-bot-api` binds `${WG_MASTER_IP:-10.51.0.1}:8081:8081` (`docker-compose.nodes.yml:20-22`) — and that bind fails when `wg0` has no address. The interface existed; the address did not. **Nothing in this repo explains that state** — `node/master-setup.sh` is what assigns the WG address, and whether it never ran to completion, ran before a reboot, or had its address removed later is not something the code can tell us. This has to be answered on the master (`ip addr show wg0`, `wg show`, the `[Interface] Address` line in `/etc/wireguard/wg0.conf`, the `wg-quick@wg0` unit state, and the systemd ordering drop-in the setup installs) **before** re-enabling nodes, because re-enabling means re-applying the same overlay that failed. Related and separately confirmed: **`.nodes-enabled` is create-only.** `node/master-setup.sh:125` `touch`es it and **no code path anywhere removes it** (repo-wide grep), while the CLI gates the overlay on mere file presence (the `[ -f "$here/.nodes-enabled" ]` line in `install.sh:install_cli`) with no check that a `Node` row still exists. So deleting every node from the panel leaves the master still configured for WG-bound services. Renaming it (`.nodes-enabled.off`) is the current workaround; the real fix is either to have the panel/`master-setup.sh` own the flag's lifecycle, or to gate the overlay on something that reflects reality rather than on a file that is never cleaned up.
 
 ## Changelog
+- 2026-10-09 — **بازطراحیِ کاملِ پنلِ ادمین: یک پنلِ Jinja، دوزبانه (فارسی پیش‌فرض / انگلیسی)، روشن/تیره، گوشی‌محور — و کنسولِ Next حذف شد.** درخواستِ اپراتور: پنلی تمیز به سبکِ نمونهٔ SaaSِ ارسالی، با آیکون‌پکِ خوب، آمارِ دقیق با نمودارهای متناسب، بی متنِ اضافی، سریع و مناسبِ گوشی؛ در سه گام — گزارشِ بررسی، نمونهٔ تأییدشده، پیاده‌سازی. دو کامیت: `0ee0f9a` (پشتِ صحنه) و `ff84655` (پنل). §۲، §۳، §۵ و §۷ همین فایل در همین جلسه با کد هم‌خوان شدند (قاعدهٔ ۵).
+  - **(۱ دادهٔ تازه — `0ee0f9a`)** جدولِ `download_events` (`app/dl_events.py`): یک ردیف به‌ازای هر **پایانِ** دانلود، شکست‌ها هم، با کاربر، پلتفرم، علت، حجم و مدت — تا امروز شکستِ دانلود هیچ ردِ ماندگاری نداشت (`dlstat:*` دو روز عمر دارد و کاربر ندارد). `run_download` حالا پوسته‌ای روی `_run_download` است که نتیجهٔ هر خروجی را می‌نشاند؛ تحویلِ آنی از کش هم ثبت می‌شود (`_record_cached`). نوشتن بهترین‌تلاش و کران‌دار است و هرگز دانلود را نمی‌شکند. به‌علاوه: جدولِ `admin_actions` (لاگِ کارهای ادمین، بی راز)، `User.username`/`full_name` (یوزرنیمِ برداشته‌شده پاک می‌شود)، `nodeseen:` برای «آخرین تماسِ» نودِ آفلاین، گزارشِ هر دورِ پاک‌کننده در `janitor:last`، و `File.source="op"` برای خروجیِ عملیات تا پنل آن را آپلود نشمارد.
+  - **(۲ صفحه‌ها)** داشبورد (KPI، فعالیت، نرخِ پلتفرم‌ها، استخر، «نیاز به بررسی»؛ بازه‌های ۲۴ ساعت/۷/۳۰/۹۰ روز) · فعالیت (دانلودها، عملیات، لاگِ ادمین، هر کدام با sheetِ جزئیات) · گزارش‌ها (۷/۳۰/۹۰ روز/کل، سطل‌ها هم‌تراز با روزِ تهران) · کاربران (جست‌وجو با یوزرنیم/نام، فیلتر، مرتب‌سازی، sheetِ کاربر) · کوکی‌ها · نودها · **سیستم** (سرویس‌ها، کار و کارِ گیرکرده، دیسک، موتورها، سرتیفیکیت‌ها، پاک‌کننده) · متن‌ها · دکمه‌ها · زبان‌ها · تنظیمات (از `app/panel_settings.py`) · جست‌وجو. `/health` و `/stats` به `/system` و `/reports` ریدایرکت می‌شوند.
+  - **(۳ سامانهٔ طراحی)** توکن‌ها در `panel.css`، رنگِ اصلی نیلی، روشن پیش‌فرض و تیره با مقدارهای خودش؛ فونتِ محلیِ Vazirmatn. **آیکون‌ها:** یک sprite از Lucide (`app/static/icons.svg`، ساخته‌شده با `tools/panel_icons.py` که فهرست را از کد کشف می‌کند) — و طبقِ درخواستِ اپراتور («رنگ‌بندیِ آیکون‌ها یکنواخت است») رنگ از **موجودیت** می‌آید نه یک خاکستریِ واحد: هر پلتفرم، نوعِ فایل، گروهِ عملیات، نقشِ نود، کارِ ادمین و صفحه ته‌رنگِ ثابتِ خودش را دارد، و رنگِ وضعیت (خوب/هشدار/بد) فقط مالِ وضعیت است و همیشه با آیکون و برچسب. نمودارها (ستونی، دونات) در `panel.js`، رنگشان از متغیرهای CSS و برچسب‌هایشان پیش‌قالب‌شده از `panel_fmt`؛ کمیت با رقمِ فارسی، شناسه و رشتهٔ فنی با رقمِ لاتین.
+  - **(۴ سرعت)** CSS/JS/sprite از حافظه با URLِ هش‌دار و کشِ `immutable` سرو می‌شوند (CSS دیگر در هر صفحه درون‌خطی نیست)، HTML/JSONِ بالای ۱ کیلوبایت gzip می‌شود، و صفحه هیچ اسکریپتِ درون‌خطی ندارد — CSP حالا `script-src 'self'` است (Open Questions: بسته شد). هر صفحه بی JS هم کار می‌کند.
+  - **(۵ حذف‌شده‌ها)** `panel/` (Next.js)، مرحلهٔ Node در `docker/admin.Dockerfile`، مسیرهای `/console` و `/api/console*`، jobِ `console`ِ CI و تست‌هایش، `app/panel_glyphs.py`، و قالب‌های `health`/`stats`/`_health_*`/`_icons`.
+  - **(۶ باگ‌ها، هر کدام با تستی که روی کدِ پیش از رفع می‌افتد)** در تولید هم بودند: کارِ کوکی روی نامی که اکانتِ فهرست‌شده نیست «متای شبح» می‌نوشت (و `ckseen:` را مسلح می‌کرد) و «جایگزینی» اکانتِ حذف‌شده را زنده می‌کرد → `_known_cookie`؛ resetِ متن/دکمه و حذفِ نود روی هدفِ ناموجود «ذخیره شد» می‌گفتند؛ خروج با GET بود (هر سایتی می‌توانست ادمین را بیرون بیندازد) → فقط POST؛ کدِ ورود با رقمِ فارسی پذیرفته نمی‌شد. فقط در کدِ تازه بودند و پیش از استقرار گرفته شدند: `/cookies/cooldown` همیشه ۵۰۰ (جزئیاتِ `action=` با پارامترِ `_audit` برخورد می‌کرد)، `/system` با pot سالم ۵۰۰، پلتفرمی که همهٔ دانلودهایش افتاده بود از گزارش ناپدید می‌شد، و شدتِ سرتیفیکیت در کارت و هشدار دو عدد بود (حالا یک قاعده: ≤۱۴ روز هشدار، ≤۳ روز بد).
+  - **(۷ گاردهای تازه)** هر نامِ آیکون در sprite هست (ایستا و روی صفحهٔ رندرشده)؛ هیچ `|safe`ی در قالب‌ها نیست؛ کلیدِ دیکشنریِ هم‌نامِ متدِ dict با نقطه خوانده نمی‌شود؛ هر صفحه زیرِ `StrictUndefined` رندر می‌شود (با داده، روی نصبِ خالی، به انگلیسی)؛ نامِ جزئیاتِ `_audit` با پارامترهایش برخورد نمی‌کند (از امضا کشف می‌شود)؛ و تستِ **اثر‌محور** برای هر POSTِ پنل که نداشت (`tests/panel/test_panel_actions.py`، ۳۲ تست). خوانندگانِ `admin_web.GROUPS` در jobِ اصلی حالا `panel_settings` را مستقیم import می‌کنند.
+  - **(۸ تست‌ها)** اصلی **۱۵۲۰ گذشت، ۱۱ رد** (با قلابی که استکِ پنل را غایب می‌کند، مثلِ رانر)؛ پنل ۴۰۰ → **۶۹۰**. دفترچهٔ سابوتاژ: ۵۹ مورد به نشانه‌گذاریِ تازه بازلنگر، ۱۱ مورد با دلیلِ نوشته‌شده بازنشسته، ۲۲ موردِ تازه — **۴۲۸ مورد، صفر الگوی رُت‌شده** (۳۳ موردِ رُت‌شدهٔ قدیمیِ `admin_web.py` هم با همین کار بسته شد)؛ هر ۸۴ موردِ لمس‌شده در worktreeِ جدا روی `ff84655` replay شد: **۸۴ از ۸۴ طبقِ ثبت**.
+  - **(۹ قیدهای صادقانه)** نرخِ موفقیتِ دانلود فقط از روزِ استقرار به بعد هست — برای بازهٔ قدیمی‌تر صفحه «از تاریخِ …» می‌نویسد و مقایسه با دورهٔ قبل را نشان نمی‌دهد · خروجیِ عملیات‌های **پیش از** استقرار `source` تهی دارند و هنوز «آپلود» شمرده می‌شوند · از خطاهای اعتبارسنجیِ تنظیمات فقط حدِ عددی به زبانِ پنل ترجمه می‌شود و بقیه (مثلِ دامنهٔ لینک) فارسی می‌مانند · ذخیرهٔ تنظیمات حالا رقمِ فارسی و جداکنندهٔ هزارگان را نرمال می‌کند (`_clean_int`؛ `/admin`ِ تلگرام نه) · «بار»ِ heartbeatِ نود طولِ صفِ همان نقش است نه CPU، و همان‌طور برچسب خورده · پنل راهی برای پین‌کردنِ اکانت به خروجیِ **مستر** ندارد (تهی = هر خروجی؛ پیش از این هم نداشت) · برچسبِ کیفیت (`1080p`) عمداً لاتین است · وضعیتِ ناشناختهٔ کوکی آبی (`info`) است نه خاکستری · فهرستِ پلتفرم‌های گزارش اجتماعِ همهٔ پیامدهاست.
+  - **اعمال:** `telabzar update` روی مستر — `init_models()` دو جدولِ تازه را `create_all` می‌کند و دو `ADD COLUMN`ِ کاتالوگ‌محورِ `users` را می‌زند (بی بازنویسیِ جدول)، و buildِ ایمیجِ `admin` چون دیگر مرحلهٔ Node ندارد سریع‌تر است. `node/update.sh` روی هر نود (heartbeat حالا `at` و `nodeseen:` می‌نویسد و نودِ دانلود `download_events` را). بدونِ کلیدِ تنظیماتِ تازه و بدونِ رشتهٔ تازهٔ ربات؛ متن‌های پنل در `app/panel_i18n.py`.
 - 2026-10-08 — **بازبینیِ پنلِ ادمین پیش از بازطراحی — فقط مستندات، صفر تغییرِ کد.** قاعدهٔ ۵: سه جای این فایل با کد نمی‌خواند و اصلاح شد. (۱) جدولِ ماژول‌ها `app/panel_i18n.py` و `app/panel_glyphs.py` را نداشت (هر دو از `8c74ed4`ِ ۲۰۲۶-۰۸-۲۰). (۲) §۵ «Panel UI» هنوز اعدادِ پیش از بازنویسیِ توکنی را می‌گفت (ریتمِ ۱۶px، پدینگِ ۱۸px، ورودیِ ۱۶۰px، شکستِ ۸۶۰px)؛ کد `--s-5`=۱۳px، ورودیِ ۱۷۰px و شکستِ ۹۰۰px دارد. (۳) ادعای «دادهٔ واقعی» برای `/console` فقط دربارهٔ API درست است: چند ویجت هنوز مقدارِ هاردکد/ساختگی رندر می‌کنند (فهرست در ردیفِ `panel/`)، و ریلِ پنلِ Jinja همیشه «بدونِ نود» می‌گوید چون `mesh` هرگز پر نمی‌شود. هر دو برای بازطراحیِ بعدی ثبت شدند، نه رفع. **اعمال:** هیچ.
 - 2026-10-08 — **HTTPSِ خودکار: دامنهٔ پنل سرِ نصب، دامنهٔ لینک از پنل؛ سرتیفیکیت را Caddy خودش می‌گیرد.** درخواستِ اپراتور پیش از نصبِ دوبارهٔ سرورِ بازسازی‌شده: دامنهٔ پنل را موقعِ نصب بدهد و سرتیفیکیت خودکار بیاید، و دامنهٔ لینکِ دانلود/استریم را بعداً از پنل بگذارد، باز با سرتیفیکیتِ خودکار. تا امروز تنها راه چسباندنِ PEMِ «Origin Certificate»ِ کلودفلر در نصب‌کننده بود.
   - **(۱ طرح)** سرویسِ تازهٔ `caddy` (`caddy:2.11.4-alpine`، تنها صاحبِ ۸۰/۴۴۳) با `on_demand_tls { ask http://admin:8080/tls/ask }`. فقط دو نام سرتیفیکیت می‌گیرند: پنل از `PANEL_DOMAIN` و لینک از کلیدِ زمانِ‌اجرای `link_domain`. میزبانِ پنل به `admin:8080` می‌رود و بقیه به `gateway:8080`.
