@@ -1,169 +1,153 @@
-{% extends "base.html" %}{% import "_icons.html" as I %}
-{% block title %}{{ pt('nav.cookies') }}{% endblock %}
-{% block heading %}{{ pt('page.cookies') }}{% endblock %}
-{% block tick %}
-  <span><i>&gt;</i> ./ctl sessions --pool</span>
-  <span>groups {{groups|length}}</span>
-  {% if attention %}<span>attention {{attention|length}}</span>{% endif %}
-  <span>mirrored {{mirrored}}</span>
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% macro post(action, name, label, icon, cls='menu-item', extra={}, confirm=None) -%}
+<form method="post" action="{{ action }}"{% if confirm %} data-confirm="{{ confirm.q }}" data-confirm-text="{{ confirm.t }}" data-confirm-ok="{{ confirm.ok }}" data-danger{% endif %}>
+  <input type="hidden" name="name" value="{{ name }}">{% for k, v in extra.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+  <button class="{{ cls }}" type="submit">{{ ic(icon) }}{{ label }}</button></form>
+{%- endmacro %}
+{% macro exit_options(sel) -%}
+<option value=""{% if not sel %} selected{% endif %}>{{ t('ck.any_exit') }}</option>
+{% for n in dl_nodes %}<option value="{{ n.id }}"{% if sel == n.id %} selected{% endif %}>{{ n.name }}</option>{% endfor %}
+{%- endmacro %}
+{% block content %}
+<div class="page-h"><div><h1>{{ t('ck.title') }}</h1><div class="sub">{{ t('ck.sub', n=f.num(total), r=f.num(ready), a=f.num(attn|length)) }}</div></div>
+  <div class="actions"><a class="btn btn-primary" href="/cookies?dlg=ck-add" data-dialog="ck-add">{{ ic('plus') }}{{ t('ck.add') }}</a></div></div>
+
+{% if not dir_ok %}<div class="callout bad mb-20" role="alert">{{ ic('circle-alert') }}<div class="grow">{{ t('ck.dir.bad', d=cookies_dir or '—') }}</div></div>{% endif %}
+{% if mirror_gap %}<div class="callout warn mb-20">{{ ic('triangle-alert') }}<div class="grow">{{ t('ck.mirror.gap', a=f.num(disk_count), b=f.num(mirrored)) }}</div>
+  <form method="post" action="/cookies/resync"><button class="btn btn-secondary btn-sm" type="submit" data-busy="{{ t('ck.mirror.sync') }}">{{ ic('refresh-cw') }}{{ t('ck.mirror.sync') }}</button></form></div>{% endif %}
+
+<div class="plat-cards">{% for c in cards %}
+  <a class="card plat-card" href="#acct-{{ c.p }}" style="color:inherit;text-decoration:none">
+    <div class="h"><span class="sq sm tint {{ f.ptint(c.p) }}">{{ ic(f.picon(c.p), 'ic-16') }}</span>{{ f.plat(c.p) }}</div>
+    <div class="big num">{{ f.num(c.ready) }} <small>{{ t('ck.ready_of', n=f.num(c.n)) }}</small></div>
+    <div class="segbar" role="img" aria-label="{{ t('d.pool.ready', a=f.num(c.ready), b=f.num(c.n)) }}">{% for n, col in c.segs %}<i style="flex:{{ n }};background:{{ col }}"></i>{% else %}<i style="flex:1;background:var(--track)"></i>{% endfor %}</div>
+    <div class="meta"><span>{{ t('ck.use_hour') }}</span><span class="num">{{ t('c.of', a=f.num(c.used), b=f.num(c.cap)) if c.cap else ('—' if not c.ready else t('c.unlimited')) }}</span></div>
+  </a>{% endfor %}</div>
+
+{% if attn %}
+<section class="card mb-20">
+  {% set n_badge %}<span class="badge bad num">{{ f.num(attn|length) }}</span>{% endset %}
+  {{ m.card_head(t('ck.attn'), '', n_badge) }}
+  <div class="card-b" style="padding-top:4px">{% for r in attn %}
+    <div class="row-12 wrap" style="padding:12px 0;{% if not loop.first %}border-top:1px solid var(--border-soft){% endif %}">
+      <span class="alert-ic bad">{{ ic('snowflake' if r.status == 'frozen' else 'circle-x', 'ic-16') }}</span>
+      <div class="grow" style="min-width:200px"><div class="row wrap" style="gap:8px"><bdi class="mono fw-6">{{ r.label }}</bdi><span class="muted">·</span>{{ f.plat(r.platform) }} {{ m.pill(r.pill) }}</div>
+        <div class="muted fs-12" style="margin-top:2px">{{ t('ck.attn.frozen') if r.status == 'frozen' else t('ck.attn.invalid', n=f.num(r.fail_streak)) }}{% if r.last_error_at %} · {{ f.ago(r.last_error_at) }}{% endif %}</div>
+        {% if r.err %}<div class="sub mono trunc ltr" style="max-width:520px;margin-top:2px">{{ r.err }}</div>{% endif %}</div>
+      <div class="row">
+        {% if r.status == 'frozen' %}{{ post('/cookies/unfreeze', r.name, t('ck.resolved'), 'check', 'btn btn-secondary btn-sm') }}
+        {% else %}{{ post('/cookies/delete', r.name, t('c.delete'), 'trash-2', 'btn btn-ghost btn-sm', confirm={'q': t('ck.del.q', id=f.iso(r.label)), 't': t('ck.del.t'), 'ok': t('c.delete')}) }}{% endif %}
+        <a class="btn btn-primary btn-sm" href="/cookies?dlg=ck-replace&amp;name={{ r.name|urlencode }}" data-dialog="ck-replace" data-fill-name="{{ r.name }}" data-fill-label="{{ r.label }}">{{ ic('upload') }}{{ t('ck.fresh') }}</a>
+      </div>
+    </div>{% endfor %}</div>
+</section>
+{% endif %}
+
+<section class="card">
+  {{ m.card_head(t('ck.accounts')) }}
+  <div class="card-b flush">{% if groups %}<div class="tbl-wrap"><table class="tbl cards">
+    <thead><tr><th>{{ t('ck.col.acct') }}</th><th>{{ t('c.status') }}</th><th>{{ t('ck.col.last') }}</th><th class="end">{{ t('ck.col.streak') }}</th><th>{{ t('ck.col.use') }}</th><th>{{ t('ck.col.exit') }}</th><th class="w-actions"><span class="sr-only">{{ t('c.more') }}</span></th></tr></thead>
+    {% for g in groups %}<tbody id="acct-{{ g.p }}">
+      <tr class="grp-row"><th colspan="7" scope="rowgroup"><div class="grp-h"><span class="sq xs tint {{ f.ptint(g.p) }}">{{ ic(f.picon(g.p), 'ic-14') }}</span>{{ f.plat(g.p) }}<span class="muted">{{ t('d.pool.ready', a=f.num(g.ready), b=f.num(g.rows|length)) }}</span></div></th></tr>
+      {% for r in g.rows %}<tr>
+        <td class="lead"><div class="fw-6"><bdi class="mono">{{ r.label }}</bdi></div><div class="sub">{{ t('ck.added', t=f.ago(r.added)) if r.added else '' }}</div></td>
+        <td data-l="{{ t('c.status') }}">{{ m.pill(r.pill) }}
+          {% if r.status == 'cooldown' and r.rest_until %}<div class="sub">{{ t('ck.rest_until', t=f.hm(r.rest_until)) }}</div>{% endif %}
+          {% if r.err and r.status != 'healthy' %}<div class="sub mono trunc ltr" style="max-width:240px" title="{{ r.err }}">{{ r.err }}</div>{% endif %}</td>
+        <td class="nowrap" data-l="{{ t('ck.col.last') }}">{{ f.ago(r.last_ok) if r.last_ok else '—' }}</td>
+        <td class="end num" data-l="{{ t('ck.col.streak') }}"><span class="{{ 'bad' if r.fail_streak >= 3 else 'warn' if r.fail_streak else 'muted' }}">{{ f.num(r.fail_streak or 0) }}</span></td>
+        <td data-l="{{ t('ck.col.use') }}"><div class="use">{% if r.budget %}<div class="t num">{{ t('c.of', a=f.num(r.used), b=f.num(r.budget)) }}</div><div class="bar {{ 'warn' if (r.use_pct or 0) > 0.9 else '' }}"><i style="width:{{ '%.1f'|format((r.use_pct or 0) * 100) }}%"></i></div>
+            {% else %}<div class="t num">{{ f.num(r.used) }} · {{ t('c.unlimited') }}</div>{% endif %}
+          {% if r.warm %}<div class="sub" style="margin-top:4px">{{ t('ck.warm', p=f.pct(r.warm)) }}</div>{% endif %}</div></td>
+        <td data-l="{{ t('ck.col.exit') }}">{% if r.pin %}<bdi class="mono">{{ r.pin_name }}</bdi>{% else %}<span class="muted">{{ t('ck.any_exit') }}</span>{% endif %}{% if r.proxy %}<div class="sub">{{ ic('route', 'ic-14') }} {{ t('ck.d.proxy') }}</div>{% endif %}</td>
+        <td class="w-actions"><details class="dd">
+          <summary class="icon-btn sm" aria-label="{{ t('c.more') }}">{{ ic('ellipsis-vertical') }}</summary>
+          <div class="pop menu" role="menu">
+            <a class="menu-item" href="/cookies?dlg=ck-replace&amp;name={{ r.name|urlencode }}" data-dialog="ck-replace" data-fill-name="{{ r.name }}" data-fill-label="{{ r.label }}">{{ ic('upload') }}{{ t('ck.m.replace') }}</a>
+            <a class="menu-item" href="/cookies?dlg=ck-identity&amp;name={{ r.name|urlencode }}" data-dialog="ck-identity" data-fill-name="{{ r.name }}" data-fill-label="{{ r.label }}" data-fill-node="{{ r.pin }}" data-fill-proxy="{{ r.proxy or '' }}" data-fill-ua="{{ r.user_agent or '' }}">{{ ic('fingerprint') }}{{ t('ck.m.identity') }}</a>
+            {% if r.status == 'frozen' %}{{ post('/cookies/unfreeze', r.name, t('ck.resolved'), 'check') }}{% endif %}
+            {% if r.status == 'cooldown' %}{{ post('/cookies/cooldown', r.name, t('ck.m.rest_end'), 'play', extra={'action': 'clear'}) }}
+            {% elif r.status in ('healthy', 'unproven', 'suspect') %}{{ post('/cookies/cooldown', r.name, t('ck.m.rest'), 'hourglass', extra={'action': 'set'}) }}{% endif %}
+            {{ post('/cookies/toggle', r.name, t('ck.m.enable' if r.disabled else 'ck.m.disable'), 'play' if r.disabled else 'pause') }}
+            <div class="menu-sep"></div>
+            {{ post('/cookies/delete', r.name, t('ck.m.delete'), 'trash-2', 'menu-item danger', confirm={'q': t('ck.del.q', id=f.iso(r.label)), 't': t('ck.del.t'), 'ok': t('c.delete')}) }}
+          </div></details></td>
+      </tr>{% endfor %}
+    </tbody>{% endfor %}
+  </table></div>
+  {% else %}{{ m.empty('cookie', t('ck.none')) }}{% endif %}</div>
+</section>
+
+<div class="grid mt-20">
+  <section class="card s5">
+    {{ m.card_head(t('ck.exits'), t('ck.exits.s')) }}
+    <div class="card-b flush"><div class="tbl-wrap"><table class="tbl cards">
+      <thead><tr><th>{{ t('ck.col.exit') }}</th><th>{{ t('c.platform') }}</th><th class="end">{{ t('ck.exit.ok') }}</th><th class="end">{{ t('ck.exit.fail') }}</th><th>{{ t('c.status') }}</th></tr></thead>
+      <tbody>{% for e in exits %}<tr>
+        <td class="lead"><span class="row"><span class="sq xs tint {{ 'tbad' if e.blocked else 't0' }}">{{ ic('server' if e.exit == 'master' else 'route', 'ic-14') }}</span><bdi class="{{ '' if e.exit == 'master' else 'mono' }}">{{ e.label }}</bdi></span></td>
+        <td data-l="{{ t('c.platform') }}"><span class="row nowrap"><span class="sq xs tint {{ f.ptint(e.platform) }}">{{ ic(f.picon(e.platform), 'ic-14') }}</span>{{ f.plat(e.platform) }}</span></td>
+        <td class="end num" data-l="{{ t('ck.exit.ok') }}">{{ f.num(e.ok) }}</td>
+        <td class="end num" data-l="{{ t('ck.exit.fail') }}">{{ f.num(e.fail) }}</td>
+        <td data-l="{{ t('c.status') }}"><span class="pill {{ e.st[0] }}">{{ t(e.st[1]) }}</span></td>
+      </tr>{% else %}<tr><td colspan="5">{{ m.empty('route', t('ck.exits.none')) }}</td></tr>{% endfor %}</tbody>
+    </table></div></div>
+  </section>
+  <section class="card s7">
+    {{ m.card_head(t('ck.guide')) }}
+    <div class="card-b"><p class="ink-3" style="font-size:13.5px;margin:0 0 10px">{{ t('ck.guide.yt') }}</p>
+      <ol class="steps"><li>{{ t('ck.g1') }}</li><li>{{ t('ck.g2') }}</li><li>{{ t('ck.g3') }}</li><li>{{ t('ck.g4') }}</li></ol>
+      <div class="callout mt-16">{{ ic('info', 'ic-16') }}<div class="grow">{{ t('ck.guide.ig') }}
+        <div class="chips mt-8">{% for p, c in required.items() if c %}<span class="tag kv"><span>{{ f.plat(p) }}:</span><bdi class="mono">{{ c|join(', ') }}</bdi></span>{% endfor %}</div></div></div>
+    </div>
+  </section>
+</div>
 {% endblock %}
-{% block body %}
-{% if saved %}<div class=saved>{{ I.ico('check', '13px') }} {{saved}}</div>{% endif %}
-{% if error %}<div class=errbox>{{error}}</div>{% endif %}
 
-{% if attention %}
-<div class=card>
-  <h3>{{ I.ico('alert') }}نیازمندِ رسیدگی <span class="tag err">{{attention|length}}</span></h3>
-  <div class=pad>
-    <div class=note>این اکانت‌ها با تلاشِ خودکار درست نمی‌شوند (چک‌پوینت/۲FA یا کوکیِ باطل).
-      ربات هم موقعِ رخ‌دادن در تلگرام خبر می‌دهد و می‌توانی همان‌جا کوکیِ تازه بچسبانی.</div>
-    {% for c in attention %}
-    <div class=ck-row>
-      <span class="sdot s-{{c.status}}"></span>
-      <b class=ck-name>{{c.label}}</b>
-      <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
-      <span class=ck-meta>{{ pfa.get(c.platform, c.platform) }}
-        {%- if c.last_error %} · <span class=mono>{{c.last_error}}</span>{% endif %}</span>
-      <span class=ck-acts>
-        <form class=inline method=post action=/cookies/unfreeze>
-          <input type=hidden name=name value="{{c.name}}">
-          <button class=btn-sm>{{ I.ico('check', '12px') }}رسیدگی شد</button></form>
-        <form class=inline method=post action=/cookies/delete onsubmit="return confirm('حذفِ {{c.label}}؟')">
-          <input type=hidden name=name value="{{c.name}}">
-          <button class="btn-sm btn-danger">{{ pt('c.delete') }}</button></form>
-      </span>
-    </div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-{% if mirror_gap %}
-<div class=card><h3>{{ I.ico('refresh') }}ناهمخوانیِ آینهٔ کوکی‌ها</h3><div class=pad>
-  {# عدد و واژهٔ لاتین را کنارِ هم نگذار: در پاراگرافِ RTL جابه‌جا رندر می‌شوند. #}
-  <div class=errbox>روی دیسک <bdi>{{disk_count}}</bdi> کوکی هست، ولی فقط
-    <bdi>{{mirrored}}</bdi> تا از آن‌ها در Redis آینه شده — نودِ دانلود بقیه را
-    اصلاً نمی‌بیند.</div>
-  <form class=inline method=post action=/cookies/resync>
-    <button class=btn-go>همگام‌سازیِ دوباره</button></form>
-</div></div>
-{% endif %}
-
-{% for g in groups %}
-<div class=card>
-  <h3>{{ I.ico('cookie') }}{{ pfa.get(g.platform, g.platform) }}
-    <span class=tag>{{g.healthy}} سالم از {{g.total}}</span></h3>
-  <div class=pad>
-    {% for c in g['items'] %}
-    <div class=ck-row>
-      <span class="sdot s-{{c.status}}"></span>
-      <b class=ck-name>{{c.label}}</b>
-      <span class="badge {{c.badge}}" style=margin:0>{{c.status_fa}}</span>
-      <span class=ck-meta>آخرین موفقیت: {{c.last_ok_fa}} · خطا: <bdi>{{c.fail_streak}}</bdi>
-        · افزوده: {{c.added_fa}}
-        · سهمیه: {% if c.budget %}<bdi>{{c.used}}/{{c.budget}}</bdi> در ساعت{% else %}<bdi>{{c.used}}</bdi> در ساعت · بی‌سقف{% endif %}{% if c.warming %} <span class=chip>در حالِ گرم‌شدن</span>{% endif %}
-        {%- if c.node_id %} · خروجی: <span class=mono>{{c.node_name}}</span>{% endif %}
-        {%- if c.err_txt %}<br><span style="color:var(--warn)">آخرین خطا ({{c.err_fa}}):
-          <span class=mono>{{c.err_txt}}</span></span>{% endif %}</span>
-      <span class=ck-acts>
-        <button class=btn-sm onclick="var d=document.getElementById('i-{{loop.index0}}-{{g.platform}}');
-          d.style.display=d.style.display=='none'?'block':'none';return false">{{ I.ico('shield', '12px') }}هویت</button>
-        <button class=btn-sm onclick="var d=document.getElementById('r-{{loop.index0}}-{{g.platform}}');
-          d.style.display=d.style.display=='none'?'block':'none';return false">{{ I.ico('refresh', '12px') }}کوکیِ تازه</button>
-        <form class=inline method=post action=/cookies/cooldown><input type=hidden name=name value="{{c.name}}">
-          <input type=hidden name=action value="{{'clear' if c.status=='cooldown' else 'set'}}">
-          <button class=btn-sm>{{'فعال‌سازی' if c.status=='cooldown' else 'کنارگذاشتن'}}</button></form>
-        <form class=inline method=post action=/cookies/delete onsubmit="return confirm('حذفِ {{c.label}}؟')">
-          <input type=hidden name=name value="{{c.name}}">
-          <button class="btn-sm btn-danger">{{ pt('c.delete') }}</button></form>
-      </span>
-    </div>
-    <div class=repl id="i-{{loop.index0}}-{{g.platform}}" style=display:none>
-      <div class=ck-hint>هویتِ این اکانت — کوکی همیشه با <b>همین خروجی و همین UA</b> استفاده می‌شود.
-        سرویس‌ها IP را هویت می‌دانند؛ جابه‌جاییِ IPِ یک سشن سریع‌ترین راهِ چک‌پوینت است.</div>
-      <form method=post action=/cookies/identity class=ck-form>
-        <input type=hidden name=name value="{{c.name}}">
-        <select class=sel name=node_id>
-          <option value="">خروجی: هرکدام</option>
-          {% for n in nodes %}<option value="{{n.id}}" {% if c.node_id==n.id %}selected{% endif %}>{{n.name}}</option>{% endfor %}
-        </select>
-        <input class=inp name=proxy value="{{c.proxy}}" placeholder="پروکسیِ اختصاصی (اختیاری)">
-        <input class=inp name=user_agent value="{{c.user_agent}}" placeholder="User-Agent (اختیاری)">
-        <button class=btn-go>{{ pt('c.save') }}</button>
-      </form>
-    </div>
-    <div class=repl id="r-{{loop.index0}}-{{g.platform}}" style=display:none>
-      <div class=ck-hint>کوکیِ تازهٔ همین اکانت را بچسبان — برچسب و تاریخچه حفظ می‌شود:</div>
-      <form method=post action=/cookies/replace>
-        <input type=hidden name=name value="{{c.name}}">
-        <textarea class=ta name=content rows=3 required dir=ltr placeholder=".instagram.com&#9;TRUE&#9;/&#9;TRUE&#9;…&#9;sessionid&#9;…"></textarea>
-        <div class=ck-go><button class=btn-go>بررسی و جایگزینی</button></div>
-      </form>
-    </div>
-    {% endfor %}
-  </div>
-</div>
-{% endfor %}
-{% if not groups %}<div class=card><div class=empty>{{ pt('h.no_cookies') }}</div></div>{% endif %}
-
-{% if exits %}
-<div class=card><h3>{{ I.ico('link') }}خروجی‌ها <span class=tag>{{ pt('c.today') }}</span></h3><div class=rows>
-  <div class=hint>وقتی <b>همهٔ</b> اکانت‌ها می‌افتند، معمولاً مقصر سشن‌ها نیستند بلکه IPی است که
-    از آن بیرون می‌رویم — اینستاگرام IP را هویت می‌داند و رنجِ دیتاسنتر را می‌بندد.</div>
-  {% for e in exits %}
-    <div class=stat><b>{{ pfa.get(e.platform, e.platform) }}</b>
-      <span class=mono>{{e.exit}}</span>
-      <div class=meter><i style="width:{{e.rate}}%;background:{{'var(--acc)' if e.rate>=70 else 'var(--bad)' if e.blocked else 'var(--warn)'}}"></i></div>
-      <span class=num>{{e.rate}}% · {{e.ok}}/{{e.ok+e.fail}}</span></div>
-    {% if e.blocked %}<div class=errbox>هیچ دانلودِ موفقی از این خروجی برای
-      «{{ pfa.get(e.platform, e.platform) }}» ثبت نشده ({{e.fail}} شکست). به‌احتمالِ زیاد
-      IPِ این خروجی مسدود است، نه کوکی‌ها — تعویضِ سشن کمکی نمی‌کند؛ خروجی/پروکسی را عوض کن.</div>{% endif %}
-  {% endfor %}
-</div></div>
-{% endif %}
-
-<div class=card>
-  <h3>{{ I.ico('plus') }}افزودنِ اکانت <span class=tag>کپی/پیست — بدونِ فایل</span></h3>
-  <div class=pad>
-    <div class=note>محتوای <b>cookies.txt</b> (Netscape) یا خروجیِ <b>JSON</b>ِ افزونهٔ
-      <span class=mono>Cookie-Editor</span> را کپی کن و این‌جا بچسبان. برای اینستاگرام فقط
-      <span class=mono>sessionid</span> کافی است. از اکانتِ یک‌بارمصرف استفاده کن، نه اصلی.
-      {% if not dir_ok %}<br><b>توجه:</b> پوشهٔ کوکی‌ها (<span class=mono>{{cookies_dir or 'COOKIES_DIR'}}</span>) پیدا/نوشتنی نیست.{% endif %}
-      {% if dl_node_online %}<br>نودِ دانلود آنلاین است — کوکی‌ها خودکار همگام می‌شوند (<bdi>{{mirrored}}</bdi> در Redis).{% endif %}
-    </div>
-    <form method=post action=/cookies/add>
-      <div class=ck-form>
-        <select class=sel name=platform>
-          {% for key, fa in platforms %}<option value="{{key}}">{{fa}}</option>{% endfor %}
-        </select>
-        <input class=inp name=label placeholder="برچسبِ اکانت (مثلاً ig-acc4)">
-        <span class=ck-hint>برچسب فقط برای شناساییِ خودت است</span>
+{% block sheet %}
+{% set acct = dlg_acct %}
+<dialog class="dialog wide" id="ck-add" aria-labelledby="ck-add-t"{% if dlg == 'ck-add' %} open{% endif %}>
+  <form method="post" action="/cookies/add">
+    <div class="dialog-h"><div><h3 id="ck-add-t">{{ t('ck.d.title') }}</h3></div><a class="icon-btn sm" href="/cookies" data-close aria-label="{{ t('c.close') }}">{{ ic('x') }}</a></div>
+    <div class="dialog-b">
+      <div class="form-grid">
+        <div class="form-row"><label for="ck-p">{{ t('ck.d.platform') }}</label><select class="select" id="ck-p" name="platform">{% for k, _ in platforms %}<option value="{{ k }}">{{ f.plat(k) }}</option>{% endfor %}</select></div>
+        <div class="form-row"><label for="ck-l">{{ t('ck.d.label') }}</label><input class="input ltr" id="ck-l" name="label" placeholder="ig-4" autocomplete="off" maxlength="40" pattern="[A-Za-z0-9_\-]*"><div class="help">{{ t('ck.d.label.h') }}</div></div>
       </div>
-      <textarea class=ta name=content rows=4 required dir=ltr
-        placeholder="# Netscape HTTP Cookie File&#10;.instagram.com&#9;TRUE&#9;/&#9;TRUE&#9;1789…&#9;sessionid&#9;42891…"></textarea>
-      <div class=ck-go>
-        <button class=btn-go>بررسی و افزودن</button>
-        <span class=ck-hint>هنگامِ افزودن، ساختار و کوکیِ کلیدی بررسی می‌شود.</span>
-      </div>
-    </form>
-  </div>
-</div>
+      <div class="form-row"><label for="ck-t">{{ t('ck.d.text') }}</label><textarea class="textarea ltr mono" id="ck-t" name="content" rows="6" placeholder="# Netscape HTTP Cookie File" spellcheck="false" required></textarea>
+        <span class="help">{{ t('ck.d.text.h') }}</span></div>
+      <details class="more"><summary>{{ t('ck.d.more') }} {{ ic('chevron-down', 'ic-16') }}</summary>
+        <div class="form-grid mt-12">
+          <div class="form-row"><label for="ck-e">{{ t('ck.d.exit') }}</label><select class="select" id="ck-e" name="node_id">{{ exit_options('') }}</select><div class="help">{{ t('ck.d.exit.h') }}</div></div>
+          <div class="form-row"><label for="ck-x">{{ t('ck.d.proxy') }}</label><input class="input ltr" id="ck-x" name="proxy" placeholder="socks5h://host:1080" autocomplete="off"><div class="help">{{ t('ck.d.proxy.h') }}</div></div>
+        </div>
+        <div class="form-row" style="margin:0"><label for="ck-u">{{ t('ck.d.ua') }}</label><input class="input ltr" id="ck-u" name="user_agent" placeholder="Mozilla/5.0 …" autocomplete="off"></div>
+      </details>
+    </div>
+    <div class="dialog-f"><a class="btn btn-secondary" href="/cookies" data-close>{{ t('c.cancel') }}</a><button class="btn btn-primary" type="submit" data-busy="{{ t('ck.add') }}">{{ ic('plus') }}{{ t('ck.add') }}</button></div>
+  </form>
+</dialog>
 
-<div class=card>
-  <h3>{{ I.ico('shield') }}روالِ درستِ استخراجِ کوکی <span class=tag>مهم‌ترین عاملِ عمرِ اکانت</span></h3>
-  <div class=pad>
-    <div class=note><b>چرا کوکیِ یوتیوب زود می‌میرد:</b> اگر تبِ یوتیوب در مرورگرِ عادی باز بماند،
-      یوتیوب کوکی را <b>می‌چرخاند</b> و نسخه‌ای که export کرده‌ای باطل می‌شود. راهِ
-      درست طبقِ ویکیِ خودِ yt-dlp این است:</div>
-    <ol class=guide>
-      <li>یک پنجرهٔ <b>ناشناس (Incognito / Private)</b> باز کن و لاگین کن.</li>
-      <li><b>در همان تب</b> برو به <span class=mono>youtube.com/robots.txt</span>.</li>
-      <li>کوکی‌های <span class=mono>youtube.com</span> را export کن.</li>
-      <li>پنجرهٔ ناشناس را <b>ببند</b> — <b>لاگ‌اوت نکن</b> (لاگ‌اوت سشن را باطل می‌کند).</li>
-    </ol>
-    <div class=ck-hint>اینستاگرام: همان روال، ولی کافی است <span class=mono>sessionid</span> را داشته باشی.
-      سشنِ اینستاگرام به <b>IP و دستگاه</b> حساس است؛ کوکی را از همان‌جایی بگیر که
-      قرار است استفاده شود و اکانت‌ها را قاطیِ هم نکن.</div>
-  </div>
-</div>
+<dialog class="dialog" id="ck-replace" aria-labelledby="ck-replace-t"{% if dlg == 'ck-replace' and acct %} open{% endif %}>
+  <form method="post" action="/cookies/replace">
+    <input type="hidden" name="name" value="{{ acct.name if acct else '' }}" data-fill="name">
+    <div class="dialog-h"><div><h3 id="ck-replace-t">{{ t('ck.r.title.a') }} <bdi class="mono" data-fill="label">{{ acct.label if acct else '' }}</bdi></h3><div class="sub">{{ t('ck.r.note') }}</div></div><a class="icon-btn sm" href="/cookies" data-close aria-label="{{ t('c.close') }}">{{ ic('x') }}</a></div>
+    <div class="dialog-b"><div class="form-row" style="margin:0"><label for="ck-rt">{{ t('ck.d.text') }}</label><textarea class="textarea ltr mono" id="ck-rt" name="content" rows="7" placeholder="# Netscape HTTP Cookie File" spellcheck="false" required autofocus></textarea>
+      <span class="help">{{ t('ck.d.text.h') }}</span></div></div>
+    <div class="dialog-f"><a class="btn btn-secondary" href="/cookies" data-close>{{ t('c.cancel') }}</a><button class="btn btn-primary" type="submit">{{ ic('upload') }}{{ t('ck.m.replace') }}</button></div>
+  </form>
+</dialog>
+
+<dialog class="dialog" id="ck-identity" aria-labelledby="ck-identity-t"{% if dlg == 'ck-identity' and acct %} open{% endif %}>
+  <form method="post" action="/cookies/identity">
+    <input type="hidden" name="name" value="{{ acct.name if acct else '' }}" data-fill="name">
+    <div class="dialog-h"><div><h3 id="ck-identity-t">{{ t('ck.i.title.a') }} <bdi class="mono" data-fill="label">{{ acct.label if acct else '' }}</bdi></h3><div class="sub">{{ t('ck.i.note') }}</div></div><a class="icon-btn sm" href="/cookies" data-close aria-label="{{ t('c.close') }}">{{ ic('x') }}</a></div>
+    <div class="dialog-b">
+      <div class="form-row"><label for="ck-ie">{{ t('ck.d.exit') }}</label><select class="select" id="ck-ie" name="node_id" data-fill="node">{{ exit_options(acct.pin if acct else '') }}</select><div class="help">{{ t('ck.d.exit.h') }}</div></div>
+      <div class="form-row"><label for="ck-ix">{{ t('ck.d.proxy') }}</label><input class="input ltr" id="ck-ix" name="proxy" placeholder="socks5h://host:1080" autocomplete="off" value="{{ acct.proxy if acct else '' }}" data-fill="proxy"><div class="help">{{ t('ck.d.proxy.h') }}</div></div>
+      <div class="form-row" style="margin:0"><label for="ck-iu">{{ t('ck.d.ua') }}</label><input class="input ltr" id="ck-iu" name="user_agent" placeholder="Mozilla/5.0 …" autocomplete="off" value="{{ acct.user_agent if acct else '' }}" data-fill="ua"></div>
+    </div>
+    <div class="dialog-f"><a class="btn btn-secondary" href="/cookies" data-close>{{ t('c.cancel') }}</a><button class="btn btn-primary" type="submit">{{ ic('save') }}{{ t('c.save') }}</button></div>
+  </form>
+</dialog>
 {% endblock %}

@@ -1,111 +1,130 @@
-"""کارتی که فقط بخشی از کار را می‌شمارد باید دامنه‌اش را **بگوید**.
+"""کارتی که فقط بخشی از کار را می‌شمارد باید دامنه‌اش را **بگوید** — یا جدا گزارشش کند.
 
-دو مورد، هر دو از یک ردهٔ «عدد درست است، معنی‌اش غلط فهمیده می‌شود».
+**پیشینه (پنلِ پیش از ۲۰۲۶-۱۰).** «عملیات» دانلودها را نمی‌شمارد: `Job()` فقط در
+`routers/ops.py` ساخته می‌شود و `tasks_download.py` صریح می‌گوید جابِ دانلود ردیفِ
+`Job` ندارد. صفحهٔ آمارِ قدیم هشت سطحِ jobs-محور داشت که صفر دانلود می‌دیدند، و تصمیمِ
+آن روز (اپراتور، ۲۰۲۶-۰۸-۱۸) **برچسبِ صریح** بود. و نرخِ موفقیتِ دانلود از
+`dlstat:*`ِ یک‌روزهٔ UTC می‌آمد که با TTLِ دوروزه نوشته می‌شد — دو پنجرهٔ متفاوت.
 
-**۱ — «عملیات» دانلودها را نمی‌شمارد.** `Job()` فقط در `routers/ops.py:172,184`
-ساخته می‌شود، و `tasks_download.py:7` صریح می‌گوید «جابِ دانلود، رکوردِ
-File/Job از پیش ندارد» — یعنی طراحیِ عمدی، نه فراموشی. ولی نتیجه‌اش این است که
-هشت سطحِ jobs-محورِ `/stats` صفر دانلود می‌بینند، در حالی که همان صفحه
-«فایل · N از لینک» را از `files` می‌گیرد و همه‌شان را دارد. با اعدادِ تولید
-(۳۲۰۴ فایلِ دانلودی از ۴۰۵۰ در برابرِ ۱۰۱۶ جاب) یعنی ~۷۹٪ کار در کارتِ کناری
-نامرئی است. تصمیم (اپراتور): **برچسب**، نه ساختنِ Job — مسئله گمراهی است نه
-نبودِ عدد. گزینهٔ «Job برای دانلودها» با هزینه‌اش در §۷ ثبت شد.
+**از بازطراحیِ ۲۰۲۶-۱۰ هر دو ریشه‌ای حل شده‌اند، نه با برچسب:** دانلود لاگِ ماندگارِ
+خودش را دارد (`DownloadEvent`)، پس گزارش‌ها دانلود را **جدا** می‌شمارند (کارتِ پلتفرم،
+تفکیکِ «از لینک / آپلود» زیرِ فایل‌ها، ستونِ «دانلود» کنارِ «عملیات» در کاربرانِ پرکار)
+و «عملیات» همه‌جا یعنی کار روی فایل. نرخ از همان لاگ و روی **بازهٔ انتخاب‌شده** است، با
+سطل‌های هم‌ترازِ روزِ تهران. این فایل همان قراردادها را نگه می‌دارد.
 
-**۲ — کارتِ نرخِ دانلود پنجرهٔ یک‌روزهٔ UTC دارد.** `_health` کلیدِ
-`dlstat:{p}:ok:{روزِ جاریِ UTC}` را می‌خواند در حالی که `_metric` با TTLِ **دو
-روز** می‌نویسد، پس یک `KEYS dlstat:*`ِ دستی عددِ بزرگ‌تری می‌دهد و مستقیماً
-قابلِ مقایسه نیست. همین یک بار اپراتور را گمراه کرد («۳۳٪ · ۱ از ۳» در پنل در
-برابرِ ۱۱ و ۷ در Redis — دو پنجرهٔ متفاوت، نه دو منبعِ متفاوت). و «امروز» برای
-کاربرِ ایرانی بس نیست: روزِ تهران با روزِ UTC یکی نیست.
+دادهٔ کاشته‌شده (`conftest.seeded`): ۴ فایلِ ساندکلاد بدونِ Job + ۱ آپلود با ۳ جاب ·
+لاگِ دانلود: ساندکلاد ۴ موفق + ۲ ناموفق، اینستاگرام ۱ موفقِ کش‌خورده، یوتیوب ۱ ردشده.
 """
 from __future__ import annotations
 
-import re
-
+from pagefacts import missing_facts, shows
 from test_panel_css_classes import _fetch
 
 
-def _card(html: str, marker: str) -> str:
-    """بدنهٔ کارتی که `marker` در سربرگش هست."""
-    for block in re.split(r'<div class=card', html):
-        if marker in block[:400]:
-            return block
-    raise AssertionError(f"کارتِ «{marker}» پیدا نشد")
+def _card(html: str, title: str) -> str:
+    """بدنهٔ `<section class="card…">`ی که سربرگش `title` را دارد."""
+    for block in html.split('<section class="card')[1:]:
+        head = block[:600]
+        if f"<h2>{title}</h2>" in head:
+            return block.split("</section>", 1)[0]
+    raise AssertionError(f"کارتِ «{title}» پیدا نشد")
 
 
-# ── ۱: دامنهٔ کارت‌های jobs-محور ────────────────────────────────────────────
-async def test_the_stats_page_says_which_numbers_exclude_downloads(seeded):
-    """یک توضیحِ صریح، یک‌بار — به‌جای شش تکرار روی شش کارت."""
-    html = await _fetch(seeded, "/stats")
-    assert "دانلودها در این عددها نیستند" in html
-    assert "/health" in html, "باید به جایی که نرخِ دانلود هست ارجاع بدهد"
+def _f():
+    from app.admin_web import Fmt
+    return Fmt("fa")
 
 
-async def test_the_operations_kpi_states_its_scope(seeded):
-    html = await _fetch(seeded, "/stats")
-    assert "<em>عملیات روی فایل</em>" in html
-    assert "<em>عملیات</em>" not in html, "برچسبِ بی‌قیدِ «عملیات» برگشته"
+async def _report(key: str = "30d") -> dict:
+    from app import panel_data as PD
+    return await PD.reports(key)
 
 
-async def test_the_jobs_backed_cards_are_tagged(seeded):
-    """سه کارتی که مستقیم از `jobs` می‌آیند."""
-    html = await _fetch(seeded, "/stats")
-    assert "بدونِ دانلود" in _card(html, "پرکاربردترین عملیات")
-    assert "بدونِ دانلود" in _card(html, "کارایی هر عملیات")
-    assert "فقط عملیات روی فایل" in _card(html, "پرتکرارترین خطاها")
+# ── «عملیات» = کار روی فایل؛ دانلود جدا شمرده می‌شود ─────────────────────────
+async def test_the_operations_kpi_counts_jobs_not_downloads(seeded):
+    """۳ جاب، با وجودِ ۸ رویدادِ دانلود — عدد نباید دانلودها را جمع کند."""
+    d = await _report()
+    assert d["jobs"][0] == 3, f"پیش‌شرطِ کاشت: {d['jobs']}"
+    f = _f()
+    card = _kpi(await _fetch(seeded, "/reports"), f.t("rp.k.ops"))
+    shows(card, f.num(3), f.t("rp.k.ops.s", f=f.num(1)))
 
 
-async def test_the_trend_legend_states_its_scope(seeded):
-    html = await _fetch(seeded, "/stats")
-    trend = _card(html, "روند")
-    assert "عملیات روی فایل" in trend
-    assert "شاملِ دانلود" in trend, "سریِ «فایل» دانلودها را دارد و باید بگوید"
+async def test_the_files_kpi_says_how_many_came_from_links(seeded):
+    """تنها عددِ مشترکِ دانلود و آپلود، با تفکیکش — وگرنه «۵ فایل» دامنه ندارد."""
+    d = await _report()
+    assert (d["files"]["dl"][0], d["files"]["up"][0]) == (4, 1)
+    f = _f()
+    card = _kpi(await _fetch(seeded, "/reports"), f.t("rp.k.files"))
+    shows(card, f.num(5), f.t("rp.k.files.s", dl=f.num(4), up=f.num(1)))
 
 
-async def test_the_file_side_cards_are_not_tagged_as_ops_only(seeded):
-    """کنترلِ معکوس: کارت‌های `files`-محور دانلود را **می‌بینند** و نباید برچسب بخورند.
+def _kpi(html: str, label: str) -> str:
+    """کارتِ KPIِ همین برچسب — از `<div class="card kpi">` تا KPIِ بعدی."""
+    for p in html.split('<div class="card kpi">')[1:]:
+        if f'<span class="kpi-label">{label}</span>' in p:
+            return p.split('<div class="kpi-sub">', 1)[0] + p.split('<div class="kpi-sub">', 1)[1].split("</div>", 1)[0]
+    raise AssertionError(f"KPIِ «{label}» پیدا نشد")
 
-    بدونِ این، «برچسب همه‌جا بزن» هم سبز می‌شد و برچسب معنایش را از دست می‌داد.
+
+async def test_the_top_users_table_keeps_downloads_and_operations_apart(seeded):
+    """کاربرِ ۹۰۱: ۵ فایل، ۶ دانلود (۴ موفق + ۲ ناموفق)، ۳ عملیات — سه ستونِ جدا."""
+    f = _f()
+    card = _card(await _fetch(seeded, "/reports"), f.t("rp.top"))
+    for col, n in (("rp.files", 5), ("rp.dls", 6), ("rp.opsn", 3)):
+        assert f'data-l="{f.t(col)}">{f.num(n)}</td>' in card, f"ستونِ «{f.t(col)}» عددِ {n} را نمی‌گوید"
+
+
+# ── نرخِ موفقیت: از لاگِ دانلود، روی همان بازه ───────────────────────────────
+async def test_the_platform_rate_comes_from_the_download_log(seeded):
+    """ساندکلاد ۴ از ۶؛ «ردشده» (حجم/سقف) در مخرج نیست چون شکستِ سرویس نیست."""
+    f = _f()
+    card = _card(await _fetch(seeded, "/reports"), f.t("rp.plat"))
+    shows(card, f.plat("soundcloud"), f.pct(4 / 6), f.num(6))
+
+
+async def test_a_platform_that_only_fails_is_still_reported(seeded):
+    """پلتفرمی که هیچ فایلی نداد همان است که باید **دیده** شود، با نرخِ صفر.
+
+    نسخهٔ اولِ گزارش ردیف‌ها را فقط از فایل‌ها می‌ساخت — یعنی پلتفرمِ کاملاً خراب
+    از کارت ناپدید می‌شد (اجراشده).
     """
-    html = await _fetch(seeded, "/stats")
-    for marker in ("پلتفرمِ دانلود", "منبعِ فایل"):
-        assert "بدونِ دانلود" not in _card(html, marker), (
-            f"کارتِ «{marker}» از `files` می‌آید و دانلودها را دارد")
+    import datetime as dt
+
+    from app.models import DownloadEvent
+
+    # توییتر یکی از پلتفرم‌های رنگ‌دارِ `PD.PLATS` است؛ بقیه عمداً در «سایر» جمع
+    # می‌شوند (پالتِ دسته‌ای محدود است) و آن‌جا نامِ خودشان دیده نمی‌شود.
+    async with seeded.maker() as s:
+        for _ in range(3):
+            s.add(DownloadEvent(platform="twitter", outcome="fail", error_class="unrelated",
+                                created_at=dt.datetime.now(dt.timezone.utc)))
+        await s.commit()
+    await seeded.redis.flushdb()            # کشِ گزارش
+    f = _f()
+    card = _card(await _fetch(seeded, "/reports"), f.t("rp.plat"))
+    row = card.split(f.plat("twitter"), 1)
+    assert len(row) == 2, "ردیفِ توییتر (فقط شکست) در کارت نیست"
+    shows(row[1].split('<div class="sm-row">', 1)[0], f.pct(0.0), f.num(3))
+
+
+async def test_refused_downloads_are_not_failures(seeded):
+    """کنترلِ معکوس: یوتیوب فقط یک «ردشده» دارد و نباید ردیفِ پلتفرم با نرخ بگیرد."""
+    f = _f()
+    card = _card(await _fetch(seeded, "/reports"), f.t("rp.plat"))
+    assert missing_facts(card, [f.plat("youtube")]) == [f.plat("youtube")]
+
+
+async def test_errors_name_their_source(seeded):
+    """خطاهای پرتکرار حالا هر دو منبع را دارند — و هر ردیف می‌گوید از کجاست."""
+    f = _f()
+    card = _card(await _fetch(seeded, "/reports"), f.t("rp.errors"))
+    shows(card, f.err("login_required"), f.plat("soundcloud"),   # دانلود
+          "ffmpeg exploded", f.op("convert"))                    # عملیات
 
 
 async def test_the_numbers_themselves_did_not_move(seeded):
-    """برچسب‌گذاری نباید هیچ عددی را عوض کند — گزینهٔ «پ» فقط متن است.
-
-    دادهٔ کاشته‌شده ۴ فایلِ دانلودی (بدونِ Job) و ۱ آپلود با ۳ جاب دارد.
-    """
-    from app import admin_web as aw
-
-    s = await aw._stats("all")
-    assert s["files"] == 5 and s["dl_files"] == 4, "پیش‌شرطِ تست عوض شده"
-    assert s["ops"] == 3, "این عدد باید همچنان فقط jobs را بشمارد"
-
-
-# ── ۲: پنجرهٔ کارتِ نرخِ دانلود ──────────────────────────────────────────────
-async def test_the_download_rate_card_names_its_timezone(seeded):
-    html = await _fetch(seeded, "/health")
-    card = _card(html, "نرخِ موفقیتِ دانلود")
-    assert "امروز (UTC)" in card, "برچسبِ «امروز» بدونِ منطقهٔ زمانی گمراه‌کننده است"
-
-
-async def test_the_download_rate_card_really_reads_one_utc_day(seeded):
-    """اثباتِ اینکه برچسب راست می‌گوید.
-
-    کلیدِ **دیروز** ست می‌شود و کارت نباید تکان بخورد — وگرنه برچسبِ «امروز»
-    خودش یک ادعای نادرستِ تازه است. دادهٔ کاشته‌شده امروز ۱ موفق و ۲ ناموفق است.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    yday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y%m%d")
-    await seeded.redis.set(f"dlstat:soundcloud:ok:{yday}", 10)
-    await seeded.redis.set(f"dlstat:soundcloud:fail:{yday}", 5)
-
-    html = await _fetch(seeded, "/health")
-    card = _card(html, "نرخِ موفقیتِ دانلود")
-    assert "33% · 1/3" in card, (
-        "کارت باید فقط روزِ جاریِ UTC را بدهد؛ اگر عددِ دیروز داخلش آمده، "
-        "برچسبِ «امروز (UTC)» دروغ است.")
+    """گزارش‌دادنِ جدای دانلود نباید هیچ عددِ jobs-محوری را عوض کند."""
+    d = await _report("all")
+    assert d["jobs"][0] == 3, "این عدد باید همچنان فقط jobs را بشمارد"
+    assert sum(o["n"] for o in d["ops"]) == 2, "جدولِ کارایی فقط کارهای تمام‌شده را دارد"

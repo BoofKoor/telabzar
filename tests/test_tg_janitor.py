@@ -11,6 +11,7 @@ checkpoint)، Redis (`MISCONF`) و خودِ `local-bot-api` («Can't create dire
 from __future__ import annotations
 
 import ast
+import sys
 import asyncio
 import os
 import time
@@ -182,12 +183,8 @@ def test_both_keys_are_registered_for_the_panel():
     from app.settings_store import RUNTIME_KEYS
     assert RUNTIME_KEYS["tg_files_max_age_hours"][0] == "int"
     assert RUNTIME_KEYS["tg_files_min_free_gb"][0] == "int"
-    src = (ROOT / "app" / "admin_web.py").read_text(encoding="utf-8")
-    groups = next(ast.literal_eval(n.value) for n in ast.walk(ast.parse(src))
-                  if isinstance(n, ast.Assign)
-                  and any(getattr(t, "id", "") == "GROUPS" for t in n.targets))
-    keys = {row[0] for _t, rows in groups for row in rows}
-    assert {"tg_files_max_age_hours", "tg_files_min_free_gb"} <= keys
+    from app import panel_settings
+    assert {"tg_files_max_age_hours", "tg_files_min_free_gb"} <= set(panel_settings.setting_keys())
 
 
 def _services() -> dict:
@@ -224,5 +221,8 @@ def test_the_janitor_runs_in_the_lean_bot_image():
     mods = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     mods |= {n.module.split(".")[0] for n in ast.walk(tree)
              if isinstance(n, ast.ImportFrom) and n.module and n.level == 0}
-    assert mods <= {"__future__", "asyncio", "logging", "os", "shutil", "stat", "time", "dataclasses"}
+    # کشف‌محور، نه فهرستِ دستی: «فقط کتابخانهٔ استاندارد» همان ادعاست، و فهرستِ دستی
+    # با افزودنِ `json` (گزارشِ `janitor:last` برای پنل) بی‌دلیل قرمز شد.
+    extra = mods - set(sys.stdlib_module_names)
+    assert not extra, f"tg_janitor بیرون از کتابخانهٔ استاندارد import می‌کند: {sorted(extra)}"
     assert _services()["tg-janitor"]["build"]["dockerfile"] == "docker/bot.Dockerfile"

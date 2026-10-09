@@ -21,6 +21,19 @@ async def _find_user(session, tg_user_id: int) -> User | None:
     return result.scalar_one_or_none()
 
 
+def _tg_names(tg_user) -> tuple[str | None, str | None]:
+    """یوزرنیم و نامِ کامل از شیءِ تلگرامی، بریده به عرضِ ستون.
+
+    Postgres طولِ `VARCHAR(n)` را اعمال می‌کند و SQLiteِ تست‌ها نه (§۷)، پس برش در
+    پایتون است. `getattr` چون تست‌ها شیءِ حداقلی (فقط `id`) می‌دهند.
+    """
+    username = (getattr(tg_user, "username", None) or "").strip() or None
+    first = (getattr(tg_user, "first_name", None) or "").strip()
+    last = (getattr(tg_user, "last_name", None) or "").strip()
+    full = " ".join(x for x in (first, last) if x) or None
+    return (username[:64] if username else None, full[:128] if full else None)
+
+
 async def get_or_create_user(session, tg_user: TgUser) -> User:
     """کاربر را بخوان یا بساز — امن در برابرِ دو آپدیتِ هم‌زمانِ کاربرِ تازه.
 
@@ -30,9 +43,11 @@ async def get_or_create_user(session, tg_user: TgUser) -> User:
     `tg_user_id` با `IntegrityError` می‌میرد — یعنی همان پیامِ اولِ کاربر بی‌جواب
     می‌ماند. روی تعارض، ردیفِ برنده وجود دارد: rollback و دوباره بخوان.
     """
+    username, full_name = _tg_names(tg_user)
     user = await _find_user(session, tg_user.id)
     if user is None:
-        user = User(tg_user_id=tg_user.id, role="user")
+        user = User(tg_user_id=tg_user.id, role="user",
+                    username=username, full_name=full_name)
         session.add(user)
         user.last_seen = datetime.now(timezone.utc)
         try:
@@ -43,6 +58,14 @@ async def get_or_create_user(session, tg_user: TgUser) -> User:
             user = await _find_user(session, tg_user.id)
             if user is None:      # تعارض از جای دیگری بود — پنهانش نکن
                 raise
+    # فقط وقتی عوض شده بنویس؛ همان commitِ last_seen، پس رفت‌وبرگشتِ تازه ندارد.
+    # یوزرنیمِ **برداشته‌شده** هم پاک می‌شود: یوزرنیمِ رهاشده در تلگرام به دیگری
+    # می‌رسد، و نشان‌دادنِ نسخهٔ کهنه یعنی پنل کاربر را با آدمِ دیگری یکی بگیرد.
+    # فقط شیءِ حداقلیِ تست (بی `username`) چیزی را پاک نمی‌کند.
+    if hasattr(tg_user, "username") and user.username != username:
+        user.username = username
+    if hasattr(tg_user, "first_name") and user.full_name != full_name:
+        user.full_name = full_name
     user.last_seen = datetime.now(timezone.utc)
     await session.commit()
     return user

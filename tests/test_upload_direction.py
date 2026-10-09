@@ -83,7 +83,9 @@ def _reader_files(key: str) -> set[str]:
     """فایل‌هایی زیرِ `app/` که این کلید را از فروشگاهِ تنظیمات می‌خوانند."""
     out = set()
     for path in (ROOT / "app").rglob("*.py"):
-        if path.name in ("settings_store.py", "admin_web.py", "config.py"):
+        # جاهایی که کلید را **اعلام** می‌کنند نه می‌خوانند: نوع/پیش‌فرض، مقدارِ env،
+        # و ردیف/برچسبِ صفحهٔ تنظیمات (`panel_settings`، جانشینِ `admin_web.GROUPS`).
+        if path.name in ("settings_store.py", "admin_web.py", "config.py", "panel_settings.py"):
             continue
         src = path.read_text(encoding="utf-8")
         if f'"{key}"' in src or f"'{key}'" in src:

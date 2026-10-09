@@ -1,50 +1,53 @@
-{% extends "base.html" %}{% import "_icons.html" as I %}
-{% block title %}{{ pt('nav.users') }}{% endblock %}
-{% block heading %}{{ pt('page.users') }}{% endblock %}
-{% block tick %}
-  <span><i>&gt;</i> SELECT * FROM users</span>
-  <span>rows {{total}}</span>
-  <span>blocked {{blocked}}</span>
-  <span>page {{page+1}}/{{pages}}</span>
-{% endblock %}
-{% block body %}
-{% if done %}<div class=saved>{{ I.ico('check', '13px') }} {{done}}</div>{% endif %}
-<form class=search method=get action=/users>
-  <input name=q value="{{q}}" inputmode=numeric placeholder="جستجو با شناسهٔ عددی">
-  <button>{{ pt('c.search') }}</button>
-  {% if q %}<a class=btn-sm href=/users>{{ pt('c.clear') }}</a>{% endif %}
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% macro block_form(u, cls, back) -%}
+{% set blocking = not u.blocked %}
+<form method="post" action="/users/block"{% if blocking %} data-confirm="{{ t('us.block.q', n=f.iso(f.uname(u))) }}" data-confirm-text="{{ t('us.block.t') }}" data-confirm-ok="{{ t('us.block') }}" data-danger{% endif %}>
+  <input type="hidden" name="id" value="{{ u.id }}"><input type="hidden" name="action" value="{{ 'block' if blocking else 'unblock' }}"><input type="hidden" name="back" value="{{ back }}">
+  <button class="{{ cls }}{% if blocking and 'menu-item' in cls %} danger{% endif %}" type="submit">{{ ic('user-x' if blocking else 'user-check') }}{{ t('us.block' if blocking else 'us.unblock') }}</button>
 </form>
-<div class=card><h3>{{ I.ico('users') }}{{ pt('page.users') }}
-  <span class=tag>{{total}} {{ pt('c.total') }}</span>
-  {% if blocked %}<span class=tag>{{blocked}} {{ pt('h.blocked') }}</span>{% endif %}</h3>
-{% if users %}
-<div class=tbl-wrap><table class=tbl><thead><tr>
-  <th>شناسهٔ تلگرام</th><th>نقش</th><th>فایل‌ها</th><th>ثبت‌نام</th><th>آخرین بازدید</th>
-  <th>وضعیت</th><th style=text-align:left>عملیات</th></tr></thead><tbody>
-{% for u in users %}
-<tr>
-  <td class=mono>{{u.tg}}{% if u.is_admin %} <span class=tag2>admin</span>{% endif %}</td>
-  <td><span class=chip>{{u.role}}</span></td>
-  <td class=num>{{u.files}}</td>
-  <td class="num" style=color:var(--ink3)>{{u.created}}</td>
-  <td class="num" style=color:var(--ink3)>{{u.seen}}</td>
-  <td>{% if u.blocked %}<span class="badge warn" style=margin:0>{{ pt('h.blocked') }}</span>
-      {% else %}<span class="badge ok" style=margin:0>{{ pt('h.active') }}</span>{% endif %}</td>
-  <td style=text-align:left>
-    {% if u.is_admin %}<span class="num" style=color:var(--ink3)>—</span>
-    {% else %}<form class=inline method=post action=/users/block>
-      <input type=hidden name=id value="{{u.id}}"><input type=hidden name=page value="{{page}}"><input type=hidden name=q value="{{q}}">
-      <input type=hidden name=action value="{{'unblock' if u.blocked else 'block'}}">
-      <button class="btn-sm {{'' if u.blocked else 'btn-danger'}}">{{'رفعِ بلاک' if u.blocked else 'بلاک'}}</button></form>{% endif %}
-  </td>
-</tr>
-{% endfor %}
-</tbody></table></div>
-<div class=pager>
-  <a class="{{'off' if page<=0}}" href="/users?page={{page-1}}{% if q %}&q={{q}}{% endif %}">→ قبلی</a>
-  <span>{{ pt('h.page_of', a=page+1, b=pages) }}</span>
-  <a class="{{'off' if page+1>=pages}}" href="/users?page={{page+1}}{% if q %}&q={{q}}{% endif %}">بعدی ←</a>
-</div>
-{% else %}<div class=empty>{{ pt('h.no_users') }}</div>{% endif %}
-</div>
+{%- endmacro %}
+{% block content %}
+<div class="page-h"><div><h1>{{ t('nav.users') }}</h1><div class="sub">{{ t('us.sub', n=f.num(data.all), a=f.num(data.active7), b=f.num(data.blocked)) }}</div></div></div>
+<section class="card">
+  <div class="card-h" style="padding-bottom:16px">
+    <form class="toolbar w-full" method="get" action="/users" role="search">
+      {% if st %}<input type="hidden" name="st" value="{{ st }}">{% endif %}
+      <div class="search-in">{{ ic('search') }}<input class="input" type="search" name="q" value="{{ q }}" placeholder="{{ t('us.q') }}" aria-label="{{ t('us.q') }}"></div>
+      <div class="seg" role="group" aria-label="{{ t('c.status') }}">{% for v in ('', 'active', 'blocked') %}<a href="/users?{{ qs(st=v, page='') }}"{% if st == v %} aria-current="true"{% endif %}>{{ t('us.st.' + (v or 'all')) }}</a>{% endfor %}</div>
+      {% if data.langs|length > 1 %}
+      <select class="select" name="lang" data-autosubmit aria-label="{{ t('c.language') }}"><option value="">{{ t('us.lang.all') }}</option>
+        {% for c in data.langs %}<option value="{{ c }}"{% if ulang == c %} selected{% endif %}>{{ f.lang_name(c, langs) }}</option>{% endfor %}</select>
+      {% endif %}
+      <select class="select" name="sort" data-autosubmit aria-label="{{ t('c.sort') }}">{% for v in sorts %}<option value="{{ v }}"{% if sort == v %} selected{% endif %}>{{ t('c.sort') }}: {{ t('us.sort.' + v) }}</option>{% endfor %}</select>
+      <button class="btn btn-secondary no-js-only" type="submit">{{ ic('search') }}{{ t('c.search') }}</button>
+    </form>
+  </div>
+  <div class="tbl-wrap"><table class="tbl cards">
+    <thead><tr><th>{{ t('c.user') }}</th><th>{{ t('us.col.id') }}</th><th>{{ t('c.language') }}</th><th>{{ t('us.col.joined') }}</th><th>{{ t('us.col.seen') }}</th><th class="end">{{ t('us.col.files') }}</th><th class="w-actions"><span class="sr-only">{{ t('c.more') }}</span></th></tr></thead>
+    <tbody>{% for u in data.rows %}{% set href = '/users?' ~ qs(open=u.id) %}
+      <tr class="click" data-href="{{ href }}" tabindex="0">
+        <td class="lead"><div class="cell-user">{{ m.avatar(u, 'sm') }}<div class="grow">
+          <div class="row" style="gap:6px;min-width:0"><a class="rowlink n trunc" href="{{ href }}" data-sheet>{% if u.name %}<bdi>{{ u.name }}</bdi>{% elif u.uname %}<bdi>@{{ u.uname }}</bdi>{% else %}<span class="muted">{{ t('us.noname') }}</span>{% endif %}</a>
+            {% if u.tg in admins %}<span class="pill primary">{{ t('top.admin') }}</span>{% elif u.blocked %}<span class="pill bad">{{ ic('ban') }}{{ t('st.blocked') }}</span>{% endif %}</div>
+          {% if u.name and u.uname %}<div class="sub trunc"><bdi>@{{ u.uname }}</bdi></div>{% endif %}
+        </div></div></td>
+        <td data-l="{{ t('us.col.id') }}"><bdi class="mono">{{ u.tg }}</bdi></td>
+        <td data-l="{{ t('c.language') }}">{% if u.lang %}<span class="tag">{{ f.lang_name(u.lang, langs) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="nowrap" data-l="{{ t('us.col.joined') }}">{{ f.day_long(u.joined) }}</td>
+        <td class="nowrap" data-l="{{ t('us.col.seen') }}">{{ f.ago(u.seen) }}</td>
+        <td class="end num" data-l="{{ t('us.col.files') }}">{{ f.num(u.files) }}</td>
+        <td class="w-actions"><details class="dd">
+          <summary class="icon-btn sm" aria-label="{{ t('c.more') }}">{{ ic('ellipsis-vertical') }}</summary>
+          <div class="pop menu" role="menu">
+            <a class="menu-item" href="{{ href }}" data-sheet>{{ ic('eye') }}{{ t('c.view') }}</a>
+            <button class="menu-item js-only" type="button" data-copy="{{ u.tg }}">{{ ic('copy') }}{{ t('us.copy_id') }}</button>
+            {% if u.tg not in admins %}<div class="menu-sep"></div>{{ block_form(u, 'menu-item', back) }}{% endif %}
+          </div></details></td>
+      </tr>
+    {% else %}<tr><td colspan="7">{{ m.empty('users', t('c.no_results')) }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {{ m.pager(pager) }}
+</section>
 {% endblock %}
+{% block sheet %}{% if sheet %}<a class="backdrop" href="{{ close_href }}" data-sheet-close aria-label="{{ t('c.close') }}"></a>{% with u = sheet, back = sheet_back %}{% include '_sheet_user.html' %}{% endwith %}{% endif %}{% endblock %}

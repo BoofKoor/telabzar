@@ -1,56 +1,42 @@
-{% extends "base.html" %}{% import "_icons.html" as I %}
-{% block title %}{{ pt('nav.texts') }}{% endblock %}
-{% block heading %}{{ pt('page.texts') }}{% endblock %}
-{% block tick %}
-  <span><i>&gt;</i> ./ctl texts --lang {{lang_sel}}</span>
-  <span>keys {{total}}</span>
-  <span>overridden {{edited}}</span>
-  <span>live, no restart</span>
-{% endblock %}
-{% block body %}
-<div class=card>
-  <form class=tx-tools method=get action=/texts>
-    <select class=sel name=lang onchange="this.form.submit()">
-      {% for code, nm in langs.items() %}
-      <option value="{{code}}" {% if lang_sel==code %}selected{% endif %}>{{nm}}</option>
-      {% endfor %}
-    </select>
-    <input class=inp name=q value="{{q}}" placeholder="جست‌وجوی کلید یا متن…" style="flex:1;min-width:180px;text-align:start">
-    <button class=btn-sm>{{ pt('c.search') }}</button>
-    {% if q %}<a class=btn-sm href="/texts?lang={{lang_sel}}">{{ pt('c.clear') }}</a>{% endif %}
-    <span class=tag>{{total}} متن · {{edited}} ویرایش‌شده · بی‌ری‌استارت</span>
-  </form>
-  {% if saved %}<div class=saved>{{ I.ico('check', '13px') }} {{saved}}</div>{% endif %}
-  {% if error %}<div class=tx-err>{{ I.ico('alert', '13px') }} {{error}}</div>{% endif %}
-  {% if not groups %}<div class=empty>{{ pt('h.no_match', q=q) }}</div>{% endif %}
-  <div class=tx-list>
-  {% for g in groups %}
-  <details class=tx-cat {% if g.open %}open{% endif %}>
-    <summary>{{g.title}} <span class=cnt>({{g.n}})</span>
-      {% if g.edited %}<span class=ed>{{g.edited}} ویرایش‌شده</span>{% endif %}</summary>
-    <div class=tx-body>
-    {% for it in g['items'] %}
-      <div class=tx-item>
-        <div class=tx-key><code>{{it.key}}</code>
-          {% if it.overridden %}<span class=chip>ویرایش‌شده</span>{% endif %}</div>
-        <div class=tx-def>پیش‌فرض: {{it.default}}</div>
-        <form method=post action=/texts/save>
-          <input type=hidden name=key value="{{it.key}}">
-          <input type=hidden name=lang value="{{lang_sel}}">
-          <input type=hidden name=q value="{{q}}">
-          <div class=tx-edit>
-            <textarea name=value rows=2>{{it.current}}</textarea>
-            <div class=tx-actions>
-              <button class=save-sm>{{ pt('c.save') }}</button>
-              {% if it.overridden %}
-              <button class=btn-sm formaction=/texts/reset>بازگشت به پیش‌فرض</button>{% endif %}
-            </div>
-          </div>
-        </form>
-      </div>
-    {% endfor %}
-    </div>
-  </details>
-  {% endfor %}
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% macro back_fields() -%}
+<input type="hidden" name="lang" value="{{ lang_sel }}">{% if q %}<input type="hidden" name="q" value="{{ q }}">{% endif %}{% if cat != 'all' %}<input type="hidden" name="cat" value="{{ cat }}">{% endif %}{% if edited %}<input type="hidden" name="edited" value="1">{% endif %}
+{%- endmacro %}
+{% block content %}
+<div class="page-h"><div><h1>{{ t('tx.title') }}</h1><div class="sub">{{ t('tx.sub', n=f.num(total), e=f.num(n_edited)) }}</div></div></div>
+<section class="card">
+  <div class="card-h" style="padding-bottom:14px;flex-direction:column;align-items:stretch">
+    <form class="toolbar w-full" method="get" action="/texts" role="search">
+      {% if cat != 'all' %}<input type="hidden" name="cat" value="{{ cat }}">{% endif %}
+      {% if langs|length > 1 %}<select class="select" name="lang" data-autosubmit aria-label="{{ t('c.language') }}" style="min-width:130px">{% for code, name in langs.items() %}<option value="{{ code }}"{% if code == lang_sel %} selected{% endif %}>{{ name }}</option>{% endfor %}</select>
+      {% else %}<input type="hidden" name="lang" value="{{ lang_sel }}">{% endif %}
+      <div class="search-in">{{ ic('search') }}<input class="input" type="search" name="q" value="{{ q }}" placeholder="{{ t('tx.q') }}" aria-label="{{ t('tx.q') }}"></div>
+      <label class="check"><input type="checkbox" name="edited" value="1" data-autosubmit{% if edited %} checked{% endif %}>{{ t('tx.edited_only') }}{% if n_edited %} <span class="muted num">({{ f.num(n_edited) }})</span>{% endif %}</label>
+      <button class="btn btn-secondary no-js-only" type="submit">{{ ic('search') }}{{ t('c.search') }}</button>
+      <span class="muted fs-12" style="margin-inline-start:auto">{{ t('tx.html') }}: <bdi class="mono">&lt;b&gt; &lt;i&gt; &lt;u&gt; &lt;code&gt; &lt;a&gt;</bdi></span>
+    </form>
+    <div class="chips mt-12">{% for c in cats %}<a class="chip" href="/texts?{{ qs(cat=c if c != 'all' else '') }}"{% if cat == c %} aria-current="true"{% endif %}>{{ t('tx.cat.' + c) }}<span class="c num">{{ f.num(counts.get(c, 0)) }}</span></a>{% endfor %}</div>
   </div>
-</div>{% endblock %}
+  <form id="tx-form" method="post" action="/texts/save" data-savebar-form data-only-changed>
+    {{ back_fields() }}
+    <div style="border-top:1px solid var(--border-soft)">{% for r in rows %}
+      <div class="txt-row{% if r.edited %} edited{% endif %}" data-ph="{{ r.ph|join(' ') }}">
+        <div><div class="k">{{ r.key }}</div><div class="cat">{{ t('tx.cat.' + r.cat) }}</div></div>
+        <div><textarea class="textarea" name="v:{{ r.key }}" dir="{{ text_dir }}" rows="{{ r.lines }}" data-tx aria-label="{{ r.key }}">
+{{ r.current }}</textarea>
+          <div class="meta">{% if r.ph %}<span>{{ t('tx.vars') }}:</span>{% for p in r.ph %}<span class="ph">{{ p }}</span>{% endfor %}{% endif %}
+            {% if r.edited %}<span style="margin-inline-start:auto"></span><button class="btn btn-ghost btn-sm" type="submit" form="tx-reset" name="reset" value="{{ r.key }}">{{ ic('rotate-ccw') }}{{ t('tx.reset') }}</button>{% endif %}</div>
+          {% if r.edited %}<div class="orig" dir="{{ text_dir }}"><b class="fw-6">{{ t('tx.default') }}:</b> {{ r.default }}</div>{% endif %}
+        </div>
+      </div>
+    {% else %}{{ m.empty('search', t('c.no_results')) }}{% endfor %}</div>
+    {% if rows %}
+    <div class="no-js-only" style="padding:14px 20px;border-top:1px solid var(--border-soft);text-align:end"><button class="btn btn-primary" type="submit">{{ ic('save') }}{{ t('c.save') }}</button></div>
+    <div class="savebar" data-savebar hidden><div class="msg">{{ ic('square-pen', 'ic-20') }}<span data-savebar-msg></span></div>
+      <div class="row"><button class="btn btn-secondary" type="reset">{{ t('c.cancel') }}</button><button class="btn btn-primary" type="submit" data-savebar-save data-busy="{{ t('c.save') }}">{{ ic('save') }}{{ t('c.save') }}</button></div></div>
+    {% endif %}
+  </form>
+  <form id="tx-reset" method="post" action="/texts/reset" hidden>{{ back_fields() }}</form>
+</section>
+{% endblock %}

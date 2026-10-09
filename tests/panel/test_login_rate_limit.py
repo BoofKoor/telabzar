@@ -22,8 +22,11 @@
 from __future__ import annotations
 
 import unittest.mock as m
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
+
+from app.panel_i18n import pt
 
 #: بودجهٔ حدس به‌ازای هر کدِ صادرشده (پیش از رفع: ۶).
 TRIES = 3
@@ -41,7 +44,7 @@ def sent_codes(panel):
     """`_send_code` را می‌گیرد و کدهای صادرشده را نگه می‌دارد (بدونِ شبکه)."""
     codes: list[str] = []
 
-    async def fake_send(chat_id, code):
+    async def fake_send(chat_id, code, lang="fa"):
         codes.append(code)
         return True
 
@@ -60,15 +63,30 @@ async def _ver(panel, admin_id, code):
                                    allow_redirects=False)
 
 
-def _consumed_a_guess(body: str) -> bool:
-    """آیا این پاسخ یک حدس **خرج کرد**؟ — روی هر دو نسخهٔ سورس درست است.
+def _outcome(r) -> str:
+    """نتیجهٔ یک verify از روی ریدایرکتش (PRG): `ok`، یا مقدارِ `e=`.
 
-    پیش از رفع: «کد نادرست» خرج می‌کرد و «تلاشِ زیاد» رد می‌شد بدونِ خرج.
-    پس از رفع: «کد نادرست» خرج می‌کند و «کد سوخت» هم خرج می‌کند (آخرین حدس،
-    که کد را هم می‌کشد). یک معیارِ واحد برای هر دو، وگرنه شمارش روی یکی از دو
-    سورس بی‌معنا می‌شود.
+    verify هرگز صفحه رندر نمی‌کند — همیشه ۳۰۲ است: `/` یعنی ورود،
+    `/login?e=wrong|burned|expired|rl_ip` یعنی همان، و `/login` خالی یعنی
+    شناسه‌ای که ادمین نیست (`bad`).
     """
-    return "کد نادرست" in body or "کد سوخت" in body
+    assert r.status == 302, f"verify باید ریدایرکت کند، {r.status} داد"
+    loc = r.headers["Location"]
+    if loc == "/":
+        return "ok"
+    return parse_qs(urlsplit(loc).query).get("e", ["bad"])[0]
+
+
+def _consumed_a_guess(r) -> bool:
+    """آیا این verify یک حدس **خرج کرد**؟ «نادرست» خرج می‌کند و «سوخت» هم
+    (آخرین حدس، که کد را هم می‌کشد)."""
+    return _outcome(r) in ("wrong", "burned")
+
+
+#: نشانه‌های پیامِ صفحهٔ ورود — از خودِ جدولِ متن‌ها، نه رونویسیِ دستی.
+RL_ADMIN = pt("fa", "in.rl.admin")
+RL_IP = pt("fa", "in.rl.ip")
+BAD_ID = pt("fa", "in.bad_id", e="78216453")
 
 
 # ── کنترلِ منفیِ هارنس ────────────────────────────────────────────────────
@@ -91,10 +109,9 @@ async def test_the_guess_budget_per_issued_code_is_three(panel, clock, sent_code
     aid = str(panel.admin_id)
     await _req(panel, aid)
     for i in range(TRIES - 1):
-        body = await (await _ver(panel, aid, f"{i:06d}")).text()
-        assert "کد نادرست" in body, f"حدسِ {i} زودتر از موعد رد شد"
-    body = await (await _ver(panel, aid, "999999")).text()
-    assert "کد سوخت" in body, "حدسِ سوم باید آخرین باشد"
+        assert _outcome(await _ver(panel, aid, f"{i:06d}")) == "wrong", \
+            f"حدسِ {i} زودتر از موعد رد شد"
+    assert _outcome(await _ver(panel, aid, "999999")) == "burned", "حدسِ سوم باید آخرین باشد"
     assert await panel.redis.get(f"panelcode:{aid}") is None, "کد باید کشته می‌شد"
 
 
@@ -103,14 +120,14 @@ async def test_the_total_guesses_in_one_window_is_bounded(panel, clock, sent_cod
     aid = str(panel.admin_id)
     total = 0
     for _ in range(40):
-        if "درخواستِ زیاد" in await (await _req(panel, aid)).text():
+        if RL_ADMIN in await (await _req(panel, aid)).text():
             break
         for _ in range(20):
-            body = await (await _ver(panel, aid, "000000")).text()
-            if not _consumed_a_guess(body):
+            r = await _ver(panel, aid, "000000")
+            if not _consumed_a_guess(r):
                 break
             total += 1
-            if "کد سوخت" in body:
+            if _outcome(r) == "burned":
                 break
     assert total == REQ_PER_ADMIN * TRIES == 15, \
         f"بودجهٔ پنجره {total} حدس شد، انتظار ۱۵"
@@ -139,7 +156,7 @@ async def test_exhausting_the_guesses_leaves_a_fresh_code_working(
 
     await _req(panel, aid)                      # کدِ تازه، همان لحظه
     r = await _ver(panel, aid, sent_codes[-1])
-    assert r.status == 302, f"ورود با کدِ تازه بلاک شد ({r.status})"
+    assert _outcome(r) == "ok", f"ورود با کدِ تازه بلاک شد ({_outcome(r)})"
     assert panel.aw._COOKIE in r.cookies
 
 
@@ -157,9 +174,9 @@ async def test_a_fresh_code_starts_with_a_full_guess_budget(panel, clock, sent_c
 
     await _req(panel, aid)                      # کدِ تازه
     for i in range(TRIES - 1):
-        body = await (await _ver(panel, aid, f"{i:06d}")).text()
-        assert "کد نادرست" in body, "کدِ تازه بودجهٔ کاملِ خودش را نگرفت"
-    assert "کد سوخت" in await (await _ver(panel, aid, "999999")).text()
+        assert _outcome(await _ver(panel, aid, f"{i:06d}")) == "wrong", \
+            "کدِ تازه بودجهٔ کاملِ خودش را نگرفت"
+    assert _outcome(await _ver(panel, aid, "999999")) == "burned"
 
 
 async def test_the_window_rolls_over_on_the_modelled_clock(panel, clock, sent_codes):
@@ -171,22 +188,21 @@ async def test_the_window_rolls_over_on_the_modelled_clock(panel, clock, sent_co
     """
     aid = str(panel.admin_id)
     for _ in range(REQ_PER_ADMIN):
-        await _req(panel, aid)
-    assert "درخواستِ زیاد" in await (await _req(panel, aid)).text()
+        assert (await _req(panel, aid)).status == 302
+    assert RL_ADMIN in await (await _req(panel, aid)).text()
 
     clock.advance(WINDOW - 1)
-    assert "درخواستِ زیاد" in await (await _req(panel, aid)).text(), \
+    assert RL_ADMIN in await (await _req(panel, aid)).text(), \
         "پنجره زودتر از موعد باز شد"
     clock.advance(2)
-    assert "درخواستِ زیاد" not in await (await _req(panel, aid)).text(), \
-        "پنجره پس از گذشتنش باز نشد"
+    assert (await _req(panel, aid)).status == 302, "پنجره پس از گذشتنش باز نشد"
 
 
 # ── لایهٔ ۲: گاردِ `admin_id_set` روی verify ───────────────────────────────
 async def test_verify_rejects_an_id_that_is_not_an_admin(panel, clock):
     """پیش از رفع، verify فقط `isdigit()` را می‌سنجید — هر عددی کلید می‌ساخت."""
     r = await _ver(panel, "987654321", "000000")
-    assert "نامعتبر" in await r.text()
+    assert _outcome(r) == "bad"
     assert await panel.redis.keys("paneltry:*") == []
 
 
@@ -210,10 +226,8 @@ async def test_the_per_ip_verify_ceiling_fires(panel, clock):
     """
     aid = str(panel.admin_id)
     for _ in range(VERIFY_PER_IP):
-        body = await (await _ver(panel, aid, "000000")).text()
-        assert "از این آدرس" not in body, "سقفِ IP زودتر از موعد بست"
-    body = await (await _ver(panel, aid, "000000")).text()
-    assert "از این آدرس" in body, "سقفِ per-IP روی verify شلیک نکرد"
+        assert _outcome(await _ver(panel, aid, "000000")) != "rl_ip", "سقفِ IP زودتر از موعد بست"
+    assert _outcome(await _ver(panel, aid, "000000")) == "rl_ip", "سقفِ per-IP روی verify شلیک نکرد"
 
 
 async def test_the_per_ip_request_ceiling_fires(panel, clock, monkeypatch, sent_codes):
@@ -226,10 +240,9 @@ async def test_the_per_ip_request_ceiling_fires(panel, clock, monkeypatch, sent_
     monkeypatch.setattr(panel.aw.settings, "admin_ids",
                         ",".join(str(i) for i in ids))
     for i in range(REQ_PER_IP):
-        body = await (await _req(panel, str(ids[i % len(ids)]))).text()
-        assert "از این آدرس" not in body, "سقفِ IP زودتر از موعد بست"
+        assert (await _req(panel, str(ids[i % len(ids)]))).status == 302, "سقفِ IP زودتر از موعد بست"
     body = await (await _req(panel, str(ids[0]))).text()
-    assert "از این آدرس" in body, "سقفِ per-IP روی درخواستِ کد شلیک نکرد"
+    assert RL_IP in body, "سقفِ per-IP روی درخواستِ کد شلیک نکرد"
 
 
 # ── خودِ سقف: نباید با یک خطای Redis برای همیشه قفل شود ───────────────────
@@ -261,9 +274,32 @@ async def test_a_persian_digit_code_is_wrong_not_a_crash(panel, clock, sent_code
     """
     aid = str(panel.admin_id)
     await _req(panel, aid)
+    await panel.redis.set(f"panelcode:{aid}", "654321", ex=300)   # قطعی: کد ≠ ۱۲۳۴۵۶
     r = await _ver(panel, aid, "۱۲۳۴۵۶")
-    assert r.status == 200
-    assert "کد نادرست" in await r.text()
+    assert _outcome(r) == "wrong"
+
+
+async def test_a_persian_digit_code_signs_in(panel, clock, sent_codes):
+    """از بازطراحیِ ۲۰۲۶-۱۰ رقمِ فارسی/عربی **پیش از** مقایسه لاتین می‌شود (`_form_id`):
+    کیبوردِ گوشیِ فارسی همین را تایپ می‌کند، و «کد نادرست» برای کدِ درست بدترین جواب است."""
+    aid = str(panel.admin_id)
+    await _req(panel, aid)
+    persian = sent_codes[-1].translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+    assert _outcome(await _ver(panel, aid, persian)) == "ok"
+
+
+async def test_a_non_ascii_code_is_wrong_not_a_crash(panel, clock, sent_codes):
+    """گاردِ **مقایسهٔ بایتی** به‌تنهایی — حالا که رقم‌ها پیش از آن لاتین می‌شوند.
+
+    تستِ بالا دیگر به `compare_digest` رشتهٔ غیرASCII نمی‌دهد (لاتین‌سازی جلوتر
+    است)، پس اگر مقایسه به رشته برگردد آن تست سبز می‌ماند: دو دفاع روی یک مسیر،
+    همان لایهٔ چهارمِ §۶. حرفی که رقم نیست از لاتین‌سازی رد می‌شود و فقط این گارد
+    آن را از ۵۰۰ نجات می‌دهد.
+    """
+    aid = str(panel.admin_id)
+    await _req(panel, aid)
+    r = await _ver(panel, aid, "12345ک")
+    assert _outcome(r) == "wrong"
 
 
 async def test_an_over_long_admin_id_is_rejected_not_a_crash(panel, clock):
@@ -271,21 +307,24 @@ async def test_an_over_long_admin_id_is_rejected_not_a_crash(panel, clock):
     `str.isdigit()` طول را رد نمی‌کند — پس این ورودی پیش از رفع ۵۰۰ می‌گرفت."""
     r = await _req(panel, "9" * 5000)
     assert r.status == 200
-    assert "نامعتبر" in await r.text()
+    assert BAD_ID in await r.text()
 
 
 # ── کنترل: مسیرِ سالم نباید بسته شود ──────────────────────────────────────
 async def test_a_correct_code_still_logs_in(panel, clock, sent_codes):
+    """شناسهٔ ادمینِ هارنس عمداً کوتاه است (۱۱۱): اولین نسخهٔ بازنویسیِ پنل
+    شناسهٔ زیرِ ۴ رقم را «نامعتبر» می‌خواند و ادمینِ واقعی با شناسهٔ کوتاه را
+    بیرون می‌گذاشت — گیتِ واقعی عضویت در `admin_id_set` است، نه طول."""
     aid = str(panel.admin_id)
     await _req(panel, aid)
     r = await _ver(panel, aid, sent_codes[-1])
-    assert r.status == 302
+    assert _outcome(r) == "ok"
     assert panel.aw._COOKIE in r.cookies
 
 
 async def test_a_used_code_cannot_be_replayed(panel, clock, sent_codes):
     aid = str(panel.admin_id)
     await _req(panel, aid)
-    assert (await _ver(panel, aid, sent_codes[-1])).status == 302
+    assert _outcome(await _ver(panel, aid, sent_codes[-1])) == "ok"
     r = await _ver(panel, aid, sent_codes[-1])
-    assert r.status == 200, "کدِ مصرف‌شده دوباره پذیرفته شد"
+    assert _outcome(r) != "ok", "کدِ مصرف‌شده دوباره پذیرفته شد"

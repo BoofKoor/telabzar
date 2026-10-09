@@ -163,14 +163,19 @@ _IMM = "tests/test_image_modes.py"
 _STW = "tests/test_strike_window.py"
 _ARE = "tests/test_admin_report_escape.py"
 _RMX = "tests/test_remux_orphan.py"
+_PAC = "tests/panel/test_panel_actions.py"
+_ADL = "tests/panel/test_admin_log.py"
+_ICN = "tests/panel/test_panel_icons.py"
+_TGD = "tests/panel/test_template_guards.py"
+_STU = "tests/panel/test_strict_undefined.py"
 
 # «گروهِ خودکار را بردار» — یک خرابکاری با **سه** ادعای متفاوت، پس یک‌بار
 # تعریف می‌شود. دو تا باید بیفتند و یکی عمداً **نباید**، که کلِ نکته است:
 # شش ردیفِ دست‌نویس پوشش را نگه می‌دارند، ولی دوام از این گروه می‌آید.
 _AUTO_GROUP_PATCH = {
     "path": "app/admin_web.py",
-    "old": "    return [*GROUPS, (_AUTO_GROUP, leftover)] if leftover else list(GROUPS)",
-    "new": "    return list(GROUPS)",
+    "old": '    auto = _settings_auto_keys()\n    if auto:',
+    "new": '    auto = _settings_auto_keys()\n    if False:',
 }
 
 # ── وابستگیِ یوتیوب به کوکی (۲۰۲۶-۰۹) ── سه خرابکاری که هرکدام بیش از یک
@@ -995,8 +1000,8 @@ CASES: list[dict] = [
 
     {"name": "phase2 A-1: let an empty secret 500 instead of failing closed",
      "path": "app/admin_web.py",
-     "old": "    except RuntimeError:\n        # رازِ خالی.",
-     "new": "    except (ValueError,):\n        # رازِ خالی.",
+     "old": '    except RuntimeError:\n        # رازِ خالی:',
+     "new": '    except (ValueError,):\n        # رازِ خالی:',
      "target": _CHR,
      "expect": "test_a_bot_token_cookie_is_rejected_when_the_secret_is_empty"},
 
@@ -1027,9 +1032,8 @@ CASES: list[dict] = [
     # برای گرفتنش ساخته شد، و همین‌جا هم گرفتش.
     {"name": "phase2 A-2: put the join token back in the redirect URL",
      "path": "app/admin_web.py",
-     "old": '    await _stash_join_view(request.app["redis"], _session_admin(request), tok)\n'
-            '    raise web.HTTPFound("/nodes")',
-     "new": '    raise web.HTTPFound(f"/nodes?tok={tok}")',
+     "old": '    await _stash_join_view(request.app["redis"], admin_id, tok)\n    await _audit(request, "node_add", target=name, role=role)\n    raise web.HTTPFound("/nodes?dlg=nd-made")',
+     "new": '    await _audit(request, "node_add", target=name, role=role)\n    raise web.HTTPFound(f"/nodes?dlg=nd-made&tok={tok}")',
      "target": _CHR,
      "expect": "test_the_join_token_never_appears_in_a_url"},
 
@@ -1037,10 +1041,8 @@ CASES: list[dict] = [
     # `Location` است و این یکی دربارهٔ چیزی که روی دیسکِ سرور می‌نشیند.
     {"name": "phase2 A-2: the token lands in the access log again",
      "path": "app/admin_web.py",
-     "old": '    await _stash_join_view(request.app["redis"], _session_admin(request), tok)\n'
-            '    raise web.HTTPFound("/nodes")',
-     "new": '    await _stash_join_view(request.app["redis"], _session_admin(request), tok)\n'
-            '    raise web.HTTPFound(f"/nodes?tok={tok}")',
+     "old": '    await _stash_join_view(request.app["redis"], admin_id, tok)\n    await _audit(request, "node_add", target=name, role=role)\n    raise web.HTTPFound("/nodes?dlg=nd-made")',
+     "new": '    await _stash_join_view(request.app["redis"], admin_id, tok)\n    await _audit(request, "node_add", target=name, role=role)\n    raise web.HTTPFound(f"/nodes?dlg=nd-made&tok={tok}")',
      "target": _CHR,
      "expect": "test_the_token_never_reaches_the_access_log"},
 
@@ -1093,8 +1095,7 @@ CASES: list[dict] = [
 
     {"name": "phase2 headers: send HSTS unconditionally",
      "path": "app/admin_web.py",
-     "old": '    if request.secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https":\n'
-            '        headers["Strict-Transport-Security"] = _HSTS',
+     "old": '    if _https(request):\n        headers["Strict-Transport-Security"] = _HSTS',
      "new": '    headers["Strict-Transport-Security"] = _HSTS',
      "target": _SEC,
      "expect": "test_hsts_is_sent_only_over_https"},
@@ -1111,9 +1112,8 @@ CASES: list[dict] = [
     # روز رُت کرده بود (فاز ۱ِ ممیزی پیدایش کرد، نه ساختش).
     {"name": "phase2 headers: add an external CDN reference",
      "path": "app/templates/base.html",
-     "old": "<title>{% block title %}{{ pt('page.settings') }}{% endblock %}",
-     "new": '<script src="https://cdn.example.com/x.js"></script>'
-            "<title>{% block title %}{{ pt('page.settings') }}{% endblock %}",
+     "old": '<title>{% block title %}',
+     "new": '<script src="https://cdn.example.com/x.js"></script><title>{% block title %}',
      "target": _SEC,
      "expect": "test_the_panel_has_no_external_resources_for_the_csp_to_break"},
 
@@ -1130,8 +1130,8 @@ CASES: list[dict] = [
     # گاردِ واگرایی: یک محلِ فراخوانی دوباره دستی نوشته شود.
     {"name": "panel: a result redirect goes back to being hand-written",
      "path": "app/admin_web.py",
-     "old": 'raise _result("/cookies", ok="del")',
-     "new": 'raise web.HTTPFound("/cookies?ok=del")',
+     "old": 'raise _result("/cookies", ok="ck.del.ok")',
+     "new": 'raise web.HTTPFound("/cookies?ok=ck.del.ok")',
      "target": _HYG,
      "expect": "test_the_panel_has_one_result_redirect"},
 
@@ -1222,14 +1222,8 @@ CASES: list[dict] = [
      "target": _SBD,
      "expect": "test_the_telegram_path_refuses_what_the_panel_refuses[negative]"},
 
-    # **کنترلِ معکوس:** مرتب‌سازیِ حلقهٔ `/save` جزئیاتِ بی‌ربط است؛ اگر چیزی
-    # بیندازد یعنی تستی به ترتیبِ پیمایش چسبیده، نه به رفتار.
-    {"name": "settings: iterate the form in set order (must break nothing)",
-     "path": "app/admin_web.py",
-     "old": "    for k in sorted(rendered):",
-     "new": "    for k in rendered:",
-     "target": _SVF,
-     "expect": None},
+    # بازنشسته (۲۰۲۶-۱۰): «settings: iterate the form in set order (must break nothing)»
+    #   save() walks a fixed field list now, not a set — there is no order to scramble.
 
     # ── پرتگاهِ آپلود: خروجیِ بالای سقف، پیش از آپلود ──────────────
     # گیت اصلاً اجرا نشود — پرتگاه دقیقاً همان‌طور که بود برمی‌گردد.
@@ -1385,8 +1379,8 @@ CASES: list[dict] = [
     # B-5: نقشِ نامعتبر دوباره بی‌صدا برگردد.
     {"name": "nodes: an invalid role goes back to a silent redirect",
      "path": "app/admin_web.py",
-     "old": 'raise _result("/nodes", err="نقشِ نامعتبر.")',
-     "new": 'raise web.HTTPFound("/nodes")',
+     "old": '        raise _result("/nodes", err=pt(lang, "nd.bad_role"))',
+     "new": '        raise web.HTTPFound("/nodes")',
      "target": _SVF,
      "expect": "test_an_invalid_role_says_so"},
 
@@ -1434,37 +1428,37 @@ CASES: list[dict] = [
 
     {"name": "users: the page queries the database on every load again",
      "path": "app/admin_web.py",
-     "old": '    data = await _users_cached(request.app, page, request.query.get("q", ""))',
-     "new": '    data = await _users_list(page, request.query.get("q", ""))',
+     "old": '    data = await _users_cached(request.app, text, status, ulang, sort, page)',
+     "new": '    data = await PD.users_list(text, status, ulang, sort, page)',
      "target": _USR,
      "expect": "test_a_repeat_load_does_not_hit_the_database"},
 
     # باطل‌سازی برداشته شود: کش صفحه را از «کند» به **غلط** می‌برد.
     {"name": "users: blocking no longer busts the cache",
      "path": "app/admin_web.py",
-     "old": '                await _users_cache_bust(request.app.get("redis"))',
-     "new": "                pass",
+     "old": '            await _users_cache_bust(request.app.get("redis"))',
+     "new": '            pass',
      "target": _USR,
      "expect": "test_blocking_a_user_shows_up_immediately"},
 
     {"name": "users: the cache key drops the version counter",
      "path": "app/admin_web.py",
-     "old": '    key = f"userscache:{await _users_cache_ver(redis)}:{page}:{q}"',
-     "new": '    key = f"userscache:{page}:{q}"',
+     "old": '    key = f"userscache:{await _users_cache_ver(redis)}:{status}:{lang}:{sort}:{page}:{q}"',
+     "new": '    key = f"userscache:{status}:{lang}:{sort}:{page}:{q}"',
      "target": _USR,
      "expect": "test_unblocking_is_visible_immediately_too"},
 
     {"name": "users: every page and query share one cache key",
      "path": "app/admin_web.py",
-     "old": '    key = f"userscache:{await _users_cache_ver(redis)}:{page}:{q}"',
+     "old": '    key = f"userscache:{await _users_cache_ver(redis)}:{status}:{lang}:{sort}:{page}:{q}"',
      "new": '    key = f"userscache:{await _users_cache_ver(redis)}"',
      "target": _USR,
      "expect": "test_different_pages_and_queries_are_cached_separately"},
 
     {"name": "users: the cached page never expires",
      "path": "app/admin_web.py",
-     "old": "        await redis.set(key, json.dumps(data, default=str), ex=_USERS_TTL)",
-     "new": "        await redis.set(key, json.dumps(data, default=str))",
+     "old": '    return await _cached(redis, key, _USERS_TTL,',
+     "new": '    return await _cached(redis, key, 10 ** 9,',
      "target": _USR,
      "expect": "test_the_cache_expires_on_the_modelled_clock"},
 
@@ -1477,17 +1471,8 @@ CASES: list[dict] = [
     # سابوتاژ می‌تواند بیندازد.
     {"name": "pot: the health check blocks the page again",
      "path": "app/admin_web.py",
-     "old": '    h["pot"] = await _pot_health(app)',
-     "new": ('    h["pot"] = None\n'
-             "    if settings.pot_provider_url:\n"
-             '        h["pot"] = False\n'
-             "        try:\n"
-             "            async with aiohttp.ClientSession("
-             "timeout=aiohttp.ClientTimeout(total=3)) as s:\n"
-             '                async with s.get(settings.pot_provider_url + "/ping") as resp:\n'
-             '                    h["pot"] = resp.status == 200\n'
-             "        except Exception:  # noqa: BLE001\n"
-             '            h["pot"] = False'),
+     "old": '    pot = await _pot_health(app)',
+     "new": ('    pot = None\n    if settings.pot_provider_url:\n        pot = False\n        try:\n            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as s:\n                async with s.get(settings.pot_provider_url + "/ping") as resp:\n                    pot = resp.status == 200\n        except Exception:  # noqa: BLE001\n            pot = False'),
      "target": _POT,
      "expect": "test_a_really_hung_provider_does_not_slow_the_dashboard"},
 
@@ -1526,8 +1511,8 @@ CASES: list[dict] = [
      "path": "app/admin_web.py",
      # از ۲۰۲۶-۱۰ پاک‌سازی روی هر دو تسکِ پس‌زمینه حلقه می‌زند (pot و گرم‌کردنِ
      # سرتیفیکیت)؛ همان ادعا، بازلنگرشده: pot از حلقه بیرون می‌افتد.
-     "old": "    for key in (_POT_TASK, _TLS_WARM_TASK):",
-     "new": "    for key in (_TLS_WARM_TASK,):",
+     "old": '    for key in (_POT_TASK, _TLS_WARM_TASK, _SVC_TASK):',
+     "new": '    for key in (_TLS_WARM_TASK, _SVC_TASK):',
      "target": _POT,
      "expect": "test_the_cleanup_hook_cancels_a_running_refresh"},
 
@@ -1543,16 +1528,15 @@ CASES: list[dict] = [
 
     {"name": "login: verify stops checking the id against admin_id_set",
      "path": "app/admin_web.py",
-     "old": '    if not _is_admin_id(admin_id):\n        return _login_page(error="نامعتبر.")',
-     "new": '    if not admin_id.isdigit():\n        return _login_page(error="نامعتبر.")',
+     "old": '    if not _is_admin_id(admin_id):\n        raise web.HTTPFound("/login")',
+     "new": '    if not admin_id.isdigit():\n        raise web.HTTPFound("/login")',
      "target": _LRL,
      "expect": "test_verify_rejects_an_id_that_is_not_an_admin"},
 
     {"name": "login: the per-IP ceiling on verify disappears",
      "path": "app/admin_web.py",
-     "old": ('    if not await _rate_limit(r, f"panelip:ver:{_client_ip(request)}",\n'
-             "                             _RL_VERIFY_PER_IP, _RL_WINDOW):"),
-     "new": "    if False:",
+     "old": ('    if not await _rate_limit(r, f"panelip:ver:{_client_ip(request)}", _RL_VERIFY_PER_IP, _RL_WINDOW):'),
+     "new": '    if False:',
      "target": _LRL,
      "expect": "test_the_per_ip_verify_ceiling_fires"},
 
@@ -1560,16 +1544,14 @@ CASES: list[dict] = [
     # بیندازد — اثباتِ اینکه آن تست دربارهٔ لایهٔ خودش حرف می‌زند، نه همسایه‌اش.
     {"name": "login: the per-IP ceiling on the code request disappears",
      "path": "app/admin_web.py",
-     "old": ('    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}",\n'
-             "                             _RL_REQ_PER_IP, _RL_WINDOW):"),
-     "new": "    if False:",
+     "old": ('    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}", _RL_REQ_PER_IP, _RL_WINDOW):'),
+     "new": '    if False:',
      "target": _LRL,
      "expect": "test_the_per_ip_request_ceiling_fires"},
     {"name": "login: dropping the request ceiling must NOT fail the verify claim",
      "path": "app/admin_web.py",
-     "old": ('    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}",\n'
-             "                             _RL_REQ_PER_IP, _RL_WINDOW):"),
-     "new": "    if False:",
+     "old": ('    if not await _rate_limit(r, f"panelip:req:{_client_ip(request)}", _RL_REQ_PER_IP, _RL_WINDOW):'),
+     "new": '    if False:',
      "target": _LRL + "::test_the_per_ip_verify_ceiling_fires",
      "expect": None},
 
@@ -1581,13 +1563,15 @@ CASES: list[dict] = [
      "expect": "test_the_limiter_repairs_a_counter_that_lost_its_ttl"},
 
     # مقایسه روی رشته به‌جای بایت: `compare_digest` روی strِ غیرASCII
-    # `TypeError` می‌دهد، پس کدِ با رقمِ فارسی ۵۰۰ می‌شود نه «کد نادرست».
+    # `TypeError` می‌دهد. از ۲۰۲۶-۱۰ رقمِ فارسی پیش از مقایسه لاتین می‌شود، پس
+    # تستِ رقمِ فارسی دیگر به این گارد نمی‌رسد (دو دفاع روی یک مسیر) — هدف
+    # تستی است که حرفِ غیرِرقمی می‌فرستد و فقط همین گارد نجاتش می‌دهد.
     {"name": "login: the code comparison goes back to comparing str",
      "path": "app/admin_web.py",
-     "old": "    ok = bool(real) and secrets.compare_digest(code.encode(), real.encode())",
-     "new": "    ok = bool(real) and secrets.compare_digest(code, real)",
+     "old": '    ok = secrets.compare_digest(code.encode(), real.encode())',
+     "new": '    ok = secrets.compare_digest(code, real)',
      "target": _LRL,
-     "expect": "test_a_persian_digit_code_is_wrong_not_a_crash"},
+     "expect": 'test_a_non_ascii_code_is_wrong_not_a_crash'},
 
     {"name": "login: the admin-id length guard disappears",
      "path": "app/admin_web.py",
@@ -1606,22 +1590,19 @@ CASES: list[dict] = [
      "expect": "test_the_clock_fixture_really_drives_redis_expiry"},
 
     # ── باگ ۱: بجِ بی‌رنگ در /cookies ──────────────────────────────────────
-    # همان خرابکاری، دو هدف: یکی ادعای مشخصِ محصولی («بجِ باطل رنگ دارد») و
-    # یکی گاردِ کشف‌محور. هر دو لازم‌اند — گارد کلاسِ مردهٔ **بعدی** را می‌گیرد
-    # ولی نمی‌گوید قاعده‌اش واقعاً رنگ می‌دهد یا فقط `display:inline` است.
+    # از ۲۰۲۶-۱۰ وضعیت یک «پیل» است (`.pill.<شدت>`) و ادعای محصولی («پیلِ باطل
+    # رنگ دارد») تنها هدف است؛ نیمهٔ کشف‌محورش بازنشسته شد — پایین‌تر.
     {"name": "cookies: the danger badge has no rule again (product claim)",
-     "path": "app/admin_web.py",
-     "old": ".err{background:#fef2f2;color:#b91c1c}",
-     "new": ".ignored-by-nobody{color:red}",
+     "path": 'app/static/css/panel.css',
+     "old": '.pill.bad{background:var(--bad-soft);color:var(--bad-ink)}',
+     "new": '.pill.bad-typo{background:var(--bad-soft);color:var(--bad-ink)}',
      "target": _CSB,
-     "expect": "test_the_invalid_badge_is_actually_painted"},
+     "expect": 'test_the_invalid_pill_is_actually_painted'},
 
-    {"name": "cookies: the danger badge has no rule again (discovery guard)",
-     "path": "app/admin_web.py",
-     "old": ".err{background:#fef2f2;color:#b91c1c}",
-     "new": ".ignored-by-nobody{color:red}",
-     "target": _PCC,
-     "expect": "test_every_class_a_page_renders_has_a_rule[/cookies]"},
+    # بازنشسته (۲۰۲۶-۱۰): «cookies: the danger badge has no rule again (discovery guard)»
+    #   severity tokens (.bad/.warn) are shared by pills, meters and text, so the
+    #   per-token guard cannot see a pill-only loss by construction;
+    #   test_cookie_status_badges does.
 
     # گاردِ خودش یک‌بار کور بود و «نگرفت» گزارش داد در حالی که خرابکاری کاملاً
     # اعمال شده بود: کامنتِ CSS داخلِ `<style>` ارسال می‌شود و چک، نامِ کلاسی
@@ -1629,15 +1610,15 @@ CASES: list[dict] = [
     # ابزارِ سنجش نتیجهٔ درست را غلط می‌خواند. این مورد رفعِ همان را قفل می‌کند.
     {"name": "cookies: the class checker counts CSS comments as rules again",
      "path": _PCC,
-     "old": '    return _CSS_COMMENT.sub(" ", "\\n".join(_STYLE_BLOCK.findall(html)))',
-     "new": '    return "\\n".join(_STYLE_BLOCK.findall(html))',
+     "old": '    return _CSS_COMMENT.sub(" ", "\\n".join(parts))',
+     "new": '    return "\\n".join(parts)',
      "target": _PCC,
      "expect": "test_a_class_named_only_inside_a_css_comment_does_not_count"},
 
     {"name": "cookies: a disabled account goes back to the undefined `mute`",
      "path": "app/admin_web.py",
-     "old": "ck_pool.COOLDOWN: \"warn\", ck_pool.DISABLED: \"dim\",",
-     "new": "ck_pool.COOLDOWN: \"warn\", ck_pool.DISABLED: \"mute\",",
+     "old": '            "disabled": ("neutral", "pause")}',
+     "new": '            "disabled": ("mute", "pause")}',
      "target": _CSB,
      "expect": "test_a_deliberately_disabled_account_is_grey"},
 
@@ -1646,17 +1627,17 @@ CASES: list[dict] = [
     # فقط این تست تفاوتِ معنا را می‌گیرد.
     {"name": "cookies: an unknown status is painted like a deliberate one",
      "path": "app/admin_web.py",
-     "old": '_BADGE_UNKNOWN = "unk"',
-     "new": '_BADGE_UNKNOWN = "dim"',
+     "old": '        cls, icon = _CK_PILL.get(status, ("info", "circle-help"))',
+     "new": '        cls, icon = _CK_PILL.get(status, ("neutral", "circle-help"))',
      "target": _CSB,
      "expect": "test_an_unknown_status_does_not_look_like_a_deliberate_one"},
 
-    {"name": "cookies: the unproven dot loses its rule",
-     "path": "app/admin_web.py",
-     "old": ".s-unproven{background:#f59e0b}",
-     "new": ".s-unproven-typo{background:#f59e0b}",
+    {"name": 'cookies: the warning pill (unproven/suspect) loses its rule',
+     "path": 'app/static/css/panel.css',
+     "old": '.pill.warn{background:var(--warn-soft);color:var(--warn-ink)}',
+     "new": '.pill.warn-typo{background:var(--warn-soft);color:var(--warn-ink)}',
      "target": _CSB,
-     "expect": "test_the_unproven_status_dot_is_visible"},
+     "expect": 'test_every_seeded_status_paints_a_pill_on_a_real_row'},
 
     # ── باگ ۲: کلیدهای غایبِ صفحهٔ تنظیمات ─────────────────────────────────
     # سه مورد با **یک** خرابکاری. دو تای اول باید بیفتند و سومی عمداً نه:
@@ -1678,14 +1659,13 @@ CASES: list[dict] = [
      "target": _SKC + "::test_every_runtime_key_has_an_input_on_the_settings_page",
      "expect": None},
 
-    # صفحه از `_setting_groups()` رندر می‌شود ولی `save()` از `GROUPS`ِ خام —
-    # ردیفِ خودکار دیده می‌شود و مقدارش بی‌صدا دور ریخته می‌شود، یعنی همان
-    # «بنرِ سبز روی کاری که انجام نشد».
+    # صفحه از `_settings_sections()` رندر می‌شود ولی `save()` از `PS.fields()`ِ خام
+    # (فقط ردیف‌های برچسب‌دار) — ردیفِ خودکار دیده می‌شود و مقدارش بی‌صدا دور
+    # ریخته می‌شود، یعنی همان «بنرِ سبز روی کاری که انجام نشد».
     {"name": "settings: save() reads a different list than the page rendered",
      "path": "app/admin_web.py",
-     "old": "    rendered = {key for _title, fields in _setting_groups() "
-            "for key, _l, _h in fields}",
-     "new": "    rendered = {key for _title, fields in GROUPS for key, _l, _h in fields}",
+     "old": '    pending, errors, first_bad = [], [], ""\n    for fld in _settings_fields():',
+     "new": '    pending, errors, first_bad = [], [], ""\n    for fld in PS.fields():',
      "target": _SKC,
      "expect": "test_a_value_typed_into_an_auto_rendered_row_actually_saves"},
 
@@ -1693,62 +1673,32 @@ CASES: list[dict] = [
     # نمی‌شکند — ولی کنترلِ «امروز همه برچسب دارند» می‌افتد. اثباتِ اینکه آن
     # کنترل زنده است و ردیف‌های دستی واقعاً کار می‌کنند.
     {"name": "settings: proxy_url loses its hand-written row",
-     "path": "app/admin_web.py",
-     "old": '        ("proxy_url", "خروجیِ شبکه (PROXY_URL)",',
-     "new": '        ("dl_direct_enabled", "تکراری — جای proxy_url",',
+     "path": 'app/panel_settings.py',
+     "old": '            _f("proxy_url", "str", ("پروکسی خروجی", "Outbound proxy"),',
+     "new": '            _f("dl_direct_enabled", "str", ("پروکسی خروجی", "Outbound proxy"),',
      "target": _SKC,
      "expect": "test_the_auto_group_is_absent_when_every_key_has_a_label"},
 
-    # ── باگ ۳: برچسبِ دامنه ────────────────────────────────────────────────
-    {"name": "stats: the ops KPI goes back to the unqualified label",
-     "path": "app/admin_web.py",
-     "old": "  <div class=b><em>عملیات روی فایل</em><strong>{{s.ops}}</strong>",
-     "new": "  <div class=b><em>عملیات</em><strong>{{s.ops}}</strong>",
-     "target": _SCL,
-     "expect": "test_the_operations_kpi_states_its_scope"},
+    # ── باگ ۳: برچسبِ دامنه — کلِ بخش بازنشسته شد: `/stats` و کارتِ dlstatِ یک‌روزه
+    # دیگر نیستند و گزارش‌ها دانلود را از لاگِ خودش جدا می‌شمارند (موردهای
+    # «reports: …» در انتهای فهرست).
+    # بازنشسته (۲۰۲۶-۱۰): «stats: the ops KPI goes back to the unqualified label»
+    #   the /stats page is gone (→ /reports).
 
-    {"name": "stats: the jobs-backed cards lose their tag",
-     "path": "app/admin_web.py",
-     "old": "<h3>⚙️ پرکاربردترین عملیات <span class=tag>بدونِ دانلود</span></h3>",
-     "new": "<h3>⚙️ پرکاربردترین عملیات</h3>",
-     "target": _SCL,
-     "expect": "test_the_jobs_backed_cards_are_tagged"},
+    # بازنشسته (۲۰۲۶-۱۰): «stats: the jobs-backed cards lose their tag»
+    #   the /stats page is gone (→ /reports).
 
-    {"name": "stats: the explainer block disappears",
-     "path": "app/admin_web.py",
-     "old": "<b>دانلودها در این عددها نیستند</b>",
-     "new": "<b>و بس</b>",
-     "target": _SCL,
-     "expect": "test_the_stats_page_says_which_numbers_exclude_downloads"},
+    # بازنشسته (۲۰۲۶-۱۰): «stats: the explainer block disappears»
+    #   the /stats page is gone (→ /reports).
 
-    # کنترلِ معکوس: تستِ برچسب نباید «رشته هرجای صفحه باشد» را بسنجد. اگر یک
-    # کارتِ files-محور — که دانلودها را **دارد** — همان برچسب را بگیرد، باید
-    # بیفتد؛ وگرنه «همه‌جا برچسب بزن» هم سبز می‌شد.
-    {"name": "stats: a files-backed card is wrongly tagged ops-only",
-     "path": "app/admin_web.py",
-     "old": "<h3>📥 پلتفرمِ دانلود <span class=tag>از این پس ثبت می‌شود</span></h3>",
-     "new": "<h3>📥 پلتفرمِ دانلود <span class=tag>بدونِ دانلود</span></h3>",
-     "target": _SCL,
-     "expect": "test_the_file_side_cards_are_not_tagged_as_ops_only"},
+    # بازنشسته (۲۰۲۶-۱۰): «stats: a files-backed card is wrongly tagged ops-only»
+    #   the /stats page is gone (→ /reports).
 
-    {"name": "health: the download-rate card drops its timezone",
-     "path": "app/admin_web.py",
-     "old": "<span class=tag>امروز (UTC)</span>",
-     "new": "<span class=tag>امروز</span>",
-     "target": _SCL,
-     "expect": "test_the_download_rate_card_names_its_timezone"},
+    # بازنشسته (۲۰۲۶-۱۰): «health: the download-rate card drops its timezone»
+    #   the dlstat-day card is gone; rates come from the download log.
 
-    # کنترلِ معکوس برای همان برچسب: برچسب فقط وقتی ارزش دارد که راست بگوید.
-    # اگر پنجرهٔ کارت جابه‌جا شود، «امروز (UTC)» خودش یک ادعای نادرستِ تازه
-    # می‌شود — و تنها چیزی که این را می‌گیرد تستی است که کلیدِ **دیروز** را
-    # می‌کارد و انتظار دارد کارت تکان نخورد.
-    {"name": "health: the download-rate window quietly shifts off today",
-     "path": "app/admin_web.py",
-     "old": '    day = datetime.now(timezone.utc).strftime("%Y%m%d")\n    hosts = []',
-     "new": '    day = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y%m%d")'
-            '\n    hosts = []',
-     "target": _SCL,
-     "expect": "test_the_download_rate_card_really_reads_one_utc_day"},
+    # بازنشسته (۲۰۲۶-۱۰): «health: the download-rate window quietly shifts off today»
+    #   the dlstat-day card is gone; rates come from the download log.
 
     # ── شمارندهٔ فازِ probe ────────────────────────────────────────
     # ادعای مرکزی: probeِ موفق تا امروز هیچ ردی نمی‌گذاشت.
@@ -1766,12 +1716,8 @@ CASES: list[dict] = [
      # بازلنگر ۲۰۲۶-۰۹-۲۶: شاخهٔ گیتِ سنیِ **پیش از** منو (خطای «confirm your
      # age» در خودِ probe) همین دو خط را دارد، پس الگوی کوتاه دو تطبیق داشت؛
      # `why, url` این را به شاخهٔ `check_meta` (هدفِ اصلیِ این مورد) می‌بندد.
-     "old": "                await PS.note(redis, PS.BLOCKED)\n"
-            "                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,\n"
-            '                                 payload.get("tg_user_id") or 0, why, url)',
-     "new": "                await PS.mark_menu(redis, ref)\n"
-            "                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,\n"
-            '                                 payload.get("tg_user_id") or 0, why, url)',
+     "old": '                await PS.note(redis, PS.BLOCKED)\n                EV.settle(ev, EV.BLOCKED, "nsfw", why)',
+     "new": '                await PS.mark_menu(redis, ref)\n                EV.settle(ev, EV.BLOCKED, "nsfw", why)',
      "target": _PST,
      "expect": "test_an_age_blocked_probe_is_not_counted_as_a_menu"},
 
@@ -1865,53 +1811,52 @@ CASES: list[dict] = [
     # کدام لایه گرفته است. اندازه‌گیری نشان داد گاردِ کلاس **هیچ‌کدام** از این
     # سیزده را نمی‌گیرد، پس هر مورد دقیقاً یک لایه را جدا اثبات می‌کند —
     # همان «دفاع در عمق یعنی تست در عمق»ِ §۶.
-    {"name": "panel/health: the processing queue depth vanishes",
-     "path": "app/admin_web.py",
-     "old": "<b>{{health.q_main}}</b>", "new": "<b></b>",
-     "target": _HLT, "expect": "test_every_queue_depth_reaches_the_page"},
+    {"name": "panel/system: a queue's depth vanishes from the list",
+     "path": 'app/templates/system.html',
+     "old": '<span class="num">{{ f.num(queues.get(k, 0)) }}</span>', "new": '<span class="num"></span>',
+     "target": _PCT, "expect": 'test_the_system_page_lists_every_queue'},
 
-    {"name": "panel/health: the live-download count vanishes",
-     "path": "app/admin_web.py",
-     "old": "<b>{{health.dl_active}}</b>", "new": "<b></b>",
-     "target": _HLT, "expect": "test_every_queue_depth_reaches_the_page"},
+    {"name": 'panel/system: the live-download count vanishes',
+     "path": 'app/templates/system.html',
+     "old": '<b class="fw-6">{{ t(\'c.of\', a=f.num(dl_active), b=f.num(dl_conc)) if dl_conc else f.num(dl_active) }}</b>', "new": '<b class="fw-6"></b>',
+     "target": _HLT, "expect": 'test_the_live_download_count_reaches_the_page'},
 
-    {"name": "panel/health: the engine versions vanish",
-     "path": "app/admin_web.py",
-     "old": "gallery-dl {{ e['gallery-dl'] or '—' }}", "new": "",
+    {"name": 'panel/system: the engine versions vanish',
+     "path": 'app/templates/system.html',
+     "old": '      <tbody>{% for e in engines %}<tr>', "new": '      <tbody>{% for e in [] %}<tr>',
      "target": _HLT, "expect": "test_the_engine_versions_reach_the_page"},
 
-    {"name": "panel/health: the cookie-pool count vanishes",
-     "path": "app/admin_web.py",
-     "old": "<bdi>{{p.live}}</bdi> سالم", "new": "",
+    {"name": 'panel/dashboard: the cookie-pool card stops counting ready accounts',
+     "path": 'app/templates/dashboard.html',
+     "old": '          <span class="v num">{{ t(\'d.pool.ready\', a=f.num(r.ready), b=f.num(r.n)) }}</span></div>{% endfor %}', "new": '          <span class="v num"></span></div>{% endfor %}',
      "target": _HLT,
-     "expect": "test_the_cookie_pool_line_reports_each_platform_and_its_count"},
+     "expect": 'test_the_cookie_pool_card_reports_each_platform_and_its_ready_count'},
 
-    {"name": "panel/health: the disk meter vanishes",
-     "path": "app/admin_web.py",
-     "old": "{{health.disk_used}}/{{health.disk_total}}G", "new": "",
+    {"name": 'panel/system: the disk meter vanishes',
+     "path": 'app/templates/system.html',
+     "old": '    <div class="card-b">{% if disk %}', "new": '    <div class="card-b">{% if False %}',
      "target": _HLT, "expect": "test_the_disk_meter_reports_what_it_measured"},
 
-    {"name": "panel/health: the redis service row vanishes",
-     "path": "app/admin_web.py",
-     "old": "  <div class=svc>⚡ Redis <span class=\"badge {{'ok' if health.redis else 'warn'}}\">"
-            "{{'آنلاین' if health.redis else 'خطا'}}</span></div>\n",
-     "new": "",
-     "target": _HLT, "expect": "test_every_boolean_service_reports_its_state"},
+    {"name": 'panel/system: the redis service card vanishes',
+     "path": 'app/templates/system.html',
+     "old": '<div class="svc-grid">{% for s in services %}',
+     "new": '<div class="svc-grid">{% for s in services if s.key != \'redis\' %}',
+     "target": _HLT, "expect": 'test_every_service_reports_its_state'},
 
-    {"name": "panel/health: the disk meter renders unconditionally (reverse control)",
-     "path": "app/admin_web.py",
-     "old": "{% if health.disk_total %}<div class=stat><b>دیسکِ ‎/work</b>",
-     "new": "{% if True %}<div class=stat><b>دیسکِ ‎/work</b>",
-     "target": _HLT, "expect": "test_an_unmeasurable_disk_hides_the_meter"},
+    {"name": 'panel/system: the disk meter renders even when nothing was measured',
+     "path": 'app/templates/system.html',
+     "old": '    <div class="card-b">{% if disk %}',
+     "new": '    <div class="card-b">{% if True %}',
+     "target": _HLT, "expect": 'test_an_unmeasurable_disk_says_so'},
 
     {"name": "panel/users: the telegram id vanishes from the row",
-     "path": "app/admin_web.py",
-     "old": "{{u.tg}}{% if u.is_admin %}", "new": "{% if u.is_admin %}",
+     "path": 'app/templates/users.html',
+     "old": '<td data-l="{{ t(\'us.col.id\') }}"><bdi class="mono">{{ u.tg }}</bdi></td>', "new": '<td data-l="{{ t(\'us.col.id\') }}"><bdi class="mono"></bdi></td>',
      "target": _URW, "expect": "test_each_row_reports_the_telegram_id_it_is_about"},
 
     {"name": "panel/users: the pager loses its position",
-     "path": "app/admin_web.py",
-     "old": "صفحهٔ {{page+1}} از {{pages}}", "new": "",
+     "path": 'app/templates/users.html',
+     "old": '  {{ m.pager(pager) }}\n', "new": '',
      "target": _URW, "expect": "test_the_pager_states_where_the_admin_is"},
 
     # الگو تا فاز B یکتا بود و بعد **پیشوندِ** یک رشتهٔ تازه شد: صفحهٔ `/langs`
@@ -1920,27 +1865,27 @@ CASES: list[dict] = [
     # هست، ولی تا امروز کسی دفترچه را بعد از #۱۲۹ کامل replay نکرده بود.
     # لنگرِ `{%` دوباره یکتایش می‌کند. (نه باگِ محصول است نه ادعای عوض‌شده.)
     {"name": "panel/users: the header stops counting",
-     "path": "app/admin_web.py",
-     "old": "{{total}} کل{%", "new": "{%",
-     "target": _URW, "expect": "test_the_header_counts_total_and_blocked"},
+     "path": 'app/templates/users.html',
+     "old": "{{ t('us.sub', n=f.num(data.all), a=f.num(data.active7), b=f.num(data.blocked)) }}", "new": "{{ t('us.sub', n=f.num(0), a=f.num(0), b=f.num(0)) }}",
+     "target": _URW, "expect": 'test_the_header_counts_total_active_and_blocked'},
 
     {"name": "panel/nodes: the node list renders empty",
-     "path": "app/admin_web.py",
-     "old": "{% for n in nodes %}\n    <div class=nd>",
-     "new": "{% for n in [] %}\n    <div class=nd>",
+     "path": 'app/templates/nodes.html',
+     "old": '  {% for n in nodes %}',
+     "new": '  {% for n in [] %}',
      "target": _NDS,
      "expect": "test_a_registered_node_is_listed_with_its_identifying_facts"},
 
     {"name": "panel/texts: the whole catalogue renders empty",
-     "path": "app/admin_web.py",
-     "old": "{% for g in groups %}\n  <details class=tx-cat",
-     "new": "{% for g in [] %}\n  <details class=tx-cat",
-     "target": _TXT, "expect": "test_every_category_renders_its_title"},
+     "path": 'app/templates/texts.html',
+     "old": '<div style="border-top:1px solid var(--border-soft)">{% for r in rows %}',
+     "new": '<div style="border-top:1px solid var(--border-soft)">{% for r in [] %}',
+     "target": _TXT, "expect": 'test_a_category_filter_shows_exactly_its_keys'},
 
     {"name": "panel/texts: the editor box loses the current value",
-     "path": "app/admin_web.py",
-     "old": "<textarea name=value rows=2>{{it.current}}</textarea>",
-     "new": "<textarea name=value rows=2></textarea>",
+     "path": 'app/templates/texts.html',
+     "old": 'aria-label="{{ r.key }}">\n{{ r.current }}</textarea>',
+     "new": 'aria-label="{{ r.key }}">\n</textarea>',
      "target": _TXT, "expect": "test_a_key_is_editable_with_its_current_value"},
 
     {"name": "panel/texts: search stops filtering",
@@ -1952,14 +1897,14 @@ CASES: list[dict] = [
      "expect": "test_the_search_narrows_the_list_to_what_matches"},
 
     {"name": "panel/buttons: the op rows render empty",
-     "path": "app/admin_web.py",
-     "old": "      {% for it in items %}\n        <div class=bt-row data-op=\"{{it.op}}\">",
-     "new": "      {% for it in [] %}\n        <div class=bt-row data-op=\"{{it.op}}\">",
+     "path": 'app/templates/buttons.html',
+     "old": '<div class="be-list" id="be-list">{% for it in items %}',
+     "new": '<div class="be-list" id="be-list">{% for it in [] %}',
      "target": _BTN, "expect": "test_every_op_of_the_kind_renders_a_row[video]"},
 
     {"name": "panel/buttons: the kind tabs vanish",
-     "path": "app/admin_web.py",
-     "old": "{% for k, label in kinds %}", "new": "{% for k, label in [] %}",
+     "path": 'app/templates/buttons.html',
+     "old": '<div class="tabs" role="tablist">{% for k, n in kinds %}', "new": '<div class="tabs" role="tablist">{% for k, n in [] %}',
      "target": _BTN, "expect": "test_every_kind_gets_a_tab"},
 
     # متنِ دکمه **دو بار** رندر می‌شود (جعبهٔ ویرایش + پیش‌نمایشِ زنده). یک
@@ -1967,63 +1912,48 @@ CASES: list[dict] = [
     # می‌کند و «نگرفت» شبیهِ تستِ ضعیف به‌نظر می‌رسد. اندازه‌گیری‌شده: نسخهٔ اول
     # دقیقاً همین‌طور رد شد. پس دو مورد، هرکدام برای یک لایه.
     {"name": "panel/buttons: the editor box loses the button's current label",
-     "path": "app/admin_web.py",
-     "old": 'name="text_{{it.op}}" value="{{it.text}}"',
-     "new": 'name="text_{{it.op}}" value=""',
+     "path": 'app/templates/buttons.html',
+     "old": 'name="text_{{ it.op }}" value="{{ it.text }}"',
+     "new": 'name="text_{{ it.op }}" value=""',
      "target": _BTN, "expect": "test_the_editor_box_carries_the_current_label"},
 
     {"name": "panel/buttons: the live preview stops showing the label",
-     "path": "app/admin_web.py",
-     "old": '<span class="tgb {{b.cls}}" {% if b.color %}style="background:{{b.color}};'
-            'color:#fff"{% endif %}>{{b.text}}</span>',
-     "new": '<span class="tgb {{b.cls}}" {% if b.color %}style="background:{{b.color}};'
-            'color:#fff"{% endif %}></span>',
+     "path": 'app/templates/buttons.html',
+     "old": '<span class="b {{ b.style }}">{{ b.text }}</span>',
+     "new": '<span class="b {{ b.style }}"></span>',
      "target": _BTN, "expect": "test_the_live_preview_shows_the_current_label"},
 
-    {"name": "panel/stats: the errors card renders empty",
-     "path": "app/admin_web.py",
-     "old": "{% for e in s.errors %}", "new": "{% for e in [] %}",
+    {"name": 'panel/reports: the errors card renders empty',
+     "path": 'app/templates/reports.html',
+     "old": '      <tbody>{% for e in d.errors %}', "new": '      <tbody>{% for e in [] %}',
      "target": _STC, "expect": "test_the_recorded_error_reaches_the_errors_card"},
 
-    # همان دو-لایگی، با یک پیچِ اضافه: برچسب‌های فارسیِ op در **سه** جا
-    # می‌آیند — کارتِ `by_op`، جدولِ `op_perf` (که `op`ش از قبل فارسی است،
-    # `admin_web.py:1694`)، و متنِ توضیحیِ خودِ صفحه که همان‌ها را به‌عنوان
-    # مثال می‌نویسد. پس هر ادعا باید به **کارتِ** خودش محدود شود.
-    {"name": "panel/stats: the per-op card renders empty",
-     "path": "app/admin_web.py",
-     "old": "{% if s.by_op %}{% for r in s.by_op %}", "new": "{% if s.by_op %}{% for r in [] %}",
-     "target": _STC, "expect": "test_the_per_op_rows_name_their_operations"},
+    # بازنشسته (۲۰۲۶-۱۰): «panel/stats: the per-op card renders empty»
+    #   merged into the one ops table on /reports.
 
-    {"name": "panel/stats: the op-performance table renders empty",
-     "path": "app/admin_web.py",
-     "old": "{% for r in s.op_perf %}", "new": "{% for r in [] %}",
-     "target": _STC, "expect": "test_the_op_performance_table_names_its_operations"},
+    {"name": 'panel/reports: the op-performance table renders empty',
+     "path": 'app/templates/reports.html',
+     "old": '      <tbody>{% for o in d.ops %}', "new": '      <tbody>{% for o in [] %}',
+     "target": _STC, "expect": 'test_the_op_performance_table_names_and_counts_its_operations'},
 
-    # §۴٫۵ سند، موردهای ۱ و ۵. فرگمنتِ مشترک با الحاقِ **رشته‌ایِ پایتون** در دو
-    # جا نشانده می‌شود، پس شکستنِ یک‌طرفه‌اش کاملاً ممکن است — و تا امروز هیچ
-    # تستی نیمهٔ داشبورد را نمی‌زد.
-    {"name": "panel/contract: the shared health partial drops off the dashboard",
-     "path": "app/admin_web.py",
-     "old": '<div class=col>""" + _HEALTH_CARDS + """</div>\n</div>{% endblock %}"""\n\n_COOKIES',
-     "new": '<div class=col></div>\n</div>{% endblock %}"""\n\n_COOKIES',
-     "target": _PCT,
-     "expect": "test_the_shared_health_partial_renders_on_both_pages[/]"},
+    # بازنشسته (۲۰۲۶-۱۰): «panel/contract: the shared health partial drops off the dashboard»
+    #   no shared health partial any more; test_the_services_strip_and_the_system_page_agree.
 
     # شکلِ واقع‌بینانه: درصدی که روی مخرجِ صفر حساب شود. `pool[0]` عمداً استفاده
     # **نشد** — جینجا اندیسِ خارج از بازه را `Undefined` می‌دهد و بی‌صدا تهی
     # رندر می‌کند، پس اصلاً ۵۰۰ نمی‌شود و سابوتاژ چیزی ثابت نمی‌کرد.
     {"name": "panel/contract: a page 500s on an empty deployment",
-     "path": "app/admin_web.py",
-     "old": "    {% if pool %}{% for p in pool %}",
-     "new": "    {{ 100 // (pool|length) }}{% if pool %}{% for p in pool %}",
+     "path": 'app/templates/system.html',
+     "old": '      <tbody>{% for e in engines %}<tr>',
+     "new": '      <tbody>{{ 100 // (engines|length) }}{% for e in engines %}<tr>',
      "target": _PCT,
-     "expect": "test_every_page_answers_on_an_empty_deployment[/health]"},
+     "expect": 'test_every_page_answers_on_an_empty_deployment[/system]'},
 
-    {"name": "panel/cookies: a status dot is defined but never rendered",
-     "path": "app/admin_web.py",
-     "old": '      <span class="sdot s-{{c.status}}"></span>\n', "new": "", "count": 2,
+    {"name": 'panel/cookies: a status pill is defined but never rendered on its row',
+     "path": 'app/templates/cookies.html',
+     "old": '<td data-l="{{ t(\'c.status\') }}">{{ m.pill(r.pill) }}', "new": '<td data-l="{{ t(\'c.status\') }}">', "count": 1,
      "target": _CSB,
-     "expect": "test_every_seeded_status_paints_a_dot_on_a_real_row"},
+     "expect": 'test_every_seeded_status_paints_a_pill_on_a_real_row'},
 
     # ── هلپرِ `pagefacts`: خودارجاعی، نه صرفاً «چک می‌تواند بیفتد» ─────────
     # کامنتِ CSS داخلِ `<style>` **ارسال می‌شود** و یک‌بار گاردِ کلاس را کور
@@ -2154,8 +2084,8 @@ CASES: list[dict] = [
 
     {"name": "panel: import writes what it validated even when something failed",
      "path": "app/admin_web.py",
-     "old": "    if not rv.ok:\n        return await _langs_render(request, review=rv, raw=raw, replace=replace)",
-     "new": "    if False:\n        return await _langs_render(request, review=rv, raw=raw, replace=replace)",
+     "old": '    if not rv.ok:\n        return await _langs_render(request, review=rv, raw=raw, replace=replace, form=fvals,',
+     "new": '    if False:\n        return await _langs_render(request, review=rv, raw=raw, replace=replace, form=fvals,',
      "target": _LNG,
      "expect": "test_a_rejected_pack_writes_nothing_at_all"},
 
@@ -2202,9 +2132,9 @@ CASES: list[dict] = [
      "expect": "test_the_export_carries_the_admins_own_edits_not_the_code_default"},
 
     {"name": "panel: re-export restarts from the default language instead of continuing",
-     "path": "app/admin_web.py",
-     "old": '<a class=btn-sm href="/langs/export?lang={{r.code}}&source={{r.code}}">',
-     "new": '<a class=btn-sm href="/langs/export?lang={{r.code}}&source={{default_lang}}">',
+     "path": 'app/templates/langs.html',
+     "old": '&amp;source={{ l.code|urlencode }}"',
+     "new": '&amp;source=fa"',
      "target": _LNG,
      "expect": "test_re_exporting_a_half_translated_language_carries_what_is_done"},
 
@@ -2229,8 +2159,8 @@ CASES: list[dict] = [
 
     {"name": "panel: coverage is a fixed label instead of a computed number",
      "path": "app/admin_web.py",
-     "old": "        done = total if builtin else len(textstore.lang_texts(code))",
-     "new": "        done = total",
+     "old": '        done = total if builtin else len([k for k in textstore.lang_texts(code) if k in langpack.TEXT_KEYS])',
+     "new": '        done = total',
      "target": _LNG,
      "expect": "test_the_page_states_how_many_keys_a_language_still_lacks"},
 
@@ -2377,8 +2307,8 @@ CASES: list[dict] = [
     # و کنترلِ همان از سمتِ داده: با دامنهٔ درست، یک CDNِ واقعی باید بیفتد.
     {"name": "templates: an external script really is caught",
      "path": "app/templates/base.html",
-     "old": "<meta charset=utf-8>",
-     "new": '<meta charset=utf-8><script src="https://cdn.jsdelivr.net/npm/chart.js"></script>',
+     "old": '<meta charset="utf-8">',
+     "new": '<meta charset="utf-8"><script src="https://cdn.jsdelivr.net/npm/chart.js"></script>',
      "target": _SEC,
      "expect": "test_the_panel_has_no_external_resources_for_the_csp_to_break"},
 
@@ -2393,8 +2323,8 @@ CASES: list[dict] = [
     # Jinja **یک** خطِ پایانی می‌خورد؛ دومی به هر صفحه یک `\n` اضافه می‌کند.
     {"name": "templates: a second trailing newline leaks into every page",
      "path": "app/templates/base.html",
-     "old": "</body></html>\n",
-     "new": "</body></html>\n\n",
+     "old": '</body>\n</html>\n',
+     "new": '</body>\n</html>\n\n',
      "target": _TPF,
      "expect": "test_a_template_file_ends_with_exactly_one_newline[base.html]"},
 
@@ -2406,29 +2336,24 @@ CASES: list[dict] = [
      "target": _TPF,
      "expect": "test_the_copy_parser_ignores_comments"},
 
-    # فرگمنتِ مشترک: شکستنِ یک صفحه در حالی که دیگری سالم می‌ماند.
-    {"name": "templates: the shared health fragment is dropped from the dashboard",
-     "path": "app/templates/settings.html",
-     "old": '{% include "_health_cards.html" %}',
-     "new": "",
-     "target": _PCT,
-     "expect": "test_the_shared_health_partial_renders_on_both_pages[/]"},
+    # بازنشسته (۲۰۲۶-۱۰): «templates: the shared health fragment is dropped from the dashboard»
+    #   no shared health partial any more; test_the_services_strip_and_the_system_page_agree.
 
     # ── استخراجِ CSS به `app/static/css/panel.css` ─────────────────────
     # CSS از فایل خوانده می‌شود ولی همچنان درون‌خطی می‌رود. رفتن به `<link>`
     # باید تصمیمِ آگاهانه باشد، نه اثرِ جانبی — اندازه‌گیری‌شده ۱۵ تا ۱۹ شکست.
-    {"name": "css: the stylesheet stops being inlined",
+    {"name": 'css: the page stops linking the versioned stylesheet',
      "path": "app/templates/base.html",
-     "old": "<style>{{css}}{% block style %}{% endblock %}</style>",
-     "new": '<link rel=stylesheet href="/static/css/panel.css">',
+     "old": '<link rel="stylesheet" href="{{ asset(\'css/panel.css\') }}">',
+     "new": '<link rel="stylesheet" href="/static/css/panel.css">',
      "target": _TPF,
-     "expect": "test_the_served_page_carries_the_stylesheet_from_the_file"},
+     "expect": 'test_the_stylesheet_that_ships_is_the_file_on_disk'},
 
     # و کنترلِ اینکه فایل واقعاً منبع است، نه یک کپیِ جاافتاده در پایتون.
-    {"name": "css: the module stops reading the file",
+    {"name": 'assets: the version stops being derived from the file',
      "path": "app/admin_web.py",
-     "old": '_CSS = pathlib.Path(_STATIC_DIR, "css", "panel.css").read_text(encoding="utf-8")',
-     "new": '_CSS = "body{background:#fff}"',
+     "old": '        self.ver = hashlib.sha256(data).hexdigest()[:10]',
+     "new": '        self.ver = "0123456789"',
      "target": _TPF,
      "expect": "test_the_stylesheet_that_ships_is_the_file_on_disk"},
     # ── فاز ۱: شش رفعِ امنیتی (بحرانی/بالا) ──────────────────────────
@@ -2520,12 +2445,8 @@ CASES: list[dict] = [
 
     {"name": "yt-auth: a probe age block is filed as a probe failure",
      "path": "app/tasks_download.py",
-     "old": ("                await PS.note(redis, PS.BLOCKED)\n"
-             "                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,\n"
-             '                                 payload.get("tg_user_id") or 0, "age_limit:18", url)'),
-     "new": ("                await PS.note(redis, PS.FAIL)\n"
-             "                await _nsfw_stop(bot, chat_id, status_mid, lang, redis, pol,\n"
-             '                                 payload.get("tg_user_id") or 0, "age_limit:18", url)'),
+     "old": ('                await PS.note(redis, PS.BLOCKED)\n                EV.settle(ev, EV.BLOCKED, "age_limit", attempts=attempts)'),
+     "new": ('                await PS.note(redis, PS.FAIL)\n                EV.settle(ev, EV.BLOCKED, "age_limit", attempts=attempts)'),
      "target": _YEK,
      "expect": "test_probe_age_gate_is_blocked_without_a_second_account"},
 
@@ -2897,8 +2818,8 @@ CASES: list[dict] = [
      "expect": 'test_a_cross_site_post_does_not_act[foreign-origin]'},
     {"name": 'audit2 panel csrf guard not installed',
      "path": 'app/admin_web.py',
-     "old": '    app = web.Application(middlewares=[_security_headers, _csrf_guard, _panel_prefs])',
-     "new": '    app = web.Application(middlewares=[_security_headers, _panel_prefs])',
+     "old": '    app = web.Application(middlewares=[_compress, _security_headers, _csrf_guard, _panel_prefs],',
+     "new": '    app = web.Application(middlewares=[_compress, _security_headers, _panel_prefs],',
      "target": _CSG,
      "expect": 'test_a_cross_site_post_does_not_act[cross-site]'},
     # ── فاز ۳: رسانه/پردازش ─────────────────────────────────────────
@@ -3364,10 +3285,10 @@ CASES: list[dict] = [
      "new": '    name = request.query.get("domain", "")',
      "target": "tests/panel/test_tls.py",
      "expect": "test_the_comparison_is_on_the_canonical_name"},
-    {"name": "https: the /health page lost its HTTPS card",
-     "path": "app/templates/health.html",
-     "old": '  {% include "_health_tls.html" %}\n',
-     "new": "",
+    {"name": 'https: the /system page lost its certificate rows',
+     "path": 'app/templates/system.html',
+     "old": '      <tbody>{% for c in tls %}<tr>',
+     "new": '      <tbody>{% for c in [] %}<tr>',
      "target": "tests/panel/test_tls.py",
      "expect": "test_the_card_shows_each_domain_and_its_certificate"},
     {"name": "https: the earlier-expiring certificate is shown",
@@ -3390,8 +3311,8 @@ CASES: list[dict] = [
      "expect": "test_the_warm_up_handshake_carries_the_domain_as_sni"},
     {"name": "https: cleanup leaves the warm-up task running",
      "path": "app/admin_web.py",
-     "old": "    for key in (_POT_TASK, _TLS_WARM_TASK):",
-     "new": "    for key in (_POT_TASK,):",
+     "old": '    for key in (_POT_TASK, _TLS_WARM_TASK, _SVC_TASK):',
+     "new": '    for key in (_POT_TASK, _SVC_TASK):',
      "target": "tests/panel/test_tls.py",
      "expect": "test_cleanup_cancels_a_pending_warm_up"},
     {"name": "client ip: X-Forwarded-For trusted from a public peer",
@@ -3502,6 +3423,165 @@ CASES: list[dict] = [
      "new": 'base="https://example.invalid/v${ver}"',
      "target": "tests/test_caddy.py",
      "expect": "test_the_caddy_validation_is_not_dead_weight"},
+
+    # ── بازطراحیِ پنل (۲۰۲۶-۱۰): گاردهای تازهٔ همین کار ───────────────────────
+    # هرکدام یک ادعای مشخص؛ کاری که بازطراحی اضافه کرد (لاگِ ادمین، گاردِ اکانتِ
+    # ناشناخته، خروجِ فقط-POST، اسپرایت، `|safe`، کلیدِ همنامِ متدِ dict، حالتِ
+    # strict، اجتماعِ پلتفرم‌ها، شدتِ یکسانِ گواهی) بدونِ یکی از این‌ها اثبات‌نشده بود.
+
+    {'name': 'panel-actions: an unknown cookie account gets a ghost meta again',
+     'path': 'app/admin_web.py',
+     'old': '    names, _local = await ck_pool.list_names(redis)\n    return name if name in names else None',
+     'new': '    return name',
+     'target': _PAC,
+     'expect': 'test_an_unknown_account_leaves_no_trace[toggle]'},
+
+    {'name': 'panel-actions: replace resurrects a deleted account again',
+     'path': 'app/admin_web.py',
+     'old': '    names, _local = await ck_pool.list_names(redis)\n    return name if name in names else None',
+     'new': '    return name',
+     'target': _PAC,
+     'expect': 'test_replacing_an_account_that_is_gone_does_not_resurrect_it'},
+
+    {'name': "panel-actions: the account lookup asks the disk instead of the page's list",
+     'path': 'app/admin_web.py',
+     'old': '    names, _local = await ck_pool.list_names(redis)\n    return name if name in names else None',
+     'new': '    return name if os.path.isfile(os.path.join(settings.cookies_dir, name)) else None',
+     'target': _PAC,
+     'expect': 'test_a_mirror_only_account_can_still_be_deleted'},
+
+    {'name': 'panel-actions: a plain link signs the admin out again',
+     'path': 'app/admin_web.py',
+     'old': '    post("/logout", logout)',
+     'new': '    add("/logout", logout)\n    post("/logout", logout)',
+     'target': _PAC,
+     'expect': 'test_a_plain_link_cannot_sign_the_admin_out'},
+
+    {'name': 'panel-actions: a reset that cannot happen is reported as done',
+     'path': 'app/admin_web.py',
+     'old': '    if raw_lang not in langs:\n        raise _result("/texts", err=pt(ui, "tx.err.lang", l=raw_lang), **back)\n    if key not in langpack.TEXT_KEYS:\n        raise _result("/texts", err=pt(ui, "tx.err.key", k=key[:60]), **back)\n    if textstore.get_override(lang, key) is not None:',
+     'new': '    if raw_lang in langs and key in langpack.TEXT_KEYS and textstore.get_override(lang, key) is not None:',
+     'target': _PAC,
+     'expect': 'test_a_reset_that_cannot_happen_is_not_reported_as_done[unknown-key]'},
+
+    {'name': 'panel-actions: removing a node that is gone is silent again',
+     'path': 'app/admin_web.py',
+     'old': '            raise _result("/nodes", err=pt(_PREFS.get()[0], "nd.rm.none"))',
+     'new': '            raise _result("/nodes")',
+     'target': _PAC,
+     'expect': 'test_removing_a_node_that_is_gone_says_so'},
+
+    {'name': 'admin-log: a detail named like an `_audit` parameter is back',
+     'path': 'app/admin_web.py',
+     'old': '    await _audit(request, "cookie_cooldown", target=name, mode=action)',
+     'new': '    await _audit(request, "cookie_cooldown", target=name, action=action)',
+     'target': _ADL,
+     'expect': 'test_resting_a_cookie_account_works_and_is_logged'},
+
+    {'name': 'admin-log: … and the static guard sees the same call',
+     'path': 'app/admin_web.py',
+     'old': '    await _audit(request, "cookie_cooldown", target=name, mode=action)',
+     'new': '    await _audit(request, "cookie_cooldown", target=name, action=action)',
+     'target': _ADL,
+     'expect': 'test_no_audit_call_passes_a_detail_named_like_a_parameter'},
+
+    {'name': 'admin-log: a secret setting is logged in clear',
+     'path': 'app/admin_web.py',
+     'old': '        return "•••" if value not in ("", None) else ""',
+     'new': '        return "" if value is None else str(value)',
+     'target': _ADL,
+     'expect': 'test_a_secret_setting_is_logged_as_dots_never_as_its_value'},
+
+    {'name': 'admin-log: proxy credentials reach the log',
+     'path': 'app/admin_web.py',
+     'old': '    return _USERINFO.sub("•••@", s)[:200]',
+     'new': '    return s[:200]',
+     'target': _ADL,
+     'expect': 'test_proxy_credentials_never_reach_the_log'},
+
+    {'name': 'admin-log: an unchanged save writes a row per field',
+     'path': 'app/admin_web.py',
+     'old': '            if str(before) != str(val):',
+     'new': '            if True:',
+     'target': _ADL,
+     'expect': 'test_an_unchanged_save_writes_no_log_rows'},
+
+    {'name': 'icons: a symbol a Python map names leaves the sprite (static layer)',
+     'path': 'app/static/icons.svg',
+     'old': 'id="i-snowflake"',
+     'new': 'id="i-snowflake-gone"',
+     'target': _ICN,
+     'expect': 'test_every_python_icon_exists[admin_web.py]'},
+
+    {'name': 'icons: … and the rendered layer sees it on the page',
+     'path': 'app/static/icons.svg',
+     'old': 'id="i-snowflake"',
+     'new': 'id="i-snowflake-gone"',
+     'target': _ICN,
+     'expect': 'test_every_icon_a_page_renders_exists[/cookies]'},
+
+    {'name': 'templates: a `|safe` slips into a template',
+     'path': 'app/templates/reports.html',
+     'old': 'title="{{ e.msg }}">{{ e.msg }}</div>',
+     'new': 'title="{{ e.msg }}">{{ e.msg|safe }}</div>',
+     'target': _TGD,
+     'expect': 'test_no_template_marks_data_as_safe[reports.html]'},
+
+    {'name': 'templates: a dict key named like a dict method is read with a dot again',
+     'path': 'app/templates/search.html',
+     'old': "{% for x in g['items'] %}",
+     'new': '{% for x in g.items %}',
+     'target': _TGD,
+     'expect': 'test_no_template_reads_a_dict_key_named_like_a_dict_method[search.html]'},
+
+    {'name': 'strict: an optional key is read with a dot again',
+     'path': 'app/templates/system.html',
+     'old': "{{ f.ago(e.at) if e.get('at') else '—' }}",
+     'new': "{{ f.ago(e.at) if e.at else '—' }}",
+     'target': _STU,
+     'expect': 'test_every_page_renders_strictly_with_data[/system]'},
+
+    {'name': 'reports: a platform that only fails drops out of the list again',
+     'path': 'app/panel_data.py',
+     'old': '                 for p in sorted(set(plat_b) | set(ev_att),',
+     'new': '                 for p in sorted(set(plat_b),',
+     'target': _SCL,
+     'expect': 'test_a_platform_that_only_fails_is_still_reported'},
+
+    {'name': 'reports: a refused download counts as a failure',
+     'path': 'app/panel_data.py',
+     'old': '        if outcome in ("ok", "fail"):\n            ev_att[p] = ev_att.get(p, 0) + 1',
+     'new': '        if outcome in ("ok", "fail", "refused"):\n            ev_att[p] = ev_att.get(p, 0) + 1',
+     'target': _SCL,
+     'expect': 'test_refused_downloads_are_not_failures'},
+
+    {'name': 'system: a dead database reads as healthy',
+     'path': 'app/admin_web.py',
+     'old': '    rows = [{"key": "postgres", "icon": "database", "tint": "t6", "ok": pg_ok, "ms": pg_ms},',
+     'new': '    rows = [{"key": "postgres", "icon": "database", "tint": "t6", "ok": True, "ms": pg_ms},',
+     'target': _HLT,
+     'expect': 'test_a_dead_database_is_reported_as_down'},
+
+    {'name': 'tls: the alert goes back to its own expiry threshold',
+     'path': 'app/admin_web.py',
+     'old': '        elif _cert_sev(row):\n            alerts.append({"sev": _cert_sev(row), "icon": "lock",',
+     'new': '        elif row.get("days", 99) <= 7:\n            alerts.append({"sev": "bad", "icon": "lock",',
+     'target': 'tests/panel/test_tls.py',
+     'expect': 'test_a_soon_expiring_certificate_is_a_warning'},
+
+    {'name': 'tls: the warning window shrinks back to a week',
+     'path': 'app/admin_web.py',
+     'old': '_CERT_WARN_DAYS = 14',
+     'new': '_CERT_WARN_DAYS = 7',
+     'target': 'tests/panel/test_tls.py',
+     'expect': 'test_the_card_and_the_alert_agree_on_severity'},
+
+    {'name': 'login: Persian digits are no longer converted before comparing',
+     'path': 'app/admin_web.py',
+     'old': '    return re.sub(r"[\\s٬,]", "", F.ascii_digits(str(value or "")))[:64]',
+     'new': '    return re.sub(r"[\\s٬,]", "", str(value or ""))[:64]',
+     'target': _LRL,
+     'expect': 'test_a_persian_digit_code_signs_in'},
 ]
 
 

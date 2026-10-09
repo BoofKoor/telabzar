@@ -45,19 +45,67 @@ async def test_hsts_is_sent_only_over_https(panel):
     assert proxied.headers["Strict-Transport-Security"].startswith("max-age=")
 
 
+_LINKED = re.compile(r'<(?:link rel="stylesheet" href|script[^>]* src)="([^"]+)"')
+_SCRIPT_TAG = re.compile(r"<script\b([^>]*)>", re.I)
+
+
 async def test_the_csp_permits_what_the_panel_actually_serves(panel):
     """CSP باید با چیزی که پنل واقعاً می‌فرستد جور باشد.
 
-    کلِ طراحی یک `<style>`ِ درون‌خطی است و صفحهٔ `/buttons` یک `<script>`ِ
-    درون‌خطی دارد؛ CSPی که این دو را ندهد صفحه را **خالی و بی‌کارکرد** می‌کند
-    و هیچ تستِ HTTPی هم متوجه نمی‌شود، چون سرور همچنان ۲۰۰ می‌دهد.
+    CSPی که استایل یا اسکریپتِ پنل را ندهد صفحه را **خالی و بی‌کارکرد** می‌کند و
+    هیچ تستِ HTTPی متوجه نمی‌شود، چون سرور همچنان ۲۰۰ می‌دهد. از بازطراحیِ
+    ۲۰۲۶-۱۰ استایل و اسکریپت **فایلِ هم‌مبدأ**اند (`/static/…`) و تنها چیزِ
+    درون‌خطی، ویژگیِ `style=` است (عرضِ ستونِ نمودار، رنگِ نقطهٔ راهنما).
+    """
+    for path in ("/", "/buttons"):
+        resp = await panel.client.get(path, cookies=panel.cookies)
+        csp = resp.headers["Content-Security-Policy"]
+        body = await resp.text()
+        linked = _LINKED.findall(body)
+        assert any(u.startswith("/static/css/") for u in linked), f"{path}: پیش‌شرط — استایل‌شیت لینک نشده"
+        assert any(u.startswith("/static/js/") for u in linked), f"{path}: پیش‌شرط — اسکریپت لینک نشده"
+        assert all(u.startswith("/static/") for u in linked), f"{path}: منبعِ غیرِهم‌مبدأ: {linked}"
+        assert "default-src 'self'" in csp and "script-src 'self'" in csp
+        if ' style="' in body:
+            assert "style-src 'self' 'unsafe-inline'" in csp, f"{path} ویژگیِ style= دارد و CSP آن را نمی‌دهد"
+
+
+async def test_no_page_relies_on_inline_script(panel):
+    """`script-src` عمداً `'unsafe-inline'` **ندارد** — پس هیچ اسکریپتِ درون‌خطی نباید لازم باشد.
+
+    دو شکلِ اسکریپتِ مجاز: فایلِ هم‌مبدأ (`src=`) و بلوکِ دادهٔ `type="application/json"`
+    که مرورگر اجرا نمی‌کند. هر `<script>`ِ دیگری زیرِ این CSP بی‌صدا اجرا نمی‌شود.
     """
     resp = await panel.client.get("/buttons", cookies=panel.cookies)
-    csp = resp.headers["Content-Security-Policy"]
-    body = await resp.text()
-    assert "<style>" in body and "<script>" in body, "پیش‌شرضِ تست عوض شده"
-    assert "style-src 'self' 'unsafe-inline'" in csp
-    assert "script-src 'self' 'unsafe-inline'" in csp
+    assert "'unsafe-inline'" not in resp.headers["Content-Security-Policy"].split("script-src", 1)[1].split(";")[0]
+    for path in ("/", "/buttons", "/settings", "/activity", "/users"):
+        body = await (await panel.client.get(path, cookies=panel.cookies)).text()
+        for attrs in _SCRIPT_TAG.findall(body):
+            assert "src=" in attrs or 'type="application/json"' in attrs, (
+                f"{path}: اسکریپتِ درون‌خطی که CSP اجرایش نمی‌کند: <script{attrs}>")
+
+
+_INLINE_HANDLER = re.compile(r"<[a-z][^>]*\son[a-z]+\s*=", re.I)
+
+
+def inline_handlers(text: str) -> list[str]:
+    """هندلرِ رویدادِ درون‌خطی (`onclick=` و …) — زیرِ `script-src 'self'` اجرا نمی‌شوند."""
+    return _INLINE_HANDLER.findall(text)
+
+
+def test_no_template_carries_an_inline_event_handler():
+    """کشف‌محور روی همهٔ قالب‌ها؛ پنلِ قدیم ۷ تا داشت و CSP را نرم نگه می‌داشت."""
+    found = {p.name: inline_handlers(p.read_text(encoding="utf-8"))
+             for p in (ROOT / "app" / "templates").glob("*.html")}
+    found = {k: v for k, v in found.items() if v}
+    assert not found, f"هندلرِ درون‌خطی (CSP اجرایش نمی‌کند): {found}"
+
+
+def test_the_inline_handler_check_can_fail():
+    """کنترلِ منفی: چکر باید یک `onclick` را بگیرد و یک `data-on-x` را نه."""
+    assert inline_handlers('<button onclick="go()">x</button>')
+    assert inline_handlers('<form class="f" onsubmit="return ok()">')
+    assert not inline_handlers('<button data-onclick="x" class="online">x</button>')
 
 
 _EXTERNAL = re.compile(r"(?:src|href)=[\"']?https?://[^\"' >]+")
@@ -71,7 +119,8 @@ def _panel_asset_files() -> list[Path]:
     """
     app = ROOT / "app"
     return sorted([app / "admin_web.py", *app.glob("templates/*.html"),
-                   *app.glob("static/css/*.css")])
+                   *app.glob("static/css/*.css"), *app.glob("static/js/*.js"),
+                   *app.glob("static/*.svg")])
 
 
 def external_refs(paths) -> list[str]:
@@ -108,7 +157,8 @@ def test_the_scope_really_covers_the_templates():
     """
     names = {p.name for p in _panel_asset_files()}
     assert "admin_web.py" in names
-    assert "base.html" in names and "stats.html" in names
+    assert "base.html" in names and "dashboard.html" in names
+    assert "panel.js" in names and "panel.css" in names, f"دارایی‌های ایستا اسکن نمی‌شوند: {sorted(names)}"
     assert sum(1 for n in names if n.endswith(".html")) >= 12, (
         f"قالب‌ها اسکن نمی‌شوند: {sorted(names)}")
 

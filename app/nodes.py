@@ -163,11 +163,49 @@ def next_wg_ip(used: set[str]) -> str | None:
 
 
 # ── رجیستریِ زنده (heartbeat در Redis) ──────────────────────────
+#: آخرین زمانِ heartbeatِ هر نود — **بی‌TTL**، برخلافِ `node:{id}`. پنل با آن
+#: «آخرین تماس ۱۲ دقیقه پیش» را برای نودِ آفلاین می‌نویسد؛ کلیدِ زنده با مرگِ نود
+#: ناپدید می‌شود و بدونِ این ردِ ماندگار، آفلاین فقط «آفلاین» بود بی‌هیچ زمانی.
+#: پیشوندش عمداً `nodeseen:` است نه `node:seen:` تا `list_live` (`node:*`) آن را
+#: نشمارد.
+_SEEN_PREFIX = "nodeseen:"
+
+
 async def write_heartbeat(redis, node_id: str, data: dict) -> None:
+    now = int(time.time())
     try:
-        await redis.set(_NODE_PREFIX + node_id, json.dumps(data), ex=_HEARTBEAT_TTL)
+        await redis.set(_NODE_PREFIX + node_id, json.dumps({**data, "at": now}),
+                        ex=_HEARTBEAT_TTL)
+        await redis.set(_SEEN_PREFIX + node_id, str(now))
     except Exception as exc:  # noqa: BLE001
         log.debug("heartbeat write failed: %s", exc)
+
+
+async def last_seen(redis, node_ids: list[str]) -> dict[str, int]:
+    """node_id → epochِ آخرین heartbeat (نودی که هرگز تماس نگرفته در خروجی نیست)."""
+    if not node_ids:
+        return {}
+    try:
+        vals = await redis.mget([_SEEN_PREFIX + n for n in node_ids])
+    except Exception as exc:  # noqa: BLE001
+        log.debug("last_seen failed: %s", exc)
+        return {}
+    out: dict[str, int] = {}
+    for nid, v in zip(node_ids, vals):
+        try:
+            if v:
+                out[nid] = int(v)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+async def forget(redis, node_id: str) -> None:
+    """ردهای Redisِ یک نودِ حذف‌شده — heartbeatِ زنده و آخرین تماس."""
+    try:
+        await redis.delete(_NODE_PREFIX + node_id, _SEEN_PREFIX + node_id)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("forget failed: %s", exc)
 
 
 async def list_live(redis) -> dict[str, dict]:

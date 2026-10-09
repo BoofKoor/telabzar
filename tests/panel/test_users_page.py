@@ -21,7 +21,8 @@ import pytest
 
 from app.models import User
 
-_SRC = pathlib.Path("app/admin_web.py").read_text(encoding="utf-8")
+#: کوئریِ صفحه از بازطراحیِ ۲۰۲۶-۱۰ در `panel_data.users_list` است، نه `admin_web`.
+_SRC = pathlib.Path("app/panel_data.py").read_text(encoding="utf-8")
 
 
 async def _seed(panel, n: int = 3) -> list[int]:
@@ -39,14 +40,14 @@ async def _seed(panel, n: int = 3) -> list[int]:
 
 
 def _blocked_rows(body: str) -> int:
-    """تعدادِ ردیف‌هایی که صفحه **بلاک‌شده** نشان می‌دهد.
+    """تعدادِ ردیف‌هایی که صفحه **مسدود** نشان می‌دهد.
 
-    دکمهٔ «رفعِ بلاک» فقط برای کاربرِ بلاک‌شده رندر می‌شود؛ اندازه‌گیری‌شده روی
-    خودِ صفحه با ۱ بلاک از ۳ کاربر: `رفعِ بلاک`→۱ · `فعال`→۲ · `>بلاک<`→۳.
-    آن سومی تمایزدهنده **نیست** (هم در بج و هم در دکمهٔ کاربرِ آزاد می‌آید) و
-    دقیقاً همین‌جور شرطِ سستی بود که سابوتاژ نسخهٔ اولِ این تست را رد کرد.
+    فرمِ «رفعِ مسدودی» فقط برای کاربرِ مسدود رندر می‌شود، پس `value="unblock"`
+    تمایزدهنده است. **متنِ** «رفع مسدودی» نیست: جملهٔ تأییدِ مسدودکردنِ کاربرِ
+    **آزاد** («… هر وقت بخواهی می‌توانی رفع مسدودی کنی») هم آن را دارد — همان
+    شرطِ سستی که یک‌بار سابوتاژ نسخهٔ اولِ این تست را رد کرد.
     """
-    return body.count("رفعِ بلاک")
+    return body.count('name="action" value="unblock"')
 
 
 async def _users(panel, **q):
@@ -58,14 +59,14 @@ async def _users(panel, **q):
 @pytest.fixture
 def counted(panel, monkeypatch):
     """می‌شمارد چند بار واقعاً به دیتابیس رفته‌ایم."""
-    calls: list[tuple[int, str]] = []
-    real = panel.aw._users_list
+    calls: list[tuple] = []
+    real = panel.aw.PD.users_list
 
-    async def spy(page, q):
-        calls.append((page, q))
-        return await real(page, q)
+    async def spy(q, status, lang, sort, page, *a, **kw):
+        calls.append((q, status, lang, sort, page))
+        return await real(q, status, lang, sort, page, *a, **kw)
 
-    monkeypatch.setattr(panel.aw, "_users_list", spy)
+    monkeypatch.setattr(panel.aw.PD, "users_list", spy)
     return calls
 
 
@@ -80,12 +81,12 @@ async def test_a_repeat_load_does_not_hit_the_database(panel, counted):
 async def test_different_pages_and_queries_are_cached_separately(panel, counted):
     await _seed(panel)
     await _users(panel)
-    await _users(panel, page=1)
+    await _users(panel, page=2)
     await _users(panel, q=500000)
     assert len(counted) == 3
     for _ in range(2):                       # همه از کش
         await _users(panel)
-        await _users(panel, page=1)
+        await _users(panel, page=2)
         await _users(panel, q=500000)
     assert len(counted) == 3, f"کش به تفکیک نگه نداشت: {counted}"
 
@@ -156,7 +157,7 @@ async def test_the_cache_degrades_to_a_plain_query_without_redis(panel, counted)
     class NoRedis(dict):
         pass
 
-    data = await panel.aw._users_cached(NoRedis(), 0, "")
+    data = await panel.aw._users_cached(NoRedis(), "", "", "", "seen", "1")
     assert data["total"] >= 3
     assert len(counted) == 1
 
@@ -186,7 +187,7 @@ def test_the_index_matches_the_column_the_page_orders_by():
 
     tree = ast.parse(_SRC)
     fn = next(n for n in ast.walk(tree)
-              if isinstance(n, ast.AsyncFunctionDef) and n.name == "_users_list")
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "users_list")
     ordered = [n.attr for n in ast.walk(fn)
                if isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Load)
                and isinstance(n.value, ast.Attribute) and n.value.attr == "last_seen"]

@@ -3,7 +3,7 @@
 اندازه‌گیریِ سورسِ **پیش از** رفع، با سوکتی که accept می‌کند و هرگز جواب
 نمی‌دهد — همان چیزی که ممیزی زد و این‌جا روی سورسِ فعلی بازتولید شد:
 
-    `/` (داشبورد) → ۳۱۵۱ ms   ·   `/health` → ۳۰۲۳ ms   ·   بدونِ pot → ۲۱ ms
+    `/` (داشبورد) → ۳۱۵۱ ms   ·   `/health` (امروز `/system`) → ۳۰۲۳ ms   ·   بدونِ pot → ۲۱ ms
 
 پس از رفع، همان سنجش: ۱۹۳ ms برای اولین بار (که تقریباً همه‌اش گرم‌شدنِ اولین
 درخواست است — `/health` بلافاصله بعدش ۱۸ ms) و ۲۴ ms روی کشِ گرم.
@@ -54,8 +54,25 @@ async def _get(panel, path):
     return await panel.client.get(path, cookies=panel.cookies, allow_redirects=False)
 
 
+def _t(key: str) -> str:
+    from app.panel_i18n import pt
+    return pt("fa", key)
+
+
+def _pot_row(html: str) -> str | None:
+    """کارتِ سرویسِ pot در `/system` — یا `None` اگر اصلاً رندر نشده.
+
+    از بازطراحیِ ۲۰۲۶-۱۰ سلامت در `/system` است و هر سرویس کارتِ خودش را دارد؛ ادعا
+    به همین کارت محدود است، چون Bot API و ClamAV در تست هم «هنوز بررسی نشده»اند.
+    """
+    for block in html.split('<div class="card svc">')[1:]:
+        if f'<div class="n">{_t("sy.svc.pot")}</div>' in block:
+            return block.split('<div class="card svc">', 1)[0]
+    return None
+
+
 # ── ادعای اصلی: صفحه منتظرِ پروب نمی‌ماند ────────────────────────────────
-@pytest.mark.parametrize("path", ["/", "/health"], ids=["dashboard", "health"])
+@pytest.mark.parametrize("path", ["/", "/system"], ids=["dashboard", "system"])
 async def test_the_page_never_waits_for_the_pot_probe(panel, never_returns, path):
     calls, _gate = never_returns
     r = await asyncio.wait_for(_get(panel, path), timeout=2)
@@ -68,8 +85,8 @@ async def test_a_fresh_cached_result_makes_no_probe_at_all(panel, never_returns)
     calls, _gate = never_returns
     await panel.redis.set(panel.aw._POT_LAST, "1")
     await panel.redis.set(panel.aw._POT_FRESH, "1", ex=30)
-    r = await _get(panel, "/health")
-    assert "آنلاین" in await r.text()
+    r = await _get(panel, "/system")
+    assert _t("sy.ok") in _pot_row(await r.text())
     assert calls == [], f"با کشِ تازه هم پروب زده شد: {calls}"
 
 
@@ -77,9 +94,8 @@ async def test_a_stale_cache_still_serves_the_last_known_value(panel, never_retu
     """مسیرِ **خواندن**: با `last`ِ موجود و `fresh`ِ غایب، صفحه معطل نمی‌ماند."""
     calls, _gate = never_returns
     await panel.redis.set(panel.aw._POT_LAST, "1")      # `fresh` عمداً غایب
-    r = await _get(panel, "/health")
-    body = await r.text()
-    assert "آنلاین" in body, "مقدارِ شناخته‌شده سرو نشد"
+    r = await _get(panel, "/system")
+    assert _t("sy.ok") in _pot_row(await r.text()), "مقدارِ شناخته‌شده سرو نشد"
     assert calls, "تازه‌سازیِ پس‌زمینه زمان‌بندی نشد"
 
 
@@ -105,7 +121,7 @@ async def test_the_last_known_value_outlives_the_freshness_window(
     assert await panel.redis.get(panel.aw._POT_FRESH) is None, "پنجرهٔ تازگی نگذشت"
     assert await panel.redis.get(panel.aw._POT_LAST) == "1", \
         "مقدارِ شناخته‌شده همراهِ پنجرهٔ تازگی منقضی شد"
-    assert "آنلاین" in await (await _get(panel, "/health")).text()
+    assert _t("sy.ok") in _pot_row(await (await _get(panel, "/system")).text())
 
 
 async def test_only_one_background_refresh_runs_at_a_time(panel, never_returns):
@@ -116,7 +132,7 @@ async def test_only_one_background_refresh_runs_at_a_time(panel, never_returns):
     """
     calls, gate = never_returns
     for _ in range(3):
-        await _get(panel, "/health")
+        await _get(panel, "/system")
     assert len(calls) == 1, f"{len(calls)} پروبِ هم‌زمان زمان‌بندی شد"
     gate.set()
 
@@ -124,18 +140,18 @@ async def test_only_one_background_refresh_runs_at_a_time(panel, never_returns):
 # ── سه‌حالتی‌بودن: «نسنجیده» با «پیکربندی‌نشده» یکی نیست ──────────────────
 async def test_a_configured_but_unprobed_provider_is_not_called_unconfigured(
         panel, never_returns):
-    r = await _get(panel, "/health")
-    body = await r.text()
-    assert "در حالِ بررسی" in body
-    assert "پیکربندی‌نشده" not in body
+    r = await _get(panel, "/system")
+    row = _pot_row(await r.text())
+    assert row is not None, "pot پیکربندی شده ولی کارتش رندر نشد"
+    assert _t("sy.unchecked") in row and _t("sy.unknown") in row
+    assert _t("sy.down") not in row, "«نسنجیده» نباید «قطع» خوانده شود"
 
 
 async def test_an_unset_provider_is_still_reported_as_unconfigured(panel, monkeypatch):
     """کنترل — روی هر دو سورس سبز است: حالتِ قدیمی نباید عوض شده باشد."""
     monkeypatch.setattr(panel.aw.settings, "pot_provider_url", "")
-    body = await (await _get(panel, "/health")).text()
-    assert "پیکربندی‌نشده" in body
-    assert "در حالِ بررسی" not in body
+    body = await (await _get(panel, "/system")).text()
+    assert _pot_row(body) is None, "سرویسِ پیکربندی‌نشده نباید کارتِ «نسنجیده» بگیرد"
 
 
 # ── خودِ تازه‌سازی ────────────────────────────────────────────────────────
@@ -160,7 +176,7 @@ async def test_the_cleanup_hook_cancels_a_running_refresh(panel, never_returns):
     نشود)، پس این مسیر در بقیهٔ تست‌ها اجرا نمی‌شود و باید صریح صدا زده شود.
     """
     _calls, _gate = never_returns
-    await _get(panel, "/health")
+    await _get(panel, "/system")
     task = panel.client.app[panel.aw._POT_TASK]
     assert not task.done()
 
@@ -204,7 +220,7 @@ async def test_a_really_hung_provider_does_not_slow_the_dashboard(panel, monkeyp
     monkeypatch.setattr(panel.aw.settings, "pot_provider_url", f"http://{host}:{port}")
     try:
         t0 = time.perf_counter()
-        r = await asyncio.wait_for(_get(panel, "/health"), timeout=8)
+        r = await asyncio.wait_for(_get(panel, "/system"), timeout=8)
         elapsed = time.perf_counter() - t0
         assert r.status == 200
         assert elapsed < 2, f"صفحه {elapsed*1000:.0f} ms منتظرِ pot ماند"
@@ -218,5 +234,5 @@ async def test_a_really_hung_provider_does_not_slow_the_dashboard(panel, monkeyp
 # ── کنترل: بقیهٔ سلامت دست‌نخورده ─────────────────────────────────────────
 async def test_the_rest_of_the_health_page_still_reports(panel, monkeypatch):
     monkeypatch.setattr(panel.aw.settings, "pot_provider_url", "")
-    body = await (await _get(panel, "/health")).text()
-    assert "Redis" in body and "Postgres" in body
+    body = await (await _get(panel, "/system")).text()
+    assert _t("sy.svc.redis") in body and _t("sy.svc.postgres") in body

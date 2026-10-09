@@ -1,0 +1,18 @@
+{% import '_macros.html' as m with context %}
+<aside class="sheet" role="dialog" aria-modal="true" aria-label="{{ t('ac.o.title') }}">
+  {{ m.sheet_head(t('ac.o.title'), close_href, f.full(e.t)) }}
+  <div class="sheet-b">
+    <dl class="kv">
+      <dt>{{ t('c.status') }}</dt><dd>{{ m.pill(f.job_pill(e.status)) }}</dd>
+      <dt>{{ t('ac.d.job') }}</dt><dd><bdi class="mono">#{{ e.id }}</bdi></dd>
+      <dt>{{ t('ac.d.user') }}</dt><dd>{% if e.user.id %}<a href="/users?open={{ e.user.id }}"><bdi>{{ f.uname(e.user) }}</bdi></a>{% else %}<bdi>{{ f.uname(e.user) }}</bdi>{% endif %}</dd>
+      <dt>{{ t('c.operation') }}</dt><dd><span class="row"><span class="sq xs tint {{ f.otint(e.op) }}">{{ ic(f.oicon(e.op), 'ic-14') }}</span>{{ f.op(e.op) }}</span></dd>
+      <dt>{{ t('c.file') }}</dt><dd>{% if e.file %}<bdi class="mono">{{ e.file }}</bdi>{% else %}—{% endif %}</dd>
+      {% if e.size %}<dt>{{ t('c.size') }}</dt><dd>{{ f.size(e.size) }}</dd>{% endif %}
+      <dt>{{ t('ac.d.took') }}</dt><dd>{% if e.status == 'queued' %}{{ t('ac.d.waiting', t=f.ago(e.t)) }}{% elif e.took and e.finished %}{{ f.secs(e.took) }}{% else %}—{% endif %}</dd>
+    </dl>
+    {% if e.error %}
+    <div class="mt-16"><b class="fw-6" style="font-size:13.5px;display:block;margin-bottom:6px">{{ t('ac.d.error') }}</b><div class="codebox">{{ e.error }}</div></div>
+    {% endif %}
+  </div>
+</aside>

@@ -13,10 +13,8 @@ DBِ واقعی (SQLiteِ درون‌حافظه‌ای) و Redisِ واقعیِ 
 """
 from __future__ import annotations
 
-import ast
 import asyncio
 import logging
-import pathlib
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -129,34 +127,19 @@ async def test_only_the_five_matcher_keys_are_renamed(store):
         assert old not in S.RUNTIME_KEYS, f"{old} دیگر نباید در پنل باشد"
 
 
-def _panel_groups() -> list:
-    """`GROUPS` را **بدونِ import** از سورس می‌خواند.
-
-    `app/admin_web.py` سرِ import به `cryptography`/`jinja2` نیاز دارد که فقط در
-    `requirements-admin.txt`اند و در محیطِ تست و **روی رانرِ CI نصب نیستند** —
-    همان محدودیتی که `_func_src` در `tests/test_phase2a.py` از قبل مستندش کرده
-    و همان چیزی که `routers/admin.py` را وادار کرد helper را در `cookies.py`
-    بگذارد. نسخهٔ اولِ این تست مستقیم import می‌کرد و **فقط روی CI** افتاد،
-    چون سندباکسِ من `cryptography` نصب داشت.
-
-    `GROUPS` یک لیترالِ خالص است، پس `literal_eval` کافی است و چیزی اجرا
-    نمی‌شود.
-    """
-    src = pathlib.Path("app/admin_web.py").read_text(encoding="utf-8")
-    for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "GROUPS" for t in node.targets):
-            return ast.literal_eval(node.value)
-    raise AssertionError("GROUPS در app/admin_web.py پیدا نشد")
-
-
 def test_every_panel_row_is_a_real_runtime_key():
-    """گاردِ موجود برای ردیف‌های تازه — کلیدِ پنل که در RUNTIME_KEYS نباشد بی‌اثر است."""
-    groups = _panel_groups()
-    assert groups, "GROUPS خالی خوانده شد — تست بی‌معنا می‌شود"
-    for _title, rows in groups:
-        for key, _label, _hint in rows:
-            assert key in S.RUNTIME_KEYS, f"ردیفِ پنلِ {key!r} کلیدِ زمانِ‌اجرا نیست"
+    """گاردِ موجود برای ردیف‌های تازه — کلیدِ پنل که در RUNTIME_KEYS نباشد بی‌اثر است.
+
+    تا بازطراحیِ ۲۰۲۶-۱۰ ردیف‌ها `admin_web.GROUPS` بودند و این تست با AST از سورس
+    بیرونشان می‌کشید (`admin_web` روی رانرِ CI قابلِ import نیست — نسخهٔ اولِ همین
+    تست مستقیم import می‌کرد و **فقط روی CI** افتاد). حالا در `panel_settings`اند،
+    ماژولی خالص که مستقیم import می‌شود.
+    """
+    from app import panel_settings
+    fields = panel_settings.fields()
+    assert len(fields) >= 60, "چیدمانِ تنظیمات تقریباً خالی خوانده شد — تست بی‌معنا می‌شود"
+    for f in fields:
+        assert f["k"] in S.RUNTIME_KEYS, f"ردیفِ پنلِ {f['k']!r} کلیدِ زمانِ‌اجرا نیست"
 
 
 # ── رقابت: بعد از `telabzar update` همهٔ پروسه‌ها با هم بالا می‌آیند ──────────

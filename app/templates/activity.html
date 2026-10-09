@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% macro time_cell(x) -%}
+<div class="nowrap">{{ f.when(x) }}</div><div class="sub nowrap">{{ f.ago(x) }}</div>
+{%- endmacro %}
+{% block content %}
+<div class="page-h"><div><h1>{{ t('nav.activity') }}</h1>{% if summary %}<div class="sub">{{ summary }}</div>{% endif %}</div></div>
+<div class="tabs" role="tablist">
+  {% for id, icon, n in (('dl', 'download', counts.dl), ('ops', 'wand-sparkles', counts.ops), ('log', 'history', counts.log)) %}
+  <a role="tab" href="/activity?{{ qs(tab=id, st='', p='', op='', q='', page='') }}" aria-selected="{{ 'true' if tab == id else 'false' }}">{{ ic(icon, 'ic-16') }}{{ t('ac.tab.' + id) }}<span class="c num">{{ f.num(n) }}</span></a>
+  {% endfor %}
+</div>
+<section class="card">
+  <div class="card-h" style="padding-bottom:16px">
+    <form class="toolbar w-full" method="get" action="/activity" role="search">
+      <input type="hidden" name="tab" value="{{ tab }}">
+      <div class="search-in">{{ ic('search') }}<input class="input" type="search" name="q" value="{{ q }}" placeholder="{{ t('ac.q.' + tab) }}" aria-label="{{ t('ac.q.' + tab) }}"></div>
+      {% if tab != 'log' %}
+      <select class="select" name="per" data-autosubmit aria-label="{{ t('c.time') }}">{% for n in pers %}<option value="{{ n }}"{% if per == n %} selected{% endif %}>{{ t('ac.per.' ~ n) }}</option>{% endfor %}</select>
+      <select class="select" name="st" data-autosubmit aria-label="{{ t('c.status') }}"><option value="">{{ t('c.filter_all_status') }}</option>
+        {% for v in (dl_statuses if tab == 'dl' else job_statuses) %}<option value="{{ v }}"{% if st == v %} selected{% endif %}>{{ t('dl.' + v) if v in ('blocked', 'refused') else t('st.' + v) }}</option>{% endfor %}</select>
+      {% if tab == 'dl' %}
+      <select class="select" name="p" data-autosubmit aria-label="{{ t('c.platform') }}"><option value="">{{ t('c.filter_all_plat') }}</option>
+        {% for p in data.platforms %}<option value="{{ p }}"{% if plat == p %} selected{% endif %}>{{ f.plat(p) }}</option>{% endfor %}</select>
+      {% else %}
+      <select class="select" name="op" data-autosubmit aria-label="{{ t('c.operation') }}"><option value="">{{ t('c.filter_all_ops') }}</option>
+        {% for o in data.ops %}<option value="{{ o }}"{% if op == o %} selected{% endif %}>{{ f.op(o) }}</option>{% endfor %}</select>
+      {% endif %}
+      {% endif %}
+      <button class="btn btn-secondary no-js-only" type="submit">{{ ic('search') }}{{ t('c.search') }}</button>
+    </form>
+  </div>
+
+  {% if tab == 'dl' %}
+  <div class="tbl-wrap"><table class="tbl cards">
+    <thead><tr><th>{{ t('c.time') }}</th><th>{{ t('c.user') }}</th><th>{{ t('c.platform') }}</th><th>{{ t('ac.col.link') }}</th><th>{{ t('ac.col.result') }}</th><th>{{ t('ac.d.took') }}</th><th>{{ t('c.status') }}</th></tr></thead>
+    <tbody>{% for e in rows %}{% set href = '/activity?' ~ qs(dl=e.id) %}
+      <tr class="click" data-href="{{ href }}" tabindex="0">
+        <td data-l="{{ t('c.time') }}">{{ time_cell(e.t) }}</td>
+        <td class="lead">{{ m.user_cell(e.user, href) }}</td>
+        <td data-l="{{ t('c.platform') }}"><span class="row nowrap"><span class="sq xs tint {{ f.ptint(e.platform) }}">{{ ic(f.picon(e.platform), 'ic-14') }}</span>{{ f.plat(e.platform) }}</span></td>
+        <td class="wide hide-sm" data-l="{{ t('ac.col.link') }}"><bdi class="mono trunc ltr" style="max-width:240px;vertical-align:middle;color:var(--ink-3)">{{ e.url|replace('https://', '')|replace('http://', '')|replace('www.', '', 1) }}</bdi></td>
+        <td data-l="{{ t('ac.col.result') }}">{% if e.outcome == 'ok' %}{{ [f.kind(e.kind) if e.kind else '', f.res(e.height), f.size(e.size) if e.size else '']|dots }}{% elif e.outcome == 'fail' %}<span class="bad">{{ f.err(e.error_class) }}</span>{% else %}<span class="muted">{{ f.dl_pill(e.outcome).text }}</span>{% endif %}</td>
+        <td class="nowrap hide-sm" data-l="{{ t('ac.d.took') }}">{% if e.cached %}<span class="pill primary">{{ ic('zap') }}{{ t('c.cached') }}</span>{% elif e.took %}{{ f.secs(e.took) }}{% else %}—{% endif %}</td>
+        <td data-l="{{ t('c.status') }}">{{ m.pill(f.dl_pill(e.outcome)) }}</td>
+      </tr>
+    {% else %}<tr><td colspan="7">{{ m.empty('inbox', t('c.no_results')) }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+  {% elif tab == 'ops' %}
+  <div class="tbl-wrap"><table class="tbl cards">
+    <thead><tr><th>{{ t('c.time') }}</th><th>{{ t('c.user') }}</th><th>{{ t('c.operation') }}</th><th>{{ t('c.file') }}</th><th>{{ t('ac.d.took') }}</th><th>{{ t('c.status') }}</th></tr></thead>
+    <tbody>{% for j in rows %}{% set href = '/activity?' ~ qs(job=j.id) %}
+      <tr class="click" data-href="{{ href }}" tabindex="0">
+        <td data-l="{{ t('c.time') }}">{{ time_cell(j.t) }}</td>
+        <td class="lead">{{ m.user_cell(j.user, href) }}</td>
+        <td data-l="{{ t('c.operation') }}"><span class="row nowrap"><span class="sq xs tint {{ f.otint(j.op) }}">{{ ic(f.oicon(j.op), 'ic-14') }}</span>{{ f.op(j.op) }}</span></td>
+        <td class="wide" data-l="{{ t('c.file') }}"><bdi class="mono trunc" style="max-width:220px;display:block">{{ j.file or '—' }}</bdi>{% if j.size %}<div class="sub">{{ f.size(j.size) }}</div>{% endif %}</td>
+        <td class="nowrap hide-sm" data-l="{{ t('ac.d.took') }}">{% if j.status == 'queued' %}<span class="{{ 'warn' if now - (j.t or now) > stuck_after else 'muted' }}">{{ t('ac.d.waiting', t=f.ago(j.t)) }}</span>{% elif j.took and j.finished %}{{ f.secs(j.took) }}{% else %}—{% endif %}</td>
+        <td data-l="{{ t('c.status') }}">{{ m.pill(f.job_pill(j.status)) }}{% if j.status == 'failed' and j.error %}<div class="sub bad trunc" style="max-width:220px">{{ PD_norm(j.error) }}</div>{% endif %}</td>
+      </tr>
+    {% else %}<tr><td colspan="6">{{ m.empty('inbox', t('c.no_results')) }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+  {% else %}
+  <div class="tbl-wrap"><table class="tbl cards">
+    <thead><tr><th>{{ t('c.time') }}</th><th>{{ t('ac.col.action') }}</th><th>{{ t('ac.col.detail') }}</th><th>{{ t('ac.col.ip') }}</th></tr></thead>
+    <tbody>{% for x in rows %}
+      <tr>
+        <td data-l="{{ t('c.time') }}">{{ time_cell(x.t) }}</td>
+        <td class="lead"><span class="row"><span class="sq xs tint {{ x.tint }}">{{ ic(x.icon, 'ic-14') }}</span><span>{{ x.label }}</span></span>{% if multi_admin %}<div class="sub"><bdi>{{ f.uname(x.admin) }}</bdi></div>{% endif %}</td>
+        <td class="wide" data-l="{{ t('ac.col.detail') }}">{% for p in x.parts %}{% if not loop.first %} · {% endif %}{% if p is mapping %}<bdi>{{ p['from'] }}</bdi> {{ '←' if f.fa else '→' }} <bdi>{{ p['to'] }}</bdi>{% else %}<bdi>{{ p }}</bdi>{% endif %}{% else %}<span class="muted">—</span>{% endfor %}</td>
+        <td data-l="{{ t('ac.col.ip') }}"><bdi class="mono muted">{{ x.ip or '—' }}</bdi></td>
+      </tr>
+    {% else %}<tr><td colspan="4">{{ m.empty('history', t('c.no_results')) }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+  {{ m.pager(pager) }}
+</section>
+{% endblock %}
+{% block sheet %}{% if sheet %}<a class="backdrop" href="{{ close_href }}" data-sheet-close aria-label="{{ t('c.close') }}"></a>{% with e = sheet %}{% include '_sheet_' ~ sheet_kind ~ '.html' %}{% endwith %}{% endif %}{% endblock %}

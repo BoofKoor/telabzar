@@ -1,54 +1,109 @@
-{% import "_icons.html" as I %}<!doctype html>
-<html lang={{lang}} dir={{dir}}{% if theme != 'auto' %} data-theme={{theme}}{% endif %}><head>
-<meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>{% block title %}{{ pt('page.settings') }}{% endblock %} · {{ pt('brand') }}</title>
-<style>{{css}}{% block style %}{% endblock %}</style></head><body><div class=app>
-
-<aside class=side>
-  <div class=brand><b>TELABZAR</b>
-    <small><span>v1.0</span><span>D3</span><span>uid {{admin_id}}</span></small></div>
-  <nav class=nav>
-    {% for grp, items in nav %}
-      <div class=grp>{{ pt('grp.' ~ grp) }}</div>
-      {% for num, key, href, icon in items %}
-        {# بدونِ آیکون: ریلِ ماکتِ مرجع خالص متنی است و شمارهٔ دورقمی خودش
-           نقشِ نشانه را بازی می‌کند. آیکون‌های SVG سرِ جایشان می‌مانند —
-           در سربرگِ کارت‌ها — پس سامانهٔ آیکون بی‌مصرف نمی‌شود. #}
-        <a class="{{'on' if active==key}}" href="{{href}}"><span class=nn>{{num}}</span>
-          <span>{{ pt('nav.' ~ key) }}</span><span class=mk>&#9666;</span></a>
+<!doctype html>
+<html lang="{{ lang }}" dir="{{ dir }}"{% if theme != 'auto' %} data-theme="{{ theme }}"{% endif %}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block title %}{{ t('nav.' + active) if active else t('brand') }}{% endblock %} · {{ t('brand') }}</title>
+<link rel="icon" href="{{ asset('favicon.svg') }}" type="image/svg+xml">
+<link rel="preload" href="/static/fonts/Vazirmatn.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{ asset('css/panel.css') }}">
+<script src="{{ asset('js/panel.js') }}"></script>
+</head>
+{% import '_macros.html' as m with context %}
+<body data-sprite="{{ sprite }}">
+{% block body %}
+{% set dark_icon = 'sun' if theme == 'dark' else 'moon' %}
+{% set alerts = shell.alerts %}
+<a class="sr-only" href="#content">{{ t('c.skip') }}</a>
+<div class="app" id="app">
+  <aside class="side" id="side" aria-label="{{ t('top.menu') }}"><div class="sidebar">
+    <div class="brand"><span class="brand-mark">{{ ic('send') }}</span>
+      <div class="grow"><div class="brand-name">{{ t('brand') }}</div><div class="brand-sub">{{ t('brand.sub') }}</div></div>
+      <button class="icon-btn sm drawer-extra" type="button" data-act="drawer-close" aria-label="{{ t('c.close') }}">{{ ic('x') }}</button></div>
+    <nav class="nav" aria-label="{{ t('top.menu') }}">
+      {% for grp, items in nav %}<div class="nav-group">{% if grp %}<div class="nav-label">{{ t(grp) }}</div>{% endif %}
+        {% for key, href, icon, tint in items %}{% set b = shell.badges.get(key, 0) %}
+        <a href="{{ href }}" class="{{ tint }}"{% if active == key %} aria-current="page"{% endif %}>{{ ic(icon) }}<span>{{ t('nav.' + key) }}</span>{% if b %}<span class="badge {{ 'bad' if key == 'cookies' else 'warn' }} num" title="{{ t('nav.' + key) }}">{{ f.num(b) }}</span>{% endif %}</a>
+        {% endfor %}</div>
       {% endfor %}
-    {% endfor %}
-  </nav>
-  <div class=mesh>
-    <div>{{ pt('chrome.mesh') }}<b>{% if mesh %}{{mesh|length}}{% else %}0{% endif %}</b></div>
-    {% for n in mesh %}<div><span class="lamp {{'ok' if n.online else ''}}"></span>{{n.name}}<b>{{n.role}}</b></div>
-    {% else %}<div><span class=lamp></span>{{ pt('chrome.none') }}<b>master</b></div>{% endfor %}
-  </div>
-  <div class=foot>{{now}} UTC</div>
-</aside>
-
-<div class=main>
-  <header class=top>
-    <span class=path>root@telabzar:~/<b>{{active}}</b></span>
-    <h1>{% block heading %}{{ pt('page.settings') }}{% endblock %}</h1>
-    <div class=who>
-      <span class="pill {{'' if pill_ok else 'bad'}}"><span class=dot></span>
-        {{ pt('chrome.all_ok') if pill_ok else pt('chrome.degraded') }}</span>
-      <a class="tool {{'on' if lang=='en'}}" href="/prefs?to={{here|urlencode}}&amp;lang={{'fa' if lang=='en' else 'en'}}"
-        title="{{ pt('chrome.lang') }}">{{ 'FA' if lang=='en' else 'EN' }}</a>
-      <a class=tool href="/prefs?to={{here|urlencode}}&amp;theme={{next_theme}}" title="{{ pt('chrome.theme') }}">
-        {{ I.ico('moon' if theme=='light' else 'sun', '12px') }}</a>
-      <a class="tool lo" href=/logout title="{{ pt('chrome.logout') }}">{{ I.ico('logout', '12px') }}</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="sys-card">
+        <div class="t"><span class="sdot {{ 'bad' if alerts and alerts[0].sev == 'bad' else 'warn' if alerts else 'good' }}"></span>{{ t('sys.attn', n=f.num(alerts|length)) if alerts else t('sys.ok') }}</div>
+        <div class="l"><span>{{ t('sys.queue') }}</span><b class="num">{{ t('sys.jobs', n=f.num(shell.queue_total)) }}</b></div>
+        {% if shell.disk %}<div class="l"><span>{{ t('sys.disk') }}</span><b class="num">{{ f.pct(shell.disk.pct) }}</b></div>{% endif %}
+        <a href="/system">{{ t('sys.details') }}{{ ic('chevron-right', 'ic-14 flip') }}</a>
+      </div>
+      <div class="drawer-extra"><div class="seg lang" role="group" aria-label="{{ t('top.lang') }}" style="width:100%">
+        {% for code, name in panel_langs.items() %}<a style="flex:1;justify-content:center" href="/prefs?lang={{ code }}&amp;to={{ here|urlencode }}"{% if code == lang %} aria-current="true"{% endif %} lang="{{ code }}">{{ name }}</a>{% endfor %}
+      </div></div>
+      <label class="theme-row js-only">{{ ic('moon') }}<span>{{ t('theme.dark') }}</span><span class="switch"><input type="checkbox" data-theme-switch{% if theme == 'dark' %} checked{% endif %} aria-label="{{ t('theme.dark') }}"><span></span></span></label>
+      <a class="theme-row no-js-only" href="/prefs?theme={{ 'light' if theme == 'dark' else 'dark' }}&amp;to={{ here|urlencode }}">{{ ic(dark_icon) }}<span>{{ t('top.theme') }}</span></a>
     </div>
-  </header>
-  <div class=tick>{% block tick %}
-    <span><i>&gt;</i> session uid {{admin_id}}</span>
-    <span>panel v1.0 · D3</span>
-    <span>tz UTC</span>
-  {% endblock %}</div>
-  <div class=body>{% block body %}{% endblock %}</div>
-  <div class=statbar>
-    <span>telabzar-admin</span><span>{{active}}</span>
-    <span class=r>{{now}} UTC</span>
+  </div></aside>
+  <div class="main">
+    <header class="topbar" id="topbar">
+      <button class="icon-btn menu-btn" type="button" data-act="drawer" aria-label="{{ t('top.menu') }}" aria-controls="side">{{ ic('menu') }}</button>
+      <form class="search" id="search" action="/search" method="get" role="search">{{ ic('search') }}
+        <input class="input" id="q" name="q" type="search" autocomplete="off" placeholder="{{ t('top.search') }}" aria-label="{{ t('top.search') }}" value="{{ q if active == '' and q is defined else '' }}"><kbd aria-hidden="true">/</kbd>
+        <div class="pop menu search-pop" id="search-pop" role="listbox" hidden></div></form>
+      <div class="top-spacer"></div>
+      <div class="top-actions">
+        <a class="icon-btn search-btn" href="/search" data-act="search-open" aria-label="{{ t('top.search') }}">{{ ic('search') }}</a>
+        <div class="seg lang sm hide-sm" role="group" aria-label="{{ t('top.lang') }}">
+          <a href="/prefs?lang=fa&amp;to={{ here|urlencode }}"{% if lang == 'fa' %} aria-current="true"{% endif %} lang="fa">فا</a><a href="/prefs?lang=en&amp;to={{ here|urlencode }}"{% if lang == 'en' %} aria-current="true"{% endif %} lang="en">EN</a></div>
+        <a class="icon-btn hide-sm" href="/prefs?theme={{ 'light' if theme == 'dark' else 'dark' }}&amp;to={{ here|urlencode }}" data-act="theme" aria-label="{{ t('top.theme') }}" title="{{ t('top.theme') }}"><svg class="ic" aria-hidden="true"><use data-theme-icon href="{{ sprite }}#i-{{ dark_icon }}"></use></svg></a>
+        <details class="dd notif-dd">
+          <summary class="icon-btn{% if alerts %} dot-badge{% endif %}" aria-label="{{ t('top.notifs') }}{% if alerts %} ({{ f.num(alerts|length) }}){% endif %}">{{ ic('bell') }}</summary>
+          <div class="pop menu notif" role="menu">
+            <div class="h"><span>{{ t('top.notifs') }}</span><span class="badge {{ 'bad' if alerts }} num">{{ f.num(alerts|length) }}</span></div>
+            <div class="list">{% for a in alerts %}
+              <a class="alert-item" href="{{ a.href }}"><span class="alert-ic {{ a.sev }}">{{ ic(a.icon, 'ic-16') }}</span><span class="grow"><div class="t">{{ a.title }}</div>{% if a.sub %}<div class="s">{{ a.sub }}</div>{% endif %}</span>{{ ic('chevron-right', 'ic-16 faint flip') }}</a>
+            {% else %}{{ m.empty('bell', t('notif.none'), ok=True, cls='empty-sm') }}{% endfor %}</div>
+          </div>
+        </details>
+        <span class="vsep"></span>
+        {% set ad = shell.admin %}
+        <details class="dd acct-dd">
+          <summary class="who" aria-label="{{ t('acct.title') }}"><span class="avatar sm {{ ad.av }}" aria-hidden="true">{% if ad.initials %}{{ ad.initials }}{% else %}{{ ic('user', 'ic-16') }}{% endif %}</span>
+            <span><div class="n"><bdi>{{ ad.name or ('@' + ad.uname if ad.uname else t('top.admin')) }}</bdi></div><div class="s">{{ t('top.admin') }}</div></span>{{ ic('chevron-down', 'ic-16 muted chev') }}</summary>
+          <div class="pop menu" role="menu">
+            <div class="menu-head"><div class="row-12"><span class="avatar {{ ad.av }}" aria-hidden="true">{% if ad.initials %}{{ ad.initials }}{% else %}{{ ic('user', 'ic-16') }}{% endif %}</span><div class="grow">
+              <div class="fw-6 trunc"><bdi>{{ ad.name or (('@' + ad.uname) if ad.uname else t('top.admin')) }}</bdi></div>
+              <div class="muted fs-12">{% if ad.uname %}<bdi>@{{ ad.uname }}</bdi> · {% endif %}<bdi class="mono">{{ ad.tg }}</bdi></div></div></div></div>
+            <a class="menu-item" href="/prefs?theme={{ 'light' if theme == 'dark' else 'dark' }}&amp;to={{ here|urlencode }}" data-act="theme"><svg class="ic" aria-hidden="true"><use data-theme-icon href="{{ sprite }}#i-{{ dark_icon }}"></use></svg>{{ t('top.theme') }}</a>
+            {% set other = 'en' if lang == 'fa' else 'fa' %}
+            <a class="menu-item" href="/prefs?lang={{ other }}&amp;to={{ here|urlencode }}" lang="{{ other }}">{{ ic('languages') }}{{ panel_langs[other] }}</a>
+            <div class="menu-sep"></div>
+            <form method="post" action="/logout"><button class="menu-item danger" type="submit">{{ ic('log-out') }}{{ t('top.signout') }}</button></form>
+          </div>
+        </details>
+      </div>
+    </header>
+    <main class="content" id="content" tabindex="-1">
+      {% if flash %}
+      <div class="flash callout {{ 'good' if flash.ok else 'bad' }}" role="{{ 'status' if flash.ok else 'alert' }}"{% if flash.ok %} data-toast="{{ flash.text }}" data-icon="circle-check"{% endif %}>
+        {{ ic('circle-check' if flash.ok else 'circle-alert') }}<div class="grow">{{ flash.text }}</div>
+        <a class="x" href="{{ here_clean }}" aria-label="{{ t('c.close') }}">{{ ic('x', 'ic-16') }}</a></div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
   </div>
-</div></div></body></html>
+</div>
+<div id="sheet-host" class="sheet-host">{% block sheet %}{% endblock %}</div>
+<dialog class="dialog" id="confirm-dlg" aria-labelledby="confirm-t">
+  <div class="dialog-h"><div><h3 id="confirm-t" data-c-title></h3></div><button class="icon-btn sm" type="button" data-close aria-label="{{ t('c.close') }}">{{ ic('x') }}</button></div>
+  <div class="dialog-b"><p class="ink-3" data-c-text></p></div>
+  <div class="dialog-f"><button class="btn btn-secondary" type="button" data-close>{{ t('c.cancel') }}</button><button class="btn btn-primary" type="button" data-c-ok>{{ t('c.confirm') }}</button></div>
+</dialog>
+<dialog class="dialog" id="search-dlg" aria-label="{{ t('c.search') }}">
+  <div class="dialog-h"><div><h3>{{ t('c.search') }}</h3></div><button class="icon-btn sm" type="button" data-close aria-label="{{ t('c.close') }}">{{ ic('x') }}</button></div>
+  <div class="dialog-b"><form class="search w-full" action="/search" method="get" role="search">{{ ic('search') }}<input class="input" id="q2" name="q" type="search" autocomplete="off" placeholder="{{ t('top.search') }}" aria-label="{{ t('top.search') }}" autofocus></form>
+    <div id="q2res" class="mt-12"><div class="muted fs-12">{{ t('srch.hint') }}</div></div></div>
+</dialog>
+{% endblock %}
+<script type="application/json" id="panel-i18n">{{ js_i18n|tojson }}</script>
+</body>
+</html>

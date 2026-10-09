@@ -36,6 +36,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -53,14 +54,20 @@ INTERVAL = 300          # ثانیه بینِ دو دور
 GUARD_SEC = 30 * 60     # فایلِ نوشته‌شده در این بازه هرگز پاک نمی‌شود
 _SETTINGS_TIMEOUT = 5   # خواندنِ تنظیمات نباید یک دور را گیر بیندازد
 _GB = 1024 ** 3
+#: گزارشِ آخرین دور برای صفحهٔ «سیستم»ِ پنل — JSON، بی‌انقضا (آخرین دانسته). پنل
+#: خودش سنش را از `at` می‌خواند، پس پاک‌کننده‌ای که مرده «دیر» دیده می‌شود نه «سالم».
+REPORT_KEY = "janitor:last"
 
 
 @dataclass
 class Sweep:
-    """نتیجهٔ یک دور: چند فایل و چند بایت پاک شد، و فضای آزادِ بعدش."""
+    """نتیجهٔ یک دور: چند فایل و چند بایت پاک شد، چه ماند، و فضای آزادِ بعدش."""
     files: int = 0
     bytes: int = 0
     free_after: int = 0
+    #: آنچه بعد از این دور در پوشه ماند — همان پیمایشی که نامزدها را پیدا کرد، پس رایگان
+    kept_files: int = 0
+    kept_bytes: int = 0
 
 
 def _protected(name: str) -> bool:
@@ -145,6 +152,8 @@ def sweep(root: str, max_age_hours: int, min_free_gb: int, *,
         res.free_after = free_fn(root)
     except OSError:
         res.free_after = 0
+    res.kept_files = max(0, len(files) - res.files)
+    res.kept_bytes = max(0, sum(size for _m, size, _p in files) - res.bytes)
     return res
 
 
@@ -157,6 +166,25 @@ async def _setting(key: str, default: int) -> int:
         return default
 
 
+async def _report(res: Sweep, now: float | None = None) -> None:
+    """نتیجهٔ دور را برای پنل در Redis بگذار — کران‌دار و بی‌صدا روی هر خطا.
+
+    همان قاعدهٔ `_setting`: وقتی دیسک پر است Redis نوشتن را قفل کرده، و پاک‌کننده
+    نباید به‌خاطرِ گزارشش گیر کند.
+    """
+    store = settings_store.get_store()
+    if store is None:
+        return
+    body = json.dumps({"at": int(now if now is not None else time.time()),
+                       "files": res.files, "bytes": res.bytes,
+                       "free": res.free_after, "kept_files": res.kept_files,
+                       "kept_bytes": res.kept_bytes})
+    try:
+        await asyncio.wait_for(store.r.set(REPORT_KEY, body), _SETTINGS_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("janitor: report not written (%s)", exc)
+
+
 async def run_once(root: str = ROOT) -> Sweep:
     age = await _setting("tg_files_max_age_hours", settings.tg_files_max_age_hours)
     floor = await _setting("tg_files_min_free_gb", settings.tg_files_min_free_gb)
@@ -164,6 +192,7 @@ async def run_once(root: str = ROOT) -> Sweep:
     if res.files:
         log.info("janitor: removed %d files (%.1f GB); free now %.1f GB",
                  res.files, res.bytes / _GB, res.free_after / _GB)
+    await _report(res)
     return res
 
 

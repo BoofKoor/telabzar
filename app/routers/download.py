@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import cookies as ck_pool
 from .. import counters, dl_cache, nodes, probe_stats, safety, settings_store
+from .. import dl_events as EV
 from ..callbacks import Dl
 from ..config import settings
 from ..downloader import (
@@ -29,6 +30,21 @@ from ..i18n import t
 from ..models import User
 
 log = logging.getLogger("telabzar.dl.route")
+async def _record_cached(owner_id, tg_user_id, platform, url, selector, cache) -> None:
+    """تحویلِ آنی از کش هم یک دانلودِ موفق است — بدونِ این ردیف، پنل کاربری را که
+    همه‌چیزش از کش آمده «بی‌دانلود» نشان می‌داد. هیچ جابی ساخته نمی‌شود، پس ثبتش
+    این‌جاست نه در ورکر. بهترین‌تلاش و کران‌دار، مثلِ خودِ `dl_events.record`."""
+    items = getattr(cache, "items", None)
+    ev = EV.start({"owner_id": owner_id, "tg_user_id": tg_user_id, "platform": platform,
+                   "url": url, "selector": selector, "phase": "cache"})
+    EV.settle(ev, EV.OK, cached=True, took_ms=0,
+              kind=getattr(cache, "kind", None), size=getattr(cache, "size", None),
+              height=getattr(cache, "height", None),
+              duration=getattr(cache, "duration", None),
+              items=len(items) if items else 1)
+    await EV.record(ev)
+
+
 router = Router(name="download")
 
 _DL_QUEUE = "arq:queue:dl"                 # نودِ دانلود این را برمی‌دارد (IPِ تمیز)
@@ -252,6 +268,7 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
             status = await message.reply(detected)
             if await dl_cache.deliver_from_cache(message.bot, session, message.chat.id, owner_id,
                                                  cache, lang, anchor_mid=status.message_id):
+                await _record_cached(owner_id, uid, platform, url, quick_sel, cache)
                 return
             # file_id باطل شده بود (ردیف پاک شد) → همین پیام را لنگرگاهِ دانلودِ عادی کن
             cached_status_mid = status.message_id
@@ -334,6 +351,8 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
             if await dl_cache.deliver_from_cache(cq.message.bot, session, cq.message.chat.id,
                                                  ctx["owner_id"], cache, lang,
                                                  anchor_mid=cq.message.message_id):
+                await _record_cached(ctx.get("owner_id"), uid, ctx.get("platform"),
+                                     ctx["url"], sel, cache)
                 return
             # file_id باطل بود → ادامه بده و واقعاً دانلود کن (بدونِ شارژِ دوم)
 

@@ -709,7 +709,9 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     ref=secrets.token_urlsafe(6)[:8], owner_id=file.owner_id,
                     file_unique_id="", file_id="", kind=sp["kind"], mime=None,
                     name=sp["name"], size=os.path.getsize(p) if os.path.exists(p) else None,
-                    changelog=[],
+                    # «op» = زادهٔ یک عملیات — نه آپلودِ کاربر، نه دانلود. بدونِ این
+                    # برچسب پنل این ردیف‌ها را «آپلود» می‌شمرد.
+                    changelog=[], source="op",
                 )
                 await _refresh_media_meta(newf, p)  # مدت/ابعاد از خودِ فایل (وگرنه ۰:۰۰)
                 # ردیف **پیش از** ارسال commit می‌شود تا دکمه‌های کارتِ تازه از همان

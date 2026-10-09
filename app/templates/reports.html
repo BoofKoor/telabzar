@@ -1,0 +1,108 @@
+{% extends 'base.html' %}
+{% import '_macros.html' as m with context %}
+{% block content %}
+<div class="page-h"><div><h1>{{ t('nav.reports') }}</h1><div class="sub">{{ t('rp.sub', a=f.day_long(start)) }}{% if cmp %} · {{ cmp }}{% endif %}</div></div>
+  <div class="actions">{{ m.range_seg(ranges, key, '/reports') }}</div></div>
+
+<div class="kpis">{% for k in kpis %}{{ m.kpi(k) }}{% endfor %}</div>
+
+<div class="grid">
+  <section class="card s6 keep">
+    {{ m.card_head(t('rp.new'), t('rp.new.s', n=f.num(d.new[0]), a=f.num(d.new[0] / span_days, 1))) }}
+    <div class="card-b">{{ m.chart(new_spec) }}<noscript><p class="muted fs-12 mt-8">{{ t('c.noscript_chart') }}</p></noscript></div>
+  </section>
+
+  <section class="card s6 keep">
+    {{ m.card_head(t('rp.active'), t('rp.active.s', a=f.num(d.act_avg, 1))) }}
+    <div class="card-b">{{ m.chart(act_spec) }}</div>
+  </section>
+
+  <section class="card s12">
+    {{ m.card_head(t('rp.plat'), t('rp.plat.s') ~ ((' · ' ~ succ_note) if succ_note else '')) }}
+    <div class="card-b flush">{% for p in plats %}
+      <div class="sm-row">
+        <span class="row"><span class="sq xs tint {{ f.ptint(p.p) }}">{{ ic(f.picon(p.p), 'ic-14') }}</span><span class="trunc">{{ f.plat(p.p) }}</span></span>
+        {{ m.chart(p.spec) }}
+        <span class="num" style="text-align:end"><b class="fw-6">{{ f.num(p.n) }}</b><div class="muted fs-12">{{ t('rp.files') }}</div></span>
+        <span class="num rate" style="text-align:end"><b class="fw-6 {{ p.rcls }}">{{ f.pct(p.rate) if p.rate is not none else '—' }}</b><div class="muted fs-12">{{ t('c.success') }}{% if p.att %} · {{ f.num(p.att) }}{% endif %}</div></span>
+      </div>
+    {% else %}{{ m.empty('download', t('d.plat.none')) }}{% endfor %}</div>
+  </section>
+
+  <section class="card s7">
+    {{ m.card_head(t('rp.ops')) }}
+    <div class="card-b flush"><div class="tbl-wrap"><table class="tbl cards">
+      <thead><tr><th>{{ t('rp.ops.col') }}</th><th class="end">{{ t('c.count') }}</th><th class="end">{{ t('c.success') }}</th><th class="end">{{ t('rp.avg') }}</th><th class="end">{{ t('rp.p95') }}</th></tr></thead>
+      <tbody>{% for o in d.ops %}{% set v = (o.n - o.fail) / o.n if o.n else none %}
+        <tr><td class="lead"><span class="row"><span class="sq xs tint {{ f.otint(o.op) }}">{{ ic(f.oicon(o.op), 'ic-14') }}</span>{{ f.op(o.op) }}</span></td>
+          <td class="end num" data-l="{{ t('c.count') }}">{{ f.num(o.n) }}</td>
+          <td class="end num" data-l="{{ t('c.success') }}"><span class="{{ '' if v is none or v >= 0.95 else 'warn' if v >= 0.85 else 'bad' }}">{{ f.pct(v) if v is not none else '—' }}</span></td>
+          <td class="end num nowrap" data-l="{{ t('rp.avg') }}">{{ f.secs(o.avg) if o.avg else '—' }}</td>
+          <td class="end num nowrap" data-l="{{ t('rp.p95') }}">{{ f.secs(o.p95) if o.p95 else '—' }}</td></tr>
+      {% else %}<tr><td colspan="5">{{ m.empty('wand-sparkles', t('d.ops.none')) }}</td></tr>{% endfor %}</tbody>
+    </table></div></div>
+  </section>
+
+  <div class="s5 col-stack">
+    <section class="card">
+      {{ m.card_head(t('rp.kinds')) }}
+      <div class="card-b">{% if d.kinds %}
+        <div class="donut-wrap">{{ m.chart(kinds_donut, 'donut', 184) }}
+          <div class="grow"><div class="tbl-wrap"><table class="tbl compact">
+            <thead><tr><th>{{ t('ac.d.type') }}</th><th class="end">{{ t('rp.kinds.c') }}</th><th class="end">{{ t('c.share') }}</th></tr></thead>
+            <tbody>{% for k in d.kinds %}<tr><td class="nowrap"><span class="row"><i class="swatch" style="background:{{ KIND_COLOR.get(k.k, 'var(--c0)') }}"></i>{{ f.kind(k.k) }}</span></td>
+              <td class="end num">{{ f.num(k.n) }}</td><td class="end num">{{ f.ratio(k.n, kinds_total) }}</td></tr>{% endfor %}</tbody>
+          </table></div></div>
+        </div>
+        {% else %}{{ m.empty('file', t('c.no_data')) }}{% endif %}</div>
+    </section>
+
+    <section class="card">
+      {{ m.card_head(t('rp.quality')) }}
+      <div class="card-b">{% if d.quality %}<div class="hbars">{% for x in d.quality %}
+        <div class="hbar"><div class="top"><span><bdi>{{ f.res(x.h) }}</bdi></span><span class="v"><span class="num">{{ f.num(x.n) }}</span><span class="s num">{{ f.ratio(x.n, q_total) }}</span></span></div>
+          <div class="bar"><i style="width:{{ '%.1f'|format(x.n / q_max * 100) }}%;background:var(--c1)"></i></div></div>
+      {% endfor %}</div>{% else %}{{ m.empty('film', t('rp.quality.none')) }}{% endif %}</div>
+    </section>
+
+    <section class="card">
+      {{ m.card_head(t('rp.langs')) }}
+      <div class="card-b">{% if lang_rows %}
+        <div class="segbar" style="height:12px" role="img" aria-label="{{ t('rp.langs') }}">{% for x in lang_rows %}<i style="flex:{{ x.n }};background:{{ x.color }}"></i>{% endfor %}</div>
+        <div class="mt-12">{% for x in lang_rows %}
+          <div class="row jsb" style="padding:7px 0;border-bottom:1px solid var(--border-soft)"><span class="row"><i class="swatch" style="background:{{ x.color }}"></i>{{ x.name }}{% if x.code %} <bdi class="muted mono">{{ x.code }}</bdi>{% endif %}</span>
+            <span class="num">{{ f.num(x.n) }} <span class="muted">· {{ f.ratio(x.n, lang_total) }}</span></span></div>
+        {% endfor %}</div>
+        {% else %}{{ m.empty('languages', t('c.no_data')) }}{% endif %}</div>
+    </section>
+  </div>
+
+  <section class="card s7">
+    {{ m.card_head(t('rp.errors')) }}
+    <div class="card-b flush"><div class="tbl-wrap"><table class="tbl cards">
+      <thead><tr><th>{{ t('ac.d.error') }}</th><th>{{ t('rp.where') }}</th><th class="end">{{ t('c.count') }}</th><th>{{ t('rp.last') }}</th></tr></thead>
+      <tbody>{% for e in d.errors %}
+        <tr><td class="lead fill">{% if e.src == 'dl' %}<div class="trunc">{{ f.err(e.cls) }}</div>{% if e.msg %}<div class="sub mono trunc ltr" title="{{ e.msg }}">{{ e.msg }}</div>{% endif %}
+              {% else %}<div class="trunc" title="{{ e.msg }}"><bdi>{{ e.msg }}</bdi></div>{% endif %}</td>
+          <td class="nowrap" data-l="{{ t('rp.where') }}">{% if e.src == 'dl' %}<span class="row"><span class="sq xs tint {{ f.ptint(e.where) }}">{{ ic(f.picon(e.where), 'ic-14') }}</span>{{ f.plat(e.where) }}</span>{% else %}<span class="row"><span class="sq xs tint {{ f.otint(e.where) }}">{{ ic(f.oicon(e.where), 'ic-14') }}</span>{{ f.op(e.where) }}</span>{% endif %}</td>
+          <td class="end num" data-l="{{ t('c.count') }}">{{ f.num(e.n) }}</td>
+          <td class="nowrap" data-l="{{ t('rp.last') }}">{{ f.ago(e.last) if e.last else '—' }}</td></tr>
+      {% else %}<tr><td colspan="4">{{ m.empty('circle-check', t('rp.errors.none'), ok=True) }}</td></tr>{% endfor %}</tbody>
+    </table></div></div>
+  </section>
+
+  <section class="card s5 md12">
+    {{ m.card_head(t('rp.top')) }}
+    <div class="card-b flush"><div class="tbl-wrap"><table class="tbl cards">
+      <thead><tr><th class="hide-sm">#</th><th>{{ t('c.user') }}</th><th class="end">{{ t('rp.files') }}</th><th class="end">{{ t('rp.dls') }}</th><th class="end">{{ t('rp.opsn') }}</th></tr></thead>
+      <tbody>{% for r in top %}{% set href = '/users?open=' ~ r.id %}
+        <tr class="click" data-href="{{ href }}" tabindex="0"><td class="num hide-sm"><span class="muted">{{ f.num(loop.index) }}</span></td>
+          <td class="lead">{{ m.user_cell(r.user, href, sheet=False) }}</td>
+          <td class="end num" data-l="{{ t('rp.files') }}">{{ f.num(r.files) }}</td>
+          <td class="end num" data-l="{{ t('rp.dls') }}">{{ f.num(r.dls) }}</td>
+          <td class="end num" data-l="{{ t('rp.opsn') }}">{{ f.num(r.ops) }}</td></tr>
+      {% else %}<tr><td colspan="5">{{ m.empty('users', t('c.no_data')) }}</td></tr>{% endfor %}</tbody>
+    </table></div></div>
+  </section>
+</div>
+{% endblock %}
