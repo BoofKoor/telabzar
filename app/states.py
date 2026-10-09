@@ -34,3 +34,11 @@ class Trim(StatesGroup):
 
 class Screenshot(StatesGroup):
     waiting = State()         # منتظرِ لحظهٔ اسکرین‌شات
+
+
+class PdfPages(StatesGroup):
+    waiting = State()         # منتظرِ شمارهٔ صفحه‌ها (جدا کردن یا حذف — mode در داده)
+
+
+class PdfPassword(StatesGroup):
+    waiting = State()         # منتظرِ رمز (گذاشتن یا برداشتن — mode در داده)

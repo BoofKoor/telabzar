@@ -21,6 +21,9 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
+from . import pagespec
+from . import pdftext
+from . import pdftools
 from . import processing as P
 from . import settings_store
 from . import textstore
@@ -30,6 +33,7 @@ from .cards import (
 )
 from .config import settings
 from .db import Sessionmaker
+from .exceptions import UserFacingError
 from .filetypes import human_size
 from .i18n import t
 from .keyboards import AUDIO_SPEEDS, cancel_job_kb
@@ -54,6 +58,9 @@ _PROGRESS_LABEL = {
     "watermark": "pr_watermark", "trim": "pr_trim",
     "normalize": "pr_normalize", "speed": "pr_speed",
     "transcribe": "pr_transcribe", "scan": "pr_scan", "bg_remove": "pr_bg",
+    "pdf_select": "pr_pdf", "pdf_rotate": "pr_pdf", "pdf_split": "pr_pdf",
+    "pdf_lock": "pr_pdf", "pdf_unlock": "pr_pdf", "pdf_merge": "pr_pdf",
+    "images_to_pdf": "pr_pdf", "to_pdf": "pr_pdf",
 }
 
 
@@ -93,6 +100,14 @@ def _fail_note(lang: str, exc: Exception) -> str:
     note = t(lang, "failed")
     if reason:
         note += f"\n<code>{escape(reason)}</code>"
+    return note
+
+
+def _user_note(lang: str, exc: UserFacingError) -> str:
+    """پیامِ خودِ خطا به زبانِ کاربر؛ دلیلِ فنی (اگر هست) کوچک زیرش."""
+    note = t(lang, exc.key, **exc.kw)
+    if exc.detail:
+        note += f"\n<code>{escape(' '.join(str(exc.detail).split())[:160])}</code>"
     return note
 
 
@@ -215,28 +230,174 @@ async def _localize(bot: Bot, file_id: str, workdir: str, subdir: str = "in") ->
     return dest if os.path.exists(dest) else None
 
 
-async def _convert_pdf(fmt: str, stem: str, inpath: str, workdir: str, lang: str) -> dict[str, Any]:
-    """تبدیلِ PDF به docx (LibreOffice) / txt (pdftotext) / تصویرِ صفحات (pdftoppm)."""
-    # کپی با نامِ .pdf تا ابزارها فرمت را درست بشناسند
-    src = os.path.join(workdir, f"{stem}.pdf")
-    shutil.copyfile(inpath, src)
-    if fmt == "docx":
-        out = await P.office_convert(src, workdir, "docx")
-        return {"path": out, "filename": f"{stem}.docx", "label": t(lang, "cl_convert", fmt="DOCX"),
-                "kind": "document"}
-    if fmt == "txt":
+def _many_files(paths: list[str], stem: str, workdir: str, label: str) -> dict[str, Any]:
+    """چند فایلِ خروجی → آلبوم (تا `ALBUM_MAX_FILES`) یا یک ZIP.
+
+    آلبومِ تلگرام حداکثر ده سند است؛ صد صفحه یعنی ده آلبومِ پشتِ‌هم و برخورد با
+    سقفِ نرخ (۴۲۹)، و کاربر هم صد فایل را یکی‌یکی ذخیره نمی‌کند. بالای سقف یک ZIP.
+    """
+    if len(paths) > pdftools.ALBUM_MAX_FILES:
+        out = os.path.join(workdir, f"{stem}-pages.zip")
+        pdftools.zip_files(paths, out)
+        return {"files": [out], "label": label}
+    return {"files": paths, "album": len(paths) > 1, "label": label}
+
+
+def _named_pages(files: list[str], stem: str) -> list[str]:
+    """`page-07.jpg`ِ pdftoppm → `<نام>-7.jpg`، تا فایل‌ها بیرون از ZIP هم معلوم باشند."""
+    out: list[str] = []
+    for f in files:
+        m = re.search(r"-(\d+)\.(\w+)$", os.path.basename(f))
+        if not m:
+            out.append(f)
+            continue
+        dst = os.path.join(os.path.dirname(f), f"{stem}-{int(m.group(1))}.{m.group(2)}")
+        os.replace(f, dst)
+        out.append(dst)
+    return out
+
+
+async def _convert_pdf(fmt: str, stem: str, inpath: str, workdir: str, lang: str,
+                       progress=None, cancel=None) -> dict[str, Any]:
+    """PDF → Word / متن / تصویرِ صفحه‌ها.
+
+    Word و متن از `pdftext` می‌آیند، نه LibreOffice و نه `pdftotext`ِ خام: LibreOffice
+    **فیلترِ خروجیِ PDF→DOCX ندارد** (`no export filter`؛ PDF را در Draw باز می‌کند)
+    و poppler لیگاتورِ «لا» را برعکس باز می‌کند («سلام» → «سالم») — شرحِ کامل در
+    داکس‌استرینگِ `pdftext`. صفحهٔ اسکن‌شده با OCR خوانده می‌شود، تا سقفِ ادمین.
+
+    خروجی کارتِ **تازه** است (`spawn`) و PDF سرِ جایش می‌ماند: Word و TXT سندِ
+    دیگری‌اند، نه نسخهٔ ویرایش‌شدهٔ همین فایل.
+    """
+    src = await pdftools.prepare(inpath, workdir, cancel=cancel)
+    if fmt in ("docx", "txt"):
+        word = fmt == "docx"
+        ocr_max = await settings_store.get_int("pdf_ocr_max_pages", settings.pdf_ocr_max_pages)
+        doc = await pdftext.extract(
+            src, workdir, max_pages=pdftext.DOCX_MAX_PAGES if word else pdftext.TXT_MAX_PAGES,
+            ocr_max_pages=ocr_max, want_images=word, cancel=cancel, progress=progress)
+        extras: list[str] = []
+        if doc.ocr_pages:
+            extras.append(t(lang, "cl_pdf_ocr_pages", n=doc.ocr_pages))
+        if doc.total > len(doc.pages):
+            extras.append(t(lang, "cl_pdf_first_pages", n=len(doc.pages), total=doc.total))
+        label = " · ".join([t(lang, "cl_convert", fmt=fmt.upper()), *extras])
+        if word:
+            await pdftext.render_images(src, workdir, doc, cancel=cancel)
+            out = os.path.join(workdir, f"{stem}.docx")
+            await asyncio.to_thread(pdftext.to_docx, doc, out)
+            return {"spawn": {"path": out, "name": f"{stem}.docx", "kind": "document"},
+                    "label": label}
+        if not pdftext.has_text(doc):
+            # صفحهٔ بی‌متن که از سقفِ OCR جا ماند با «اصلاً متن ندارد» یکی نیست
+            raise UserFacingError("pdf_no_text_ocr_limit" if doc.ocr_skipped else "pdf_no_text",
+                                  n=doc.ocr_skipped)
         out = os.path.join(workdir, f"{stem}.txt")
-        await P.pdf_to_text(src, out)
-        return {"path": out, "filename": f"{stem}.txt", "label": t(lang, "cl_convert", fmt="TXT"),
-                "kind": "document"}
-    if fmt in ("jpg", "jpeg", "png"):
-        files = await P.pdf_to_images(src, workdir, "png" if fmt == "png" else "jpg")
-        return {"note_only": True, "label": t(lang, "cl_convert_pages", n=len(files)), "files": files}
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(pdftext.to_text(doc))
+        return {"spawn": {"path": out, "name": f"{stem}.txt", "kind": "document"}, "label": label}
+    if fmt in ("jpg", "png"):
+        n = await pdftools.page_count(src, cancel=cancel)
+        files = await pdftools.render_pages(src, os.path.join(workdir, "pages"), fmt,
+                                            n_pages=n, cancel=cancel)
+        files = _named_pages(files, stem)
+        label = t(lang, "cl_convert_pages", n=len(files))
+        if n > len(files):
+            label += " · " + t(lang, "cl_pdf_first_pages", n=len(files), total=n)
+        return _many_files(files, stem, workdir, label)
     raise RuntimeError(f"unsupported pdf target: {fmt}")
 
 
+#: پسوندهایی که LibreOffice واقعاً باز می‌کند. هر چیزِ دیگری («سند» در تلگرام یعنی
+#: هر فایلی که عکس/ویدیو/صوت نیست — `.exe` و `.bin` هم) به‌جای خطای خامِ
+#: «source file could not be loaded» پیامِ روشن می‌گیرد.
+_OFFICE_EXTS = {
+    ".doc", ".docx", ".docm", ".dot", ".dotx", ".odt", ".ott", ".rtf", ".wps", ".wpd",
+    ".xls", ".xlsx", ".xlsm", ".ods", ".csv", ".tsv",
+    ".ppt", ".pptx", ".pps", ".ppsx", ".odp", ".odg",
+    ".html", ".htm", ".xhtml", ".txt", ".md",
+}
+#: وقتی نامِ فایل پسوند ندارد (تلگرام گاهی «file» می‌فرستد) پسوند از mime می‌آید —
+#: LibreOffice قالب را از پسوند حدس می‌زند و بی‌پسوند باز نمی‌کند.
+_OFFICE_EXT_BY_MIME = {
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.oasis.opendocument.text": ".odt",
+    "application/rtf": ".rtf", "text/rtf": ".rtf",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.oasis.opendocument.spreadsheet": ".ods",
+    "text/csv": ".csv",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.oasis.opendocument.presentation": ".odp",
+    "text/html": ".html", "text/plain": ".txt", "text/markdown": ".md",
+}
+
+
+async def _office_to_pdf(file: File, inpath: str, workdir: str, stem: str, cancel=None) -> str:
+    """سند → PDF. متنِ ساده از Word رد می‌شود تا جهتِ هر پاراگراف درست باشد
+    (`pdftext.text_to_docx`)؛ بقیه مستقیم به LibreOffice."""
+    ext = os.path.splitext(file.name or "")[1].lower()
+    if not ext:
+        ext = _OFFICE_EXT_BY_MIME.get((file.mime or "").split(";")[0].strip().lower(), "")
+    if ext not in _OFFICE_EXTS:
+        # پسوند از نامِ فایلِ کاربر می‌آید و پیام HTML است: `a.<b>` نباید تگ شود
+        raise UserFacingError("to_pdf_unsupported", ext=escape(ext[:12]) or "?")
+    conv = os.path.join(workdir, "lo")
+    os.makedirs(conv, exist_ok=True)
+    if ext in (".txt", ".md"):
+        text = pdftext.read_text_file(inpath)
+        if not text.strip():
+            raise UserFacingError("to_pdf_empty")
+        src = os.path.join(conv, f"{stem}.docx")
+        await asyncio.to_thread(pdftext.text_to_docx, text, src)
+    else:
+        src = os.path.join(conv, f"{stem}{ext}")
+        shutil.copyfile(inpath, src)
+    return await P.office_convert(src, conv, "pdf", cancel=cancel)
+
+
+async def _pdf_members(bot: Bot, args: dict[str, Any], workdir: str, cancel=None) -> list[str]:
+    """اعضای ادغام → PDFهای آمادهٔ qpdf. قفلِ مالک بی‌صدا برداشته می‌شود؛ عضوِ رمزدار
+    نامِ خودش را در پیام می‌آورد (کاربر باید بداند **کدام** فایل)."""
+    paths: list[str] = []
+    for i, m in enumerate(args.get("members") or []):
+        fid = m.get("file_id")
+        if not fid:
+            continue
+        p = await _localize(bot, fid, workdir, subdir=f"m{i}")
+        if not p:
+            raise RuntimeError(f"member not found: {m.get('name') or fid}")
+        sub = os.path.join(workdir, f"m{i}")
+        os.makedirs(sub, exist_ok=True)
+        try:
+            paths.append(await pdftools.prepare(p, sub, cancel=cancel))
+        except UserFacingError as exc:
+            if exc.key in ("pdf_needs_password", "pdf_not_pdf", "pdf_damaged"):
+                raise UserFacingError(f"{exc.key}_member", detail=exc.detail,
+                                      name=escape(str(m.get("name") or "?"))[:60]) from None
+            raise
+    return paths
+
+
+async def _password(redis, args: dict[str, Any]) -> str:
+    """رمزِ کاربر از Redis — یک‌بارمصرف (`GETDEL`)، تا بعد از جاب جایی نماند."""
+    tok = str(args.get("tok") or "")
+    pw = None
+    if redis is not None and tok:
+        try:
+            raw = await redis.getdel(pagespec.PW_KEY.format(tok=tok))
+            pw = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        except Exception:  # noqa: BLE001
+            pw = None
+    if not pw:
+        raise UserFacingError("pdf_pw_expired")
+    return pw
+
+
 async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: str, workdir: str,
-                 lang: str, progress=None, cancel=None) -> dict[str, Any]:
+                 lang: str, progress=None, cancel=None, redis=None) -> dict[str, Any]:
     """پردازش → یا {path, filename, label} (رسانه‌ساز) یا {note_only, label} (بررسی)."""
     stem = _safe_stem(file.name)
     dur = file.duration
@@ -283,6 +444,18 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         elif file.kind == "audio":
             out = os.path.join(workdir, f"{stem}-min.mp3")
             await P.compress_audio(inpath, out, progress=progress, duration=dur, cancel=cancel)
+        elif file.kind == "pdf":
+            level = "strong" if args.get("level") == "strong" else "normal"
+            src = await pdftools.prepare(inpath, workdir, cancel=cancel)
+            best = await pdftools.compress(src, workdir, level, cancel=cancel)
+            if best is None:
+                # کمتر از ۵٪ کوچک‌تر نشد: کارت را با فایلی که فقط کیفیت باخته عوض نکن
+                return {"note_only": True, "label": t(lang, "cl_pdf_no_gain")}
+            out = os.path.join(workdir, f"{stem}-min.pdf")
+            os.replace(best, out)
+            label = t(lang, "cl_pdf_compress", before=human_size(os.path.getsize(src)),
+                      after=human_size(os.path.getsize(out)))
+            return {"path": out, "filename": os.path.basename(out), "label": label, "kind": "pdf"}
         else:
             raise RuntimeError("compress not supported for this type")
         label = t(lang, "cl_tiny") if args.get("tiny") else t(lang, "cl_compress")
@@ -291,7 +464,8 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
     if op == "convert":
         fmt = (args.get("target") or "").lower()
         if file.kind == "pdf":
-            return await _convert_pdf(fmt, stem, inpath, workdir, lang)
+            return await _convert_pdf(fmt, stem, inpath, workdir, lang,
+                                      progress=progress, cancel=cancel)
         out = os.path.join(workdir, f"{stem}.{fmt}")
         if file.kind == "image":
             await P.convert_image(inpath, out, fmt)
@@ -304,21 +478,81 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
         return {"path": out, "filename": f"{stem}.{fmt}", "label": t(lang, "cl_convert", fmt=fmt.upper())}
 
     if op == "pdf_merge":
-        members = args.get("members") or []
-        paths: list[str] = []
-        for m in members:
-            fid = m.get("file_id")
-            if not fid:
-                continue
-            p = await _localize(bot, fid, workdir)
-            if not p:
-                raise RuntimeError(f"member not found: {m.get('name') or fid}")
-            paths.append(p)
-        if len(paths) < 2:
-            raise RuntimeError("need at least two PDFs to merge")
-        out = os.path.join(workdir, "merged.pdf")
-        await P.pdf_merge(paths, out)
-        return {"path": out, "filename": "merged.pdf", "label": t(lang, "cl_merge", n=len(paths)), "kind": "pdf"}
+        paths = await _pdf_members(bot, args, workdir, cancel=cancel)
+        out = os.path.join(workdir, f"{stem}-merged.pdf")
+        await pdftools.merge(paths, out, cancel=cancel)
+        # کارتِ تازه: پیش از این PDFِ ادغام‌شده جای **اولین** PDF را می‌گرفت و آن
+        # فایل از چت «ناپدید» می‌شد.
+        return {"spawn": {"path": out, "name": f"{stem}-merged.pdf", "kind": "pdf"},
+                "label": t(lang, "cl_merge", n=len(paths))}
+
+    if op == "pdf_select":
+        mode = "delete" if args.get("mode") == "delete" else "keep"
+        ranges = pagespec.parse(str(args.get("spec") or ""))
+        if ranges is None:
+            raise UserFacingError("pdf_pages_bad")
+        src = await pdftools.prepare(inpath, workdir, cancel=cancel)
+        n = await pdftools.page_count(src, cancel=cancel)
+        try:
+            pages = pagespec.expand(ranges, n)
+        except ValueError as exc:
+            raise UserFacingError("pdf_page_out_of_range", page=exc.args[0], n=n) from None
+        if mode == "delete":
+            drop = set(pages)
+            keep = [p for p in range(1, n + 1) if p not in drop]
+            if not keep:
+                raise UserFacingError("pdf_delete_all")
+            out = os.path.join(workdir, f"{stem}.pdf")
+            await pdftools.select_pages(src, keep, out, cancel=cancel)
+            return {"path": out, "filename": f"{stem}.pdf", "kind": "pdf",
+                    "label": t(lang, "cl_pdf_deleted", pages=pagespec.label(sorted(drop)))}
+        tag = pdftools.safe_tag(pagespec.label(pages))
+        out = os.path.join(workdir, f"{stem}-p{tag}.pdf")
+        await pdftools.select_pages(src, pages, out, cancel=cancel)
+        return {"spawn": {"path": out, "name": os.path.basename(out), "kind": "pdf"},
+                "label": t(lang, "cl_pdf_extracted", pages=pagespec.label(pages))}
+
+    if op == "pdf_rotate":
+        angle = int(args.get("angle") or 0)
+        if angle not in (90, 180, 270):
+            raise ValueError(f"unsupported angle: {angle}")
+        src = await pdftools.prepare(inpath, workdir, cancel=cancel)
+        out = os.path.join(workdir, f"{stem}.pdf")
+        await pdftools.rotate(src, out, angle, cancel=cancel)
+        return {"path": out, "filename": f"{stem}.pdf", "kind": "pdf",
+                "label": t(lang, "cl_pdf_rotated", deg=angle)}
+
+    if op == "pdf_split":
+        src = await pdftools.prepare(inpath, workdir, cancel=cancel)
+        n = await pdftools.page_count(src, cancel=cancel)
+        if n < 2:
+            raise UserFacingError("pdf_split_single")
+        files = await pdftools.split(src, os.path.join(workdir, "split"), stem, cancel=cancel)
+        return _many_files(files, stem, workdir, t(lang, "cl_pdf_split", n=len(files)))
+
+    if op == "pdf_lock":
+        pw = await _password(redis, args)
+        src = await pdftools.prepare(inpath, workdir, cancel=cancel)
+        out = os.path.join(workdir, f"{stem}.pdf")
+        await pdftools.lock(src, out, pw, workdir, cancel=cancel)
+        return {"path": out, "filename": f"{stem}.pdf", "kind": "pdf", "label": t(lang, "cl_pdf_locked")}
+
+    if op == "pdf_unlock":
+        pw = await _password(redis, args)
+        try:
+            # بی‌رمزِ کاربر (فقط محدودیتِ چاپ/کپیِ «مالک»): رمز لازم نیست و هر
+            # چیزی که کاربر فرستاده کافی است — قفلِ مالک بی‌رمز برداشته می‌شود.
+            src = await pdftools.prepare(inpath, workdir, cancel=cancel)
+        except UserFacingError as exc:
+            if exc.key != "pdf_needs_password":
+                raise
+            src = await pdftools.prepare(inpath, workdir, password=pw, cancel=cancel)
+        else:
+            if not await pdftools.is_encrypted(inpath, cancel=cancel):
+                return {"note_only": True, "label": t(lang, "cl_pdf_not_locked")}
+        out = os.path.join(workdir, f"{stem}.pdf")
+        shutil.copyfile(src, out)   # نه replace: بی qpdf، `src` خودِ فایلِ دیسکِ Bot API است
+        return {"path": out, "filename": f"{stem}.pdf", "kind": "pdf", "label": t(lang, "cl_pdf_unlocked")}
 
     if op == "video_concat":
         members = args.get("members") or []
@@ -380,10 +614,11 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
                 "label": t(lang, "cl_meta_edit"), "kind": "audio", "new_meta": tags}
 
     if op == "to_pdf":
-        src = os.path.join(workdir, os.path.basename(file.name or "input"))
-        shutil.copyfile(inpath, src)
-        out = await P.office_to_pdf(src, workdir)
-        return {"path": out, "filename": f"{stem}.pdf", "label": t(lang, "cl_topdf"), "kind": "document"}
+        out = await _office_to_pdf(file, inpath, workdir, stem, cancel=cancel)
+        # کارتِ تازه با نوعِ **pdf** (پیش از این `document` بود: کارتِ خروجی منوی سند
+        # را نشان می‌داد و PDFِ تازه هیچ ابزارِ PDFی نداشت)، و سندِ اصلی سرِ جایش.
+        return {"spawn": {"path": out, "name": f"{stem}.pdf", "kind": "pdf"},
+                "label": t(lang, "cl_topdf")}
 
     if op == "list_zip":
         entries = await P.archive_list(inpath)
@@ -544,22 +779,73 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
     if op == "images_to_pdf":
         members = args.get("members") or []
         paths: list[str] = []
-        for m in members:
+        for i, m in enumerate(members):
             fid = m.get("file_id")
             if not fid:
                 continue
-            p = await _localize(bot, fid, workdir)
+            p = await _localize(bot, fid, workdir, subdir=f"m{i}")
             if not p:
                 raise RuntimeError(f"member not found: {m.get('name') or fid}")
             paths.append(p)
         if not paths:
             raise RuntimeError("no images for PDF")
+        mode = "fit" if args.get("mode") == "fit" else "a4"
         out = os.path.join(workdir, f"{stem}.pdf")
-        await P.images_to_pdf(paths, out)
-        return {"path": out, "filename": f"{stem}.pdf",
-                "label": t(lang, "cl_img_pdf", n=len(paths)), "kind": "pdf"}
+        await pdftools.images_to_pdf(paths, out, mode=mode, workdir=workdir)
+        return {"spawn": {"path": out, "name": f"{stem}.pdf", "kind": "pdf"},
+                "label": t(lang, "cl_img_pdf", n=len(paths))}
 
     raise RuntimeError(f"unknown op: {op}")
+
+
+async def _send_files(bot: Bot, chat_id: int, paths: list[str], *,
+                      album: bool) -> tuple[int, Exception | None]:
+    """فایل‌ها → چت. `(تعدادِ نرسیده, آخرین خطا)`.
+
+    با `album` ده‌تا‌ده‌تا یک آلبومِ سند (صفحه‌های PDF، هر صفحه یک PDF) — بیست
+    پیامِ پشتِ‌هم هم چت را می‌پوشاند و هم به سقفِ نرخ نزدیک می‌شود. آلبومی که
+    رد شود (۴۰۰، یا ۴۲۹ دو بار) فایل‌به‌فایل فرستاده می‌شود: شکستِ گروه نباید ده
+    فایل را با هم ببرد. بدونِ `album` همان رفتارِ قبلی: هر فایل یک پیام.
+    """
+    from aiogram.exceptions import TelegramRetryAfter
+    from aiogram.types import InputMediaDocument
+
+    failed_n, last_exc = 0, None
+
+    async def one(p: str) -> None:
+        nonlocal failed_n, last_exc
+        try:
+            await bot.send_document(chat_id, FSInputFile(p, filename=os.path.basename(p)))
+        except Exception as exc:  # noqa: BLE001
+            failed_n, last_exc = failed_n + 1, exc
+            log.warning("sending output file failed: %s", p)
+
+    if not album or len(paths) < 2:
+        for p in paths:
+            await one(p)
+        return failed_n, last_exc
+    for i in range(0, len(paths), 10):
+        chunk = paths[i:i + 10]
+        if len(chunk) == 1:
+            await one(chunk[0])
+            continue
+        media = [InputMediaDocument(media=FSInputFile(p, filename=os.path.basename(p)))
+                 for p in chunk]
+        for attempt in (1, 2):
+            try:
+                await bot.send_media_group(chat_id, media)
+                break
+            except TelegramRetryAfter as exc:
+                if attempt == 1:
+                    await asyncio.sleep(min(float(exc.retry_after), 30.0))
+                    continue
+                log.warning("album rate-limited twice; sending one by one")
+            except Exception:  # noqa: BLE001
+                log.warning("album send failed; sending one by one", exc_info=True)
+            for p in chunk:
+                await one(p)
+            break
+    return failed_n, last_exc
 
 
 async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str) -> None:
@@ -655,13 +941,21 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             ticker = asyncio.create_task(_ticker())
             try:
                 res = await _do_op(bot, job.op, job.args or {}, file, inpath, workdir, lang,
-                                   progress=_on_progress, cancel=_should_cancel)
+                                   progress=_on_progress, cancel=_should_cancel, redis=redis)
             finally:
                 await P.stop_task(ticker)   # لغوِ خودِ جاب را نمی‌بلعد
         except P.ProcessingCancelled:
             log.info("job %s cancelled by user", job_id)
             job.status = "cancelled"
             await set_card_note(bot, chat_id, card_mid, file, lang, note=t(lang, "cancelled"), keyboard=True)
+        except UserFacingError as exc:
+            # شکستی که پیامِ خودش را دارد («این PDF رمز دارد»…): نه traceback در لاگ و
+            # نه دُمِ خامِ انگلیسیِ ابزار. `job.error` همان کلید است تا صفحهٔ آمار
+            # همهٔ نمونه‌ها را یک ردیف بشمارد.
+            log.info("job %s refused: %s", job_id, exc.key)
+            job.status = "failed"
+            job.error = exc.key[:500]
+            await set_card_note(bot, chat_id, card_mid, file, lang, note=_user_note(lang, exc), keyboard=True)
         except Exception as exc:  # noqa: BLE001  — پردازش شکست خورد؛ فایل دست‌نخورده
             log.exception("job %s processing failed", job_id)
             job.status = "failed"
@@ -783,13 +1077,8 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 # هر فایل جدا فرستاده می‌شود و شکستِ یکی بقیه را متوقف نمی‌کند؛ ولی
                 # جاب فقط وقتی `done` است که **همه** رسیده باشند. پیش از فاز ۲ِ ممیزی
                 # شکست‌ها فقط لاگ می‌شدند و جاب حتی با صفر فایلِ رسیده `done` می‌گرفت.
-                failed_n, last_exc = 0, None
-                for p in res["files"]:
-                    try:
-                        await bot.send_document(chat_id, FSInputFile(p, filename=os.path.basename(p)))
-                    except Exception as exc:  # noqa: BLE001
-                        failed_n, last_exc = failed_n + 1, exc
-                        log.warning("sending extracted file failed: %s", p)
+                failed_n, last_exc = await _send_files(bot, chat_id, res["files"],
+                                                       album=bool(res.get("album")))
                 if failed_n:
                     total_n = len(res["files"])
                     job.status = "failed"

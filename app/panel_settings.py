@@ -165,6 +165,9 @@ SECTIONS: list[dict] = [
                ("۴۸۰ یا ۳۶۰", "480 or 360"), u="px"),
             _f("vjoin_max_mb", "int", ("سقف حجم چسباندن ویدیو", "Video join size limit"),
                ("۰ یعنی همان حداکثر حجم فایل", "0 means the max file size"), u="mb"),
+            _f("pdf_ocr_max_pages", "int", ("حداکثر صفحه‌ی OCR در PDF اسکن‌شده", "Max OCR pages in a scanned PDF"),
+               ("برای تبدیل به ورد و متن · ۰ یعنی بدون OCR", "For Word and text output · 0 turns OCR off"),
+               u="pages"),
             _f("whisper_model", "enum", ("مدل رونویسی", "Transcription model"),
                ("غیر از base، بار اول دانلود می‌شود", "Anything but base downloads on first use"), opts=(
                    ("tiny", ("tiny — سریع‌ترین", "tiny — fastest")), ("base", ("base — متعادل", "base — balanced")),

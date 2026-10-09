@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # می‌شود — فهرستِ تنظیماتِ قابلِ‌مدیریت در docs/ADMIN_PANEL.md نگه‌داری می‌شود.
     whisper_model: str = "base"
 
+    # PDF → Word/متن: صفحهٔ بی‌متن (اسکن) تا این تعداد با OCR خوانده می‌شود. OCR
+    # هر صفحه چند ثانیه CPU است، پس کتابِ اسکن‌شدهٔ ۵۰۰صفحه‌ای نباید کلِ ورکر را
+    # بگیرد. ۰ = OCR خاموش (صفحهٔ اسکن در Word عکس می‌ماند). از پنل قابلِ تغییر.
+    pdf_ocr_max_pages: int = 30
+
     # امنیت
     clamav_host: str = "clamav"
     clamav_port: int = 3310

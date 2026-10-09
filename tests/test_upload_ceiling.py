@@ -139,7 +139,8 @@ async def env(monkeypatch, tmp_path):
 def _install_result(monkeypatch, shape, mb: int):
     """`_do_op` را وادار کن خروجیِ `mb` مگابایتی با شکلِ خواسته‌شده برگرداند."""
 
-    async def _do_op(bot, op, args, file, inpath, workdir, lang, progress=None, cancel=None):
+    async def _do_op(bot, op, args, file, inpath, workdir, lang, progress=None, cancel=None,
+                     redis=None):
         out = _sparse(os.path.join(workdir, "out.mp4"), mb)
         return shape(out)
 
@@ -322,12 +323,16 @@ def _do_op_source() -> ast.Module:
 
 
 def _result_keys() -> set[str]:
-    """کلیدهای هر dictی که `_do_op`/`_convert_pdf` برمی‌گردانند — کشف‌محور."""
+    """کلیدهای هر dictی که `_do_op` و کمک‌هایش برمی‌گردانند — کشف‌محور.
+
+    `_many_files` (آلبوم یا ZIPِ صفحه‌های PDF) هم شکلِ نتیجه می‌سازد؛ نسخهٔ قبلیِ این
+    فهرست فقط دو تابع را می‌خواند و کلیدی که از کمک‌تابعِ سوم بیاید نامرئی می‌ماند.
+    """
     tree = _do_op_source()
     keys: set[str] = set()
     for fn in ast.walk(tree):
         if not (isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and fn.name in ("_do_op", "_convert_pdf")):
+                and fn.name in ("_do_op", "_convert_pdf", "_many_files")):
             continue
         for node in ast.walk(fn):
             if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
@@ -342,8 +347,8 @@ def _result_keys() -> set[str]:
 _KNOWN_RESULT_KEYS = {
     # حاملِ بایت
     "path", "spawn", "send_media", "files",
-    # متادیتای همان تحویل
-    "filename", "kind", "label", "new_meta",
+    # متادیتای همان تحویل (`album` = فایل‌های `files` به‌صورتِ آلبومِ سند)
+    "filename", "kind", "label", "new_meta", "album",
     # بی‌بایت
     "editor", "message", "note_only",
 }

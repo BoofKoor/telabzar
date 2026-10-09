@@ -7,13 +7,14 @@ import json
 import math
 import os
 import re
+import signal
 import threading
 import zipfile
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
 from .config import settings
-from .exceptions import ProcessingCancelled, ProcessingTimeout  # re-export (P.ProcessingCancelled)
+from .exceptions import ProcessingCancelled, ProcessingTimeout, UserFacingError  # re-export (P.ProcessingCancelled)
 
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
@@ -145,7 +146,9 @@ def kill_orphan(proc) -> None:
     **مکانیزمِ یکتای «یتیم نگذار» برای هر چهار زیرفرایندِ پروژه** — ffmpeg در
     `_run`، و در `downloader`: `_run_dl` (دانلود)، `probe` (فازِ probe) و
     `_yt_search_candidates` (مسیرِ تطبیقِ اسپاتیفای/اپل)؛ و از فاز ۴ remuxِ
-    `_ensure_mp4` هم، که پنجمین مسیر با همان باگ بود. مثلِ
+    `_ensure_mp4` هم، که پنجمین مسیر با همان باگ بود؛ و از کارِ PDF (۲۰۲۶-۱۰)
+    `_tesseract`، هر ابزارِ `pdftools._capture` (qpdf/gs/poppler/tesseract)، و
+    `office_convert` که «فرایندش» یک گروه است (`_ProcGroup`). مثلِ
     `start_cancel_watcher` عمداً یک پیاده‌سازی است: چهار کپیِ دست‌نویس از یک
     قاعدهٔ ایمنی سرانجام واگرا می‌شوند، و این‌جا از قبل واگرا شده بودند — دو تا
     رفع را گرفتند و دو تا نه.
@@ -445,26 +448,6 @@ async def watermark_image(inp: str, out: str, wm_path: str, position: str, is_lo
     await asyncio.to_thread(_watermark_image_sync, inp, out, wm_path, position, is_logo)
 
 
-def _images_to_pdf_sync(paths: list[str], out: str, max_side: int = 2000) -> None:
-    pages: list[Image.Image] = []
-    for p in paths:
-        img = _flatten_rgb(_upright(p))
-        if max(img.size) > max_side:  # صفحاتِ خیلی بزرگ را کوچک کن (مصرفِ حافظه)
-            r = max_side / max(img.size)
-            img = img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))), Image.LANCZOS)
-        pages.append(img)
-    if not pages:
-        raise RuntimeError("no images for PDF")
-    pages[0].save(out, "PDF", save_all=True, append_images=pages[1:])
-
-
-async def images_to_pdf(paths: list[str], out: str) -> None:
-    """چند تصویر → یک PDFِ چندصفحه‌ای (هر تصویر یک صفحه)."""
-    await asyncio.to_thread(_images_to_pdf_sync, paths, out)
-    if not os.path.exists(out):
-        raise RuntimeError("PDF build produced no output")
-
-
 # ── OCR: استخراجِ متن (tesseract؛ فارسی + انگلیسی) ──────────────
 async def _tesseract(png: str, lang: str) -> str:
     proc = await asyncio.create_subprocess_exec(
@@ -472,11 +455,14 @@ async def _tesseract(png: str, lang: str) -> str:
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError("OCR timed out") from None
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            kill_orphan(proc)
+            raise RuntimeError("OCR timed out") from None
+    except BaseException:
+        kill_orphan(proc)   # لغوِ جاب (job_timeout/خاموشی) — tesseract را یتیم نگذار
+        raise
     if proc.returncode != 0:
         detail = " ".join((err or b"").decode("utf-8", "ignore").split())[:160]
         raise RuntimeError(f"OCR failed: {detail}")
@@ -1200,11 +1186,36 @@ async def write_audio_metadata(inp: str, out_base: str, tags: dict[str, str],
     return out
 
 
-# ── تبدیلِ سند با LibreOffice headless (به PDF / DOCX / …) ──────
+# ── تبدیلِ سند با LibreOffice headless (سند → PDF) ─────────────
 # نکته: soffice حتی وقتی فایلِ ورودی را نمی‌تواند باز کند با کدِ 0 خارج
 # می‌شود؛ پس به‌جای اتکا به returncode، وجودِ خروجی را بررسی و در صورتِ
 # نبودِ آن، stderr را در پیامِ خطا می‌آوریم تا اشکال‌زدایی ممکن باشد.
-async def office_convert(inp: str, outdir: str, target: str) -> str:
+#
+# **و `soffice` یک فرایند نیست، یک درخت است:** اسکریپتِ `soffice` → `oosplash` →
+# `soffice.bin`. `proc.kill()` فقط اسکریپت را می‌کشد و `soffice.bin` — که کارِ
+# واقعی را می‌کند و صدها مگابایت حافظه دارد — یتیم می‌ماند (اندازه‌گیری‌شده). پس
+# فرایند در **گروهِ خودش** شروع می‌شود و کشتن کلِ گروه را می‌کشد.
+class _ProcGroup:
+    """پوستهٔ `proc` برای `kill_orphan`/`start_cancel_watcher`: `kill()` کلِ گروه را
+    می‌کشد. همان دو مکانیزمِ یکتای پروژه، فقط با «کشتن»ِ گسترده‌تر."""
+
+    __slots__ = ("proc",)
+
+    def __init__(self, proc) -> None:
+        self.proc = proc
+
+    @property
+    def returncode(self):
+        return self.proc.returncode
+
+    def kill(self) -> None:
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+
+async def office_convert(inp: str, outdir: str, target: str, cancel=None) -> str:
     profile = os.path.join(outdir, "_loprofile")
     proc = await asyncio.create_subprocess_exec(
         "soffice", "--headless", "--nologo", "--nofirststartwizard",
@@ -1213,13 +1224,24 @@ async def office_convert(inp: str, outdir: str, target: str) -> str:
         "--convert-to", target, "--outdir", outdir, inp,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
+    group = _ProcGroup(proc)
+    watch = start_cancel_watcher(group, cancel)
     try:
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=240)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError(f"{target} conversion timed out") from None
+        try:
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=240)
+        except asyncio.TimeoutError:
+            group.kill()
+            raise ProcessingTimeout(f"{target} conversion timed out") from None
+    except BaseException:
+        group.kill()      # لغوِ جاب: soffice.bin هم، نه فقط اسکریپت
+        raise
+    finally:
+        watch.stop()
+        group.kill()      # باقی‌ماندهٔ گروه (اگر چیزی ماند) — گروهِ خالی بی‌اثر است
+    if watch.fired:
+        raise ProcessingCancelled()
 
     base = os.path.splitext(os.path.basename(inp))[0]
     out = os.path.join(outdir, f"{base}.{target}")
@@ -1231,41 +1253,7 @@ async def office_convert(inp: str, outdir: str, target: str) -> str:
 
     lines = [ln for ln in (err or b"").decode("utf-8", "ignore").splitlines() if ln.strip()]
     detail = " | ".join(lines[-3:]) if lines else "no output"
-    raise RuntimeError(f"{target} conversion failed: " + detail)
-
-
-async def office_to_pdf(inp: str, outdir: str) -> str:
-    return await office_convert(inp, outdir, "pdf")
-
-
-# ── تبدیل و ادغامِ PDF (poppler-utils) ──────────────────────────
-async def pdf_to_text(inp: str, out: str) -> None:
-    await _run(["pdftotext", "-layout", inp, out], timeout=180)
-    if not os.path.exists(out):
-        raise RuntimeError("no text extracted from PDF")
-
-
-async def pdf_to_images(inp: str, outdir: str, fmt: str = "jpg", max_pages: int = 100) -> list[str]:
-    ext = "png" if fmt.lower() == "png" else "jpg"
-    flag = "-png" if ext == "png" else "-jpeg"
-    prefix = os.path.join(outdir, "page")
-    # -l محدودیتِ صفحه (دفاع در برابرِ PDFهای خیلی بزرگ)
-    await _run(["pdftoppm", flag, "-r", "150", "-l", str(max_pages), inp, prefix], timeout=300)
-    files = sorted(
-        os.path.join(outdir, f) for f in os.listdir(outdir)
-        if f.startswith("page") and f.lower().endswith(f".{ext}")
-    )
-    if not files:
-        raise RuntimeError("no pages rendered from PDF")
-    return files
-
-
-async def pdf_merge(inputs: list[str], out: str) -> None:
-    if len(inputs) < 2:
-        raise RuntimeError("need at least two PDFs to merge")
-    await _run(["pdfunite", *inputs, out], timeout=300)
-    if not os.path.exists(out):
-        raise RuntimeError("PDF merge produced no output")
+    raise UserFacingError("office_failed", detail=detail[:300])
 
 
 # ── آرشیو (7-Zip) ──────────────────────────────────────────────

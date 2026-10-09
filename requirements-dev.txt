@@ -6,6 +6,10 @@ aiohttp>=3.9,<4
 fakeredis>=2.20,<3
 # `app.processing`/`app.tasks` سرِ import به PIL نیاز دارند (از requirements-worker)
 Pillow>=10,<12
+# ابزارهای PDF (`app/pdftext.py`) — همان نسخه‌هایی که ورکر دارد؛ تست‌ها خروجیِ
+# واقعیِ Chrome/LibreOffice را با خودِ pdfplumber می‌خوانند و Word را با python-docx.
+pdfplumber>=0.11,<0.12
+python-docx>=1.1,<2
 # درایورِ async SQLite برای تست‌های DB (گاردِ مالکیت). تولید روی Postgres است؛
 # SQLite فقط این‌جاست تا تست بدونِ سرویسِ بیرونی اجرا شود.
 aiosqlite>=0.20,<1
