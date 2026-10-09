@@ -531,15 +531,68 @@ html:not(.js) .table-view{display:block}
 .mk-key{width:3px;height:14px;border-radius:2px;flex:none;display:inline-block}
 
 /* ───────────────────────── texts / buttons / langs ───────────────────────── */
-.txt-row{display:grid;grid-template-columns:240px minmax(0,1fr);gap:20px;padding:12px 20px;border-bottom:1px solid var(--border-soft);align-items:start}
-.txt-row:last-child{border-bottom:0}
-.txt-row .k{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);direction:ltr;unicode-bidi:isolate;overflow-wrap:anywhere}
-.txt-row .cat{font-size:12px;color:var(--muted);margin-top:4px}
-.txt-row .textarea{min-height:42px;height:auto;font-size:14px;resize:none;overflow:hidden;padding-block:9px}
-.txt-row .meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;font-size:12.5px;color:var(--muted)}
-.txt-row .ph{font-family:var(--mono);font-size:12px;background:var(--surface-3);border-radius:6px;padding:1px 6px;direction:ltr;unicode-bidi:isolate;color:var(--ink-2)}
-.txt-row .orig{font-size:12.5px;color:var(--muted);margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--surface-2);white-space:pre-wrap}
-.txt-row.edited .k::before{content:"●";color:var(--primary);margin-inline-end:6px;font-size:10px;vertical-align:2px}
+/* texts: every text in one list, filtered in place (panel.js); the filter bar stays on top on wide screens */
+.tx-hint{display:flex;align-items:flex-start;gap:6px}
+.tx-hint .ic{color:var(--faint);margin-top:4px}
+.tx-hint span{min-width:0}
+.tx-card{--tx-pad:20px}
+.tx-bar{padding:16px var(--tx-pad) 12px;background:var(--surface);border-radius:var(--r-xl) var(--r-xl) 0 0}
+/* stuck under the top bar: a hairline and a soft shadow — drawn with box-shadow, so the height never changes */
+.tx-bar.stuck{border-radius:0;box-shadow:0 1px 0 var(--border),0 14px 22px -20px rgba(16,24,40,.45)}
+.tx-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tx-tools .search-in{position:relative;flex:1 1 280px;min-width:0}
+.tx-tools .search-in .input{padding-inline-start:38px}
+.tx-tools .search-in > .ic{position:absolute;inset-inline-start:12px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+.tx-tools .select{width:auto;min-width:140px;flex:none}
+.tx-ed{height:40px;padding:0 14px;border-color:var(--border-strong);cursor:pointer;user-select:none}
+.tx-ed .ic{color:var(--muted)}
+.tx-ed:has(input:checked){background:var(--primary-soft);border-color:transparent;color:var(--primary-ink)}
+.tx-ed:has(input:checked) .ic,.tx-ed:has(input:checked) .c{color:var(--primary-ink)}
+.tx-ed:has(input:focus-visible){outline:2px solid var(--primary);outline-offset:2px}
+.tx-chips{padding:0 var(--tx-pad) 14px;border-bottom:1px solid var(--border)}
+.tx-chips::-webkit-scrollbar{display:none}
+.tx-chips .chip{flex:none}
+.tx-list .empty{padding:56px 16px}
+.tx-gh{display:flex;align-items:center;gap:8px;padding:18px 20px 8px;font-size:12.5px;font-weight:600;color:var(--ink-3);border-bottom:1px solid var(--border-soft)}
+.tx-gh .ic{color:var(--faint)}
+.txt-row{position:relative;display:grid;grid-template-columns:220px minmax(0,1fr);gap:8px 24px;padding:14px 20px;border-bottom:1px solid var(--border-soft);align-items:start;transition:background-color .2s}
+.tx-k{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0;padding-top:10px}
+.tx-k .k{font-family:var(--mono);font-size:12.5px;line-height:1.5;color:var(--ink-2);direction:ltr;unicode-bidi:isolate;overflow-wrap:anywhere;cursor:pointer}
+.txt-row.edited .k{color:var(--primary-ink)}
+.tx-pill{height:20px;padding:0 8px;font-size:11.5px}
+.tx-v{min-width:0}
+/* the box is as tall as its text: `field-sizing` where the browser has it, panel.js measures elsewhere */
+.txt-row .textarea{display:block;min-height:44px;font-size:14px;line-height:1.7;padding:9px 12px;resize:none;overflow:hidden;field-sizing:content;
+  background:var(--bg);border-color:transparent}
+/* a quiet, filled box: 223 bordered boxes in a row is mostly lines — the border comes back on hover, focus and error */
+.txt-row .textarea:hover{border-color:var(--border-strong)}
+.txt-row .textarea:focus{background:var(--surface);border-color:var(--primary)}
+.txt-row .textarea.err{background:var(--surface);border-color:var(--bad)}
+.txt-row.dirty{background:color-mix(in srgb,var(--primary-soft) 55%,transparent)}
+.txt-row.dirty::before{content:"";position:absolute;inset-block:12px;inset-inline-start:0;width:3px;border-start-end-radius:3px;border-end-end-radius:3px;background:var(--primary)}
+.txt-row.dirty:has(.textarea.err)::before{background:var(--bad)}
+.txt-row.just-saved{animation:tx-saved 1.6s ease}
+@keyframes tx-saved{0%,30%{background:var(--good-soft)}100%{background:transparent}}
+.tx-ph{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--muted)}
+.tx-ph .ph{height:24px;padding:0 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink-2);font:500 12px/1 var(--mono);direction:ltr;unicode-bidi:isolate}
+.tx-ph .ph:hover{border-color:var(--primary);background:var(--primary-soft);color:var(--primary-ink)}
+.tx-ph .ph.miss{border-color:var(--warn-line);background:var(--warn-soft);color:var(--warn-ink)}
+.tx-def{display:flex;align-items:flex-start;gap:10px;margin-top:10px;padding:8px 12px;border-radius:var(--r);background:var(--surface-2);border:1px solid var(--border-soft);font-size:13px;line-height:1.7}
+.tx-def .lbl{flex:none;font-size:12px;font-weight:500;color:var(--muted);line-height:22px}
+.tx-def .v{flex:1;min-width:0;color:var(--ink-3);white-space:pre-wrap;overflow-wrap:anywhere}
+.tx-def .link-btn{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:12.5px;line-height:22px;white-space:nowrap}
+.tx-save{display:flex;justify-content:flex-end;padding:14px 20px}
+.tx-card .savebar{margin:14px 12px 12px}
+.field-err.warn{color:var(--warn-ink)}
+.savebar.bad .msg{color:var(--bad-ink)}
+/* `data-savebar-keep`: the bar keeps its place and fades, so it never changes the page height */
+.savebar[data-savebar-keep]{transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}
+.savebar[data-savebar-keep]:not(.idle){transition-delay:0s}
+.savebar.idle{visibility:hidden;opacity:0;transform:translateY(8px)}
+.toast.bad .ic{color:#f87171}
+/* a toast never sits on top of a visible save bar (its message and Cancel live there) */
+body:has(.savebar:not([hidden]):not(.idle)) .toast-wrap{bottom:calc(92px + env(safe-area-inset-bottom,0px))}
+@media (min-width:861px){.tx-bar{position:sticky;top:calc(var(--topbar-h) + env(safe-area-inset-top,0px));z-index:15}}
 .btn-editor{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:20px;align-items:start}
 .be-list{display:flex;flex-direction:column}
 .be-row{display:grid;grid-template-columns:28px minmax(0,1fr) 128px 168px 44px;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border-soft);background:var(--surface)}
@@ -644,7 +697,8 @@ html:not(.js) .table-view{display:block}
   .fld.bool{grid-template-columns:minmax(0,1fr) auto;gap:8px 16px}
   .fld.bool .ctl{justify-content:flex-end}
   .cap-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
-  .txt-row{grid-template-columns:minmax(0,1fr);gap:8px}
+  .txt-row{grid-template-columns:minmax(0,1fr);gap:6px}
+  .tx-k{flex-direction:row;align-items:center;flex-wrap:wrap;gap:8px;padding-top:0}
   .sm-row{grid-template-columns:110px minmax(0,1fr) 64px;gap:12px}
   .sm-row .rate{display:none}
   .lang-flow{grid-template-columns:minmax(0,1fr)}
@@ -703,6 +757,22 @@ html:not(.js) .table-view{display:block}
   .dialog-f .btn{flex:1}
   .form-grid{grid-template-columns:minmax(0,1fr)}
   .savebar{bottom:10px}
+  .tx-card{--tx-pad:16px}
+  .tx-bar{padding-top:14px;padding-bottom:10px}
+  /* phones: the categories become one row you swipe, faded at both ends; the fade sits on the padding,
+     so nothing is dimmed at rest */
+  .tx-chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-top:2px;
+    -webkit-mask-image:linear-gradient(to right,transparent,#000 var(--tx-pad),#000 calc(100% - var(--tx-pad)),transparent);
+    mask-image:linear-gradient(to right,transparent,#000 var(--tx-pad),#000 calc(100% - var(--tx-pad)),transparent)}
+  .tx-tools .search-in{flex-basis:100%}
+  .tx-tools .select{flex:1 1 120px;min-width:0}
+  .tx-ed{flex:1 1 auto;justify-content:center}
+  .tx-gh{padding:16px 16px 8px}
+  .txt-row{padding:12px 16px}
+  .tx-def{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px}
+  .tx-def .v{grid-column:1/-1;grid-row:2}
+  .tx-save{padding:12px 16px}
+  .tx-card .savebar{margin-inline:8px}
   .vsep{display:none}
   .top-actions{gap:2px}
   .otp input{width:44px;height:50px}

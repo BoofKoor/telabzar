@@ -70,3 +70,37 @@ def test_shows_names_the_missing_fact():
         assert "137" in str(exc)
     else:
         raise AssertionError("shows باید روی واقعیتِ غایب بیفتد")
+
+
+# ── `hidden` و `<template>` (۲۰۲۶-۱۰-۰۹) ─────────────────────────────────────
+def test_a_fact_inside_a_hidden_subtree_is_reported_missing():
+    """`/texts` و `/settings` فیلتر را با `hidden` اعمال می‌کنند؛ ردیفِ پنهان دیدنی نیست.
+
+    بدونِ این، «جست‌وجو ردیفِ دیگر را کنار گذاشت» همیشه غلط خوانده می‌شد — ردیف
+    در HTML هست، فقط پنهان است.
+    """
+    html = '<div><div hidden><div>137</div> نیمهٔ دوم</div><b>سلام</b></div>'
+    assert missing_facts(html, ["137", "نیمهٔ دوم", "سلام"]) == ["137", "نیمهٔ دوم"]
+
+
+def test_the_sibling_after_a_hidden_subtree_is_still_read():
+    """کنترلِ معکوس: شمارشِ تودرتویی نباید بعد از زیردرختِ پنهان همه‌چیز را بخورد."""
+    html = '<div hidden><div><div>x</div></div></div><p>137</p><div>صف</div>'
+    assert missing_facts(html, ["137", "صف"]) == []
+
+
+def test_template_content_is_not_visible_text():
+    """`<template>` الگوی خامِ JS است — مرورگر نشانش نمی‌دهد."""
+    assert missing_facts('<template><span>ویرایش‌شده</span></template><div>x</div>', ["ویرایش‌شده"]) \
+        == ["ویرایش‌شده"]
+
+
+def test_only_the_hidden_attribute_hides():
+    """`aria-hidden` و `data-hidden` روی صفحه دیده می‌شوند؛ فقط خودِ `hidden` پنهان می‌کند."""
+    html = '<div aria-hidden="true">۱۲</div><div data-hidden>۱۳</div><input hidden value="x"><b>۱۴</b>'
+    assert missing_facts(html, ["۱۲", "۱۳", "۱۴"]) == []
+
+
+def test_a_dropped_subtree_does_not_fuse_its_neighbours():
+    """`۱۰<div hidden>…</div>۲` نباید «۱۰۲» بدهد — همان قاعدهٔ «تگ = فاصله»."""
+    assert missing_facts("<p>10<span hidden>x</span>2</p>", ["102"]) == ["102"]

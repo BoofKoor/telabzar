@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from pagefacts import missing_facts, page_text, shows
 from test_panel_css_classes import _fetch
 
@@ -58,14 +60,30 @@ def test_no_key_falls_outside_every_category():
     assert sum(counts.get(c, 0) for c in aw._TEXT_CAT_IDS) == counts["all"]
 
 
-async def test_a_category_filter_shows_exactly_its_keys(panel):
-    """تراشه فقط لینک نیست: `?cat=` واقعاً همان تعداد ردیف رندر می‌کند."""
-    import re
+_ROW_TAG = re.compile(r'<div class="txt-row[^"]*" data-f="([^"]+)"[^>]*>')
 
+
+def _rows_shown(html: str) -> tuple[list[str], list[str]]:
+    """(کلیدهای دیدنی، کلیدهای پنهان) — هر ردیف رندر می‌شود، فیلتر فقط `hidden` می‌گذارد."""
+    shown, hidden = [], []
+    for m in _ROW_TAG.finditer(html):
+        (hidden if re.search(r"\shidden(?=[\s>])", m.group(0)) else shown).append(m.group(1))
+    return shown, hidden
+
+
+async def test_a_category_filter_shows_exactly_its_keys(panel):
+    """تراشه فقط لینک نیست: `?cat=` واقعاً همان تعداد ردیف **نشان** می‌دهد.
+
+    از ۲۰۲۶-۱۰-۰۹ همهٔ ردیف‌ها در صفحه‌اند و فیلتر فقط `hidden` می‌گذارد — تا
+    `panel.js` درجا فیلتر کند و ویرایشِ ذخیره‌نشده با عوض‌کردنِ دسته از دست نرود. پس
+    ادعا دو نیمه دارد: دیدنی‌ها دقیقاً همان دسته‌اند، و بقیه **هستند** ولی پنهان.
+    """
     aw, counts = _cats()
     cat = max(aw._TEXT_CAT_IDS, key=lambda c: counts.get(c, 0))
-    html = await _fetch(panel, f"/texts?cat={cat}")
-    assert len(re.findall(r'class="txt-row[ "]', html)) == counts[cat]
+    shown, hidden = _rows_shown(await _fetch(panel, f"/texts?cat={cat}"))
+    assert len(shown) == counts[cat]
+    assert {aw._text_cat(k) for k in shown} == {cat}
+    assert len(shown) + len(hidden) == len(aw._TEXT_KEYS)
 
 
 async def test_a_key_is_editable_with_its_current_value(panel):
@@ -83,7 +101,7 @@ async def test_a_key_is_editable_with_its_current_value(panel):
 
 def _row(html: str, key: str) -> str:
     """مارک‌آپِ ردیفِ همین کلید — از `<div class="txt-row` تا ردیفِ بعدی."""
-    at = html.index(f'<div class="k">{key}</div>')
+    at = html.index(f'data-f="{key}"')
     start = html.rindex('<div class="txt-row', 0, at)
     nxt = html.find('<div class="txt-row', at)
     return html[start:nxt if nxt != -1 else len(html)]

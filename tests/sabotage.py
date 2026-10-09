@@ -130,6 +130,8 @@ _SCL = "tests/panel/test_scope_labels.py"
 _PST = "tests/test_probe_stats.py"
 _HLT = "tests/panel/test_health_page.py"
 _TXT = "tests/panel/test_texts_page.py"
+_TXI = "tests/panel/test_texts_inplace.py"
+_TVL = "tests/test_text_validate_lang.py"
 _NDS = "tests/panel/test_nodes_page.py"
 _BTN = "tests/panel/test_buttons_page.py"
 _STC = "tests/panel/test_stats_cards.py"
@@ -1876,25 +1878,86 @@ CASES: list[dict] = [
      "target": _NDS,
      "expect": "test_a_registered_node_is_listed_with_its_identifying_facts"},
 
+    # بازلنگرِ ۲۰۲۶-۱۰-۰۹: قالب از نو نوشته شد (همهٔ ردیف‌ها رندر، فیلتر = `hidden`)
     {"name": "panel/texts: the whole catalogue renders empty",
      "path": 'app/templates/texts.html',
-     "old": '<div style="border-top:1px solid var(--border-soft)">{% for r in rows %}',
-     "new": '<div style="border-top:1px solid var(--border-soft)">{% for r in [] %}',
+     "old": '      {% for g in groups %}',
+     "new": '      {% for g in [] %}',
      "target": _TXT, "expect": 'test_a_category_filter_shows_exactly_its_keys'},
 
     {"name": "panel/texts: the editor box loses the current value",
      "path": 'app/templates/texts.html',
-     "old": 'aria-label="{{ r.key }}">\n{{ r.current }}</textarea>',
-     "new": 'aria-label="{{ r.key }}">\n</textarea>',
+     "old": 'data-tx>\n{{ r.current }}</textarea>',
+     "new": 'data-tx>\n</textarea>',
      "target": _TXT, "expect": "test_a_key_is_editable_with_its_current_value"},
 
     {"name": "panel/texts: search stops filtering",
      "path": "app/admin_web.py",
-     "old": "        if ql and ql not in key.lower() and ql not in default.lower() "
-            "and ql not in current.lower():\n            continue",
-     "new": "        if False:\n            continue",
+     "old": "        hit = (not ql or any(ql in _fold(x) for x in (key, default, current))) \\",
+     "new": "        hit = True \\",
      "target": _TXT,
      "expect": "test_the_search_narrows_the_list_to_what_matches"},
+
+    # ── /texts بی رفرش (۲۰۲۶-۱۰-۰۹): یکی به‌ازای هر قراردادی که `panel.js` رویش بنا شده ──
+    {"name": "panel/texts: a category filter no longer hides the other rows",
+     "path": "app/admin_web.py",
+     "old": '"shown": hit and cat in ("all", c),',
+     "new": '"shown": True,',
+     "target": _TXT, "expect": "test_a_category_filter_shows_exactly_its_keys"},
+
+    {"name": "panel/texts: the template drops the hidden attribute of a filtered row",
+     "path": "app/templates/texts.html",
+     "old": "{% if not r.shown %} hidden{% endif %}",
+     "new": "",
+     "target": _TXT, "expect": "test_a_category_filter_shows_exactly_its_keys"},
+
+    {"name": "panel/texts: a fetch save gets a redirect instead of JSON",
+     "path": "app/admin_web.py",
+     "old": '    if not as_json:\n        raise _result("/texts", ok="tx.saved.ok", **back)',
+     "new": '    if True:\n        raise _result("/texts", ok="tx.saved.ok", **back)',
+     "target": _TXI, "expect": "test_a_fetch_save_answers_with_the_saved_rows"},
+
+    {"name": "panel/texts: an expired session redirects a fetch to the login page",
+     "path": "app/admin_web.py",
+     "old": "    if as_json and not _session_admin(request):",
+     "new": "    if False and not _session_admin(request):",
+     "target": _TXI, "expect": "test_an_expired_session_gets_401_json_not_the_login_page"},
+
+    {"name": "panel/texts: a refusal no longer names its key",
+     "path": "app/admin_web.py",
+     "old": "        if err:\n            errors[key] = err",
+     "new": "        if err:\n            errors['_'] = err",
+     "target": _TXI, "expect": "test_a_refused_fetch_save_writes_nothing_and_names_each_key"},
+
+    {"name": "panel/texts: the refusal is Persian on an English panel again",
+     "path": "app/admin_web.py",
+     "old": "        err = textstore.validate(default, value, lang=ui)",
+     "new": "        err = textstore.validate(default, value)",
+     "target": _TXI, "expect": "test_the_refusal_speaks_the_panel_language"},
+
+    {"name": "panel/texts: a restore through save is logged as an edit",
+     "path": "app/admin_web.py",
+     "old": '            await _audit(request, "text_reset", target=clears[0] if len(clears) == 1 else "",',
+     "new": '            await _audit(request, "text_save", target=clears[0] if len(clears) == 1 else "",',
+     "target": _TXI, "expect": "test_restoring_through_save_clears_the_override_and_logs_a_reset"},
+
+    {"name": "panel/texts: a hook panel.js reads is renamed in the template",
+     "path": "app/templates/texts.html",
+     "old": '<div class="tx-def" data-tx-defbox>',
+     "new": '<div class="tx-def" data-txdefbox>',
+     "target": _TXI, "expect": "test_every_hook_the_texts_script_reads_is_rendered"},
+
+    {"name": "panel/texts: the row's pill drifts from the one panel.js clones",
+     "path": "app/templates/texts.html",
+     "old": "{% if r.edited %}{{ edited_pill() }}{% endif %}",
+     "new": "{% if r.edited %}<span class=\"pill tx-pill\" data-tx-pill>{{ t('tx.edited') }}</span>{% endif %}",
+     "target": _TXI, "expect": "test_the_template_row_parts_match_the_server_markup"},
+
+    {"name": "panel/texts: the server stops folding the zero-width non-joiner",
+     "path": "app/admin_web.py",
+     "old": '"\\u200c": None, "\\u200d": None,',
+     "new": '"\\u200d": None,',
+     "target": _TXI, "expect": "test_the_in_place_filter_folds_like_the_server"},
 
     {"name": "panel/buttons: the op rows render empty",
      "path": 'app/templates/buttons.html',
@@ -1975,10 +2038,22 @@ CASES: list[dict] = [
 
     {"name": "pagefacts: entities are expanded before tags are stripped",
      "path": "tests/panel/pagefacts.py",
-     "old": "    without_noise = _DROP.sub(\" \", html)",
-     "new": "    without_noise = _DROP.sub(\" \", _html.unescape(html))",
+     "old": "    without_noise = _DROP.sub(\" \", drop_hidden(html))",
+     "new": "    without_noise = _DROP.sub(\" \", _html.unescape(drop_hidden(html)))",
      "target": _PGF,
      "expect": "test_escaped_markup_the_page_shows_literally_survives"},
+
+    {"name": "pagefacts: a hidden subtree is read as visible text",
+     "path": "tests/panel/pagefacts.py",
+     "old": '    return "".join(p.out)',
+     "new": '    return html',
+     "target": _PGF, "expect": "test_a_fact_inside_a_hidden_subtree_is_reported_missing"},
+
+    {"name": "pagefacts: a nested element ends the hidden subtree early",
+     "path": "tests/panel/pagefacts.py",
+     "old": "            self.depth += tag == self.skip",
+     "new": "            self.depth += 0",
+     "target": _PGF, "expect": "test_a_fact_inside_a_hidden_subtree_is_reported_missing"},
 
     # ── فاز B: چندزبانه‌سازی از راهِ export/import ──────────────────
     # یکی به‌ازای هر قاعده‌ای که اگر بی‌صدا برگردد، خرابی‌اش **دیدنی نیست**.
@@ -2056,17 +2131,30 @@ CASES: list[dict] = [
 
     {"name": "textstore: the plain editor rule silently got stricter (reverse control)",
      "path": "app/textstore.py",
-     "old": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = False)",
-     "new": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = True)",
+     "old": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = False,",
+     "new": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = True,",
      "target": "tests/test_phase2a.py",
      "expect": None},   # قاعدهٔ پایه نباید از این تغییر خبردار شود…
 
     {"name": "textstore: …but the import rule must notice it",
      "path": "app/textstore.py",
-     "old": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = False)",
-     "new": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = True)",
+     "old": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = False,",
+     "new": "def validate(default_text: str, value: str, *, require_all_placeholders: bool = True,",
      "target": _LPK,
      "expect": "test_a_dropped_placeholder_is_refused_even_though_the_editor_allows_it"},
+
+    # پیامِ اعتبارسنجی به زبانِ پنل (۲۰۲۶-۱۰-۰۹)
+    {"name": "textstore: validation messages are Persian whatever the panel asks",
+     "path": "app/textstore.py",
+     "old": '    return (en if lang == "en" else fa).format(**kw)',
+     "new": '    return fa.format(**kw)',
+     "target": _TVL, "expect": "test_every_message_speaks_the_requested_language[tag]"},
+
+    {"name": "textstore: the default validation language is no longer Persian",
+     "path": "app/textstore.py",
+     "old": '             lang: str = "fa") -> str | None:',
+     "new": '             lang: str = "en") -> str | None:',
+     "target": _TVL, "expect": "test_the_default_language_is_still_persian"},
 
     {"name": "langpack: the placeholder contract comes from the catalog, not the source",
      "path": "app/langpack.py",
