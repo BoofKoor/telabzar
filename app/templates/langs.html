@@ -2,7 +2,7 @@
 {% import '_macros.html' as m with context %}
 {% block content %}
 <div class="page-h"><div><h1>{{ t('lng.title') }}</h1><div class="sub">{{ t('lng.sub', n=f.num(rows|length)) }}</div></div>
-  <div class="actions"><a class="btn btn-primary" href="/langs?dlg=lng-import" data-dialog="lng-import">{{ ic('plus') }}{{ t('lng.add') }}</a></div></div>
+  <div class="actions"><a class="btn btn-primary" href="/langs?dlg=lng-import" data-dialog="lng-import" data-fill-code="" data-fill-name="" data-fill-source="{{ default_lang }}">{{ ic('plus') }}{{ t('lng.add') }}</a></div></div>
 
 {% if error and dlg != 'lng-import' %}<div class="callout bad mb-20" role="alert">{{ ic('circle-alert') }}<div class="grow">{{ error }}</div></div>{% endif %}
 
@@ -20,7 +20,7 @@
       <td class="w-actions"><details class="dd"><summary class="icon-btn sm" aria-label="{{ t('c.more') }}">{{ ic('ellipsis-vertical') }}</summary>
         <div class="pop menu" role="menu">
           <a class="menu-item" href="/langs/export?lang={{ l.code|urlencode }}&amp;source={{ l.code|urlencode }}" download>{{ ic('download') }}{{ t('lng.export') }}</a>
-          <a class="menu-item" href="/langs?dlg=lng-import&amp;code={{ l.code|urlencode }}" data-dialog="lng-import" data-fill-code="{{ l.code }}" data-fill-name="{{ l.name }}">{{ ic('upload') }}{{ t('lng.import') }}</a>
+          <a class="menu-item" href="/langs?dlg=lng-import&amp;code={{ l.code|urlencode }}" data-dialog="lng-import" data-fill-code="{{ l.code }}" data-fill-name="{{ l.name }}" data-fill-source="{{ l.code }}">{{ ic('upload') }}{{ t('lng.import') }}</a>
           {% if not l.builtin %}<div class="menu-sep"></div>
           <form method="post" action="/langs/delete" data-confirm="{{ t('lng.del.q', n=f.iso(l.name)) }}" data-confirm-text="{{ t('lng.del.t', u=f.num(l.users)) }}" data-confirm-ok="{{ t('lng.delete') }}" data-danger>
             <input type="hidden" name="code" value="{{ l.code }}"><button class="menu-item danger" type="submit">{{ ic('trash-2') }}{{ t('lng.delete') }}</button></form>{% endif %}
@@ -31,9 +31,6 @@
 {% endblock %}
 
 {% block sheet %}
-{% set pre_row = rows|selectattr('code', 'equalto', pre)|first if pre else none %}
-{% set code_v = form.get('code') or (pre_row.code if pre_row else '') %}
-{% set name_v = form.get('name') or (pre_row.name if pre_row else '') %}
 <dialog class="dialog wide" id="lng-import" aria-labelledby="lng-t"{% if dlg == 'lng-import' %} open{% endif %}>
   <form method="post" action="/langs/import" enctype="multipart/form-data">
     <div class="dialog-h"><div><h3 id="lng-t">{{ t('lng.d.title') }}</h3><div class="sub">{{ t('lng.d.sub') }}</div></div><a class="icon-btn sm" href="/langs" data-close aria-label="{{ t('c.close') }}">{{ ic('x') }}</a></div>
@@ -46,7 +43,8 @@
 
       <div class="section-title" style="margin:4px 0 10px">{{ ic('download', 'ic-16') }}{{ t('lng.d.step1') }}</div>
       <div class="row wrap" style="gap:8px">
-        <select class="select" name="source" aria-label="{{ t('lng.d.source') }}" style="width:auto;min-width:160px">{% for code, name in langs.items() %}<option value="{{ code }}"{% if code == default_lang %} selected{% endif %}>{{ t('lng.d.from', l=name) }}</option>{% endfor %}</select>
+        {# مبدأ = خودِ همان زبان اگر وجود دارد (اصلاح، نه ترجمه از صفر)؛ panel.js با تایپِ کد همین قاعده را دنبال می‌کند. #}
+        <select class="select" name="source" aria-label="{{ t('lng.d.source') }}" style="width:auto;min-width:160px" data-fill="source" data-src-default="{{ default_lang }}">{% for code, name in langs.items() %}<option value="{{ code }}"{% if code == source_v %} selected{% endif %}>{{ t('lng.d.from', l=name) }}</option>{% endfor %}</select>
         <button class="btn btn-secondary" type="submit" formaction="/langs/export" formmethod="get" formnovalidate data-skip="pack,pack_file,mode,confirm">{{ ic('download') }}{{ t('lng.d.dl') }}</button>
       </div>
       <div class="help mt-8 fs-12 muted">{{ t('lng.d.step1.h') }}</div>
@@ -58,7 +56,7 @@
           <label class="btn btn-secondary btn-sm js-only" for="lg-f" aria-hidden="true">{{ ic('upload') }}{{ t('c.choose_file') }}</label>
           <span class="file-name trunc js-only" data-file-name="{{ t('c.no_file') }}" aria-hidden="true">{{ t('c.no_file') }}</span></div></div>
       <details class="more"{% if raw %} open{% endif %}><summary>{{ t('lng.d.paste') }} {{ ic('chevron-down', 'ic-16') }}</summary>
-        <div class="form-row mt-12"><textarea class="textarea ltr mono" name="pack" rows="6" spellcheck="false" placeholder='{"format": "telabzar-langpack", …}' aria-label="{{ t('lng.d.paste') }}">{{ raw }}</textarea></div>
+        <div class="form-row mt-12"><textarea class="textarea ltr mono" name="pack" rows="6" spellcheck="false" placeholder='{"telabzar_i18n": 1, "lang": "…", "texts": {"…": "…"}}' aria-label="{{ t('lng.d.paste') }}">{{ raw }}</textarea></div>
       </details>
       <div class="form-row mt-12" style="margin-bottom:0"><span class="fw-6" style="font-size:13.5px">{{ t('lng.d.mode') }}</span>
         <label class="check"><input type="radio" name="mode" value="merge"{% if not replace %} checked{% endif %}>{{ t('lng.d.merge') }}</label>
@@ -72,8 +70,9 @@
         {% if rv.missing %}<span class="muted row">{{ ic('circle-dashed', 'ic-16') }}{{ t('lng.d.missing.r' if replace else 'lng.d.missing', n=f.num(rv.missing|length)) }}</span>{% endif %}
         {% if rv.unknown %}<span class="muted row">{{ ic('circle-help', 'ic-16') }}{{ t('lng.d.unknown', n=f.num(rv.unknown|length)) }}</span>{% endif %}
         {% if rv.errors %}<span class="bad row">{{ ic('circle-alert', 'ic-16') }}{{ t('lng.d.err', n=f.num(rv.errors|length)) }} · {{ t('lng.d.nothing') }}</span>
-          <div class="codebox">{% for k, why in rv.errors[:30] %}{{ k }}: {{ why }}
-{% endfor %}{% if rv.errors|length > 30 %}…{% endif %}</div>{% endif %}
+          {# همه، نه سی‌تای اول: هر خطای پنهان یک دورِ دیگرِ رفت‌وبرگشت با ابزارِ ترجمه است. دلیل در <bdi>، تا متنِ فارسی در جعبهٔ چپ‌به‌راست جابه‌جا نشود. #}
+          <div class="codebox scroll" data-lng-errors>{% for k, why in rv.errors %}<div>{{ k }}: <bdi>{{ why }}</bdi></div>{% endfor %}</div>
+          <div class="row jsb wrap" style="gap:8px"><span class="muted fs-12">{{ t('lng.d.err.copy') }}</span><button class="btn btn-secondary btn-sm js-only" type="button" data-copy="{{ rv.errors_text }}">{{ ic('copy') }}{{ t('c.copy') }}</button></div>{% endif %}
       </div>
       {% if rv.ok and confirm == 'ask' %}
       <div class="callout warn mt-12">{{ ic('triangle-alert', 'ic-16') }}<div class="grow">{{ t('lng.d.confirm', c=f.num(rv.changed)) }}</div></div>

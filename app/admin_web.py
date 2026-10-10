@@ -2838,16 +2838,39 @@ async def _lang_rows(langs: dict[str, str]) -> list[dict]:
     return rows
 
 
+def _pack_source(raw: str, code: str, langs: dict[str, str]) -> str:
+    """زبانِ مبدأِ یک بسته — **یک قاعده** برای خروجی، ورودی و پیش‌فرضِ پنجره.
+
+    مبدأِ داده‌شده اگر زبانِ موجودی است همان؛ وگرنه **خودِ همان زبان** اگر وجود دارد،
+    وگرنه زبانِ پیش‌فرض. حالتِ میانی تمامِ ماجراست: کسی که می‌خواهد متن‌های انگلیسی را
+    عوض کند باید فایلِ **انگلیسی** بگیرد و فقط چند متن را ویرایش کند. تا ۲۰۲۶-۱۰-۱۰
+    پنجره همیشه از فارسی خروجی می‌داد، پس «اصلاحِ انگلیسی» یعنی ترجمهٔ دوبارهٔ هر ۲۸۰
+    متن از فارسی با یک چت‌بات — کند، و هر لغزش کلِ فایل را رد می‌کرد.
+    """
+    if raw in langs:
+        return raw
+    return code if code in langs else i18n_DEFAULT
+
+
 async def _langs_render(request: web.Request, *, error: str = "", review=None, raw: str = "",
                         replace: bool = False, confirm: str = "", form: dict | None = None,
                         dlg: str = "") -> web.Response:
     langs = await _languages()
     rows = await _lang_rows(langs)
+    form = form or {}
+    # مقدارهای پنجره: فرمِ ردشده مقدم است، بعد زبانی که پیوندِ ردیف (`?code=`) آورده.
+    pre = request.query.get("code") or ""
+    code_v = form.get("code") or (pre if pre in langs else "")
+    name_v = form.get("name") or langs.get(pre, "")
+    try:                                    # «EN» در فرمِ ردشده همان en است (panel.js هم بی‌اعتنا به حروف می‌سنجد)
+        canon = langpack.normalize_code(code_v)
+    except langpack.PackError:
+        canon = code_v
     return await _page(request, "langs", "langs", rows=rows, langs=langs, default_lang=i18n_DEFAULT,
                        total=len(langpack.TEXT_KEYS), rv=review, raw=raw, replace=replace,
-                       confirm=confirm, error=error, form=form or {},
-                       dlg=dlg or (request.query.get("dlg") or ""),
-                       pre=request.query.get("code") or "")
+                       confirm=confirm, error=error, code_v=code_v, name_v=name_v,
+                       source_v=_pack_source("", canon, langs),
+                       dlg=dlg or (request.query.get("dlg") or ""))
 
 
 async def langs_page(request: web.Request) -> web.Response:
@@ -2866,9 +2889,7 @@ async def langs_export(request: web.Request) -> web.Response:
         code = langpack.normalize_code(request.query.get("lang", ""))
     except langpack.PackError as exc:
         return await _langs_render(request, error=str(exc) or pt(ui, "lng.err.code"))
-    source = request.query.get("source", "") or i18n_DEFAULT
-    if source not in langs:
-        source = i18n_DEFAULT
+    source = _pack_source(request.query.get("source", ""), code, langs)
     name = (request.query.get("name", "") or "").strip()[:64] or langs.get(code) or code
     pack = langpack.build_pack(
         lang=code, name=name, source=source,
@@ -2906,19 +2927,25 @@ async def langs_import(request: web.Request) -> web.Response:
     try:
         raw = await _read_pack(form)
         pack = langpack.parse_pack(raw)
-        code = langpack.normalize_code(str(form.get("lang") or "") or pack.get("lang") or "")
+        in_file = str(pack.get("lang") or "").strip()
+        code = langpack.normalize_code(str(form.get("lang") or "") or in_file)
         # کدِ فرم حاکم است و کدِ داخلِ فایل فقط **مقایسه** می‌شود: ابزارِ ترجمه
         # می‌تواند `"lang"` را بی‌خبر عوض کند و ترجمه زیرِ زبانِ اشتباه بنشیند.
-        in_file = str(pack.get("lang") or "")
+        # بسته‌ای که پاکتش افتاده `lang` ندارد، و آن‌وقت فقط کدِ فرم هست.
         if in_file and langpack.normalize_code(in_file) != code:
             raise langpack.PackError(
-                f"کدِ زبانِ داخلِ فایل («{in_file}») با کدِ فرم («{code}») یکی نیست.")
+                f"کدِ زبانِ داخلِ فایل («{in_file}») با کدِ فرم («{code}») یکی نیست. "
+                f"اگر این فایل را عمداً برای «{code}» آماده کرده‌ای، در فایل مقدارِ \"lang\" را "
+                f"\"{code}\" کن؛ وگرنه کدِ فرم را درست کن.")
     except langpack.PackError as exc:
         return await _langs_render(request, error=str(exc), raw=raw, replace=replace, form=fvals,
                                    dlg="lng-import")
     name = (fvals["name"].strip() or str(pack.get("name") or "").strip() or langs.get(code) or code)[:64]
     fvals = {"code": code, "name": name}
-    source = str(pack.get("source") or i18n_DEFAULT)
+    # همان قاعدهٔ خروجی: مبدأِ نامعتبر یا غایب (بسته‌ای که پاکتش افتاده) → خودِ همان زبان
+    # اگر هست. قراردادِ placeholder از همین مبدأ می‌آید (`review`).
+    source = _pack_source(str(pack.get("source") or ""), code, langs)
+    pack["source"] = source
     rv = langpack.review(
         pack,
         source_texts=langpack.effective_texts(source, textstore.lang_texts(source)),

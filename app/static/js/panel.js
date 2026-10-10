@@ -809,6 +809,27 @@
     sync();
   }
 
+  /* ── languages: the import dialog's source language follows the code ──
+     Same rule as admin_web._pack_source: a language that already exists is exported from
+     itself (edit it, don't re-translate all of it from Persian); a new code goes back to
+     the default. A source the admin picked by hand wins until the dialog is opened again. */
+  function mountLangs(r) {
+    $$('#lng-import', r).forEach((d) => {
+      const code = $('input[data-fill="code"]', d), src = $('select[data-fill="source"]', d);
+      if (!code || !src) return;
+      // only a person changes it: the row-menu fill sets `.value`, which fires no event
+      src.addEventListener('change', () => { src._manual = true; });
+      // a row menu or «add language» refills the dialog: it starts fresh
+      doc.addEventListener('click', (e) => { if (e.target.closest('[data-dialog="lng-import"]')) src._manual = false; });
+      code.addEventListener('input', () => {
+        if (src._manual) return;
+        const v = code.value.trim().toLowerCase();
+        const own = Array.from(src.options).find((o) => o.value.toLowerCase() === v);
+        src.value = own ? own.value : (src.dataset.srcDefault || src.value);
+      });
+    });
+  }
+
   /* ── sign-in code: six boxes write into the real `code` field ── */
   function mountLogin(r) {
     const form = $('#lg-code', r);
@@ -1005,6 +1026,7 @@
     mountSettings(r);
     mountTexts(r);
     mountButtons(r);
+    mountLangs(r);
     mountLogin(r);
   }
   function boot() {

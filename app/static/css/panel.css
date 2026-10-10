@@ -371,6 +371,8 @@ kbd{font:500 12px/1 var(--font);color:var(--muted);border:1px solid var(--border
 .kv dt{color:var(--muted)}
 .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .codebox{font-family:var(--mono);font-size:12.5px;line-height:1.6;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;direction:ltr;text-align:left;overflow-wrap:anywhere;white-space:pre-wrap;color:var(--ink-2)}
+/* a long list (every rejected key of a language file) scrolls instead of stretching the dialog */
+.codebox.scroll{max-height:240px;overflow:auto}
 .toast-wrap{position:fixed;z-index:100;bottom:calc(24px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
 .toast{display:flex;align-items:center;gap:10px;background:var(--toast-bg);color:#fff;border-radius:12px;padding:11px 16px;font-size:13.5px;box-shadow:var(--shadow-lg);animation:pop .16s ease;pointer-events:auto}
 .toast .ic{color:#4ade80}
