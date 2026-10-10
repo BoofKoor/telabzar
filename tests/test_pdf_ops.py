@@ -17,14 +17,17 @@ import pytest_asyncio
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Chat, Document, Message
+from aiogram.types import CallbackQuery, Chat, Document, Message
+from aiogram.types import User as TgUser
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app import pagespec
 from app import processing as P
 from app import tasks as T
 from app.exceptions import ProcessingCancelled, UserFacingError
+from app.callbacks import Act, Conv
 from app.i18n import t
+from app.keyboards import CONVERT_FORMATS, OPS_BY_KIND, convert_menu_kb, file_card_kb
 from app.models import Base, File, Job, User
 from app.routers import ops
 from app.states import Collect, PdfPages, PdfPassword
@@ -556,3 +559,55 @@ async def test_merge_order_is_the_send_order_not_the_arrival_order(router_env):
     await ops.collect_recv(_doc_msg(bot, 31, "second"), state, session, "fa", user)
     names = [m["file_id"] for m in (await state.get_data())["members"]]
     assert names == ["f", "d-second", "d-third"]
+
+
+# ── PDF → Word: دکمهٔ مستقیم ─────────────────────────────────────
+def _cq(bot, data: str) -> CallbackQuery:
+    msg = Message(message_id=9, date=datetime.now(timezone.utc),
+                  chat=Chat(id=CHAT, type="private"), text="card").as_(bot)
+    return CallbackQuery(id="cb1", from_user=TgUser(id=777, is_bot=False, first_name="u"),
+                         chat_instance="ci", data=data, message=msg).as_(bot)
+
+
+def test_word_is_the_first_full_width_button_of_a_pdf_card():
+    """گزارشِ کاربر: «تبدیل پی دی اف به ورد نداریم» — زیرِ «تبدیل» پنهان بود."""
+    kb = file_card_kb("PdfRout1", "pdf", "fa")
+    first_row = kb.inline_keyboard[0]
+    assert len(first_row) == 1
+    assert first_row[0].callback_data == Act(op="to_word", ref="PdfRout1").pack()
+    # ادعای لفظی، جدا از جدول: برچسب باید بگوید «ورد» — نه فقط از کاتالوگ بیاید
+    assert "ورد" in first_row[0].text
+    assert "Word" in t("en", OPS_BY_KIND["pdf"][0][1])
+
+
+def test_the_convert_submenu_no_longer_repeats_word():
+    texts = [b.text for row in convert_menu_kb("PdfRout1", "pdf", "fa").inline_keyboard for b in row]
+    assert not any("ورد" in x for x in texts), texts
+    assert "docx" not in CONVERT_FORMATS["pdf"]
+    assert "ورد" not in t("fa", "btn_pdf_convert")
+
+
+async def test_the_word_button_queues_a_docx_conversion(router_env, redis):
+    session, user, f, state, notes, jobs = router_env
+    bot = RouterBot()
+    await ops.op_to_word(_cq(bot, Act(op="to_word", ref=f.ref).pack()), Act(op="to_word", ref=f.ref),
+                         session, "fa", redis, user)
+    assert jobs == [{"op": "convert", "target": "docx"}]
+
+
+async def test_the_word_button_refuses_a_file_that_is_not_a_pdf(router_env, redis):
+    session, user, f, state, notes, jobs = router_env
+    f.kind = "document"
+    bot = RouterBot()
+    await ops.op_to_word(_cq(bot, Act(op="to_word", ref=f.ref).pack()), Act(op="to_word", ref=f.ref),
+                         session, "fa", redis, user)
+    assert not jobs and "answer_callback_query" in bot.calls
+
+
+async def test_an_old_word_pick_from_a_menu_in_flight_still_works(router_env, redis):
+    """منوی تبدیلی که پیش از استقرار باز بوده هنوز `Conv(fmt="docx")` دارد."""
+    session, user, f, state, notes, jobs = router_env
+    bot = RouterBot()
+    await ops.op_convert_pick(_cq(bot, Conv(ref=f.ref, fmt="docx").pack()), Conv(ref=f.ref, fmt="docx"),
+                              session, "fa", redis, user)
+    assert jobs == [{"op": "convert", "target": "docx"}]

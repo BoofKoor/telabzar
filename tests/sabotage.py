@@ -3817,6 +3817,40 @@ CASES: list[dict] = [
      'new': '        await state.update_data(members=members)',
      'target': 'tests/test_pdf_ops.py',
      'expect': 'test_merge_order_is_the_send_order_not_the_arrival_order'},
+
+    # ── PDF → Word: دکمهٔ مستقیم (۲۰۲۶-۱۰-۱۰) ──
+    {'name': 'pdf: the Word button disappears from the PDF card',
+     'path': 'app/keyboards.py',
+     'old': '        ("to_word", "fmt_pdf_docx"),\n',
+     'new': '',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_word_is_the_first_full_width_button_of_a_pdf_card'},
+
+    {'name': 'pdf: the Word button shares a row instead of standing on top',
+     'path': 'app/keyboards.py',
+     'old': 'FEATURED_TOP = {"audio", "video", "image", "pdf"}',
+     'new': 'FEATURED_TOP = {"audio", "video", "image"}',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_word_is_the_first_full_width_button_of_a_pdf_card'},
+
+    {'name': 'pdf: the Word button queues a text conversion',
+     'path': 'app/routers/ops.py',
+     'old': '"convert", {"target": "docx"}, user)',
+     'new': '"convert", {"target": "txt"}, user)',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_the_word_button_queues_a_docx_conversion'},
+
+    {'name': 'pdf: the Word button converts a file that is not a PDF',
+     'path': 'app/routers/ops.py',
+     'old': '    if file.kind != "pdf":\n        await cq.answer(t(lang, "coming_soon"), show_alert=True)\n'
+            '        return\n    if await _too_large(file.size):\n'
+            '        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)\n'
+            '        return\n    await _start(cq, file, lang, arq_pool, session, "convert", {"target": "docx"}',
+     'new': '    if await _too_large(file.size):\n'
+            '        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)\n'
+            '        return\n    await _start(cq, file, lang, arq_pool, session, "convert", {"target": "docx"}',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_the_word_button_refuses_a_file_that_is_not_a_pdf'},
 ]
 
 

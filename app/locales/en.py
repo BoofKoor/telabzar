@@ -291,7 +291,7 @@ MESSAGES: dict[str, str] = {
     "limit_rate": "A bit too fast! Please wait a moment ⏳",
     "limit_quota": "You've hit today's operation limit. Try again tomorrow.",
     # PDF tools
-    "btn_pdf_convert": "🔄 Convert (Word, text, images)",
+    "btn_pdf_convert": "🔄 Convert to text or images",
     "btn_pdf_pages": "📑 Pages",
     "btn_pdf_pw": "🔐 Password",
     "btn_pdf_c_normal": "🗜 Normal — good quality",
@@ -305,7 +305,7 @@ MESSAGES: dict[str, str] = {
     "btn_pdf_lock": "🔒 Add a password",
     "btn_pdf_unlock": "🔓 Remove the password",
     "btn_img_pdf_fit": "🖼 PDF at photo size",
-    "fmt_pdf_docx": "📝 Word (DOCX)",
+    "fmt_pdf_docx": "📝 Convert to Word",
     "fmt_pdf_txt": "📃 Text (TXT)",
     "fmt_pdf_jpg": "🖼 Page images (JPG)",
     "fmt_pdf_png": "🖼 Page images (PNG)",
