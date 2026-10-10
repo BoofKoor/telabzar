@@ -21,7 +21,8 @@
 ماژول وصله می‌زند، و همان کار این‌جا انجام می‌شود.
 
 فهرستِ ماژول‌ها **اندازه‌گیری شده** است، نه حدس: با importِ `app.admin_web` و
-پیمایشِ `sys.modules` دقیقاً پنج ماژول نامِ `Sessionmaker` را نگه می‌دارند.
+پیمایشِ `sys.modules` همین ماژول‌ها نامِ `Sessionmaker` را نگه می‌دارند (عدد عمداً این‌جا
+نوشته نمی‌شود — متنِ قبلی «پنج» می‌گفت در حالی که فهرست شش‌تایی بود).
 `_SESSIONMAKER_HOLDERS` همان‌هاست و `test_the_sessionmaker_holder_list_is_complete`
 (در `tests/panel/test_panel_harness.py`) با همان پیمایش نگه‌داری‌اش می‌کند — پس
 اگر ماژولِ پنجمی اضافه شود، تست می‌افتد نه اینکه بی‌صدا به Postgres وصل شود.
@@ -38,8 +39,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 #: ماژول‌هایی که سرِ import نامِ `Sessionmaker` را به فضای نامِ خودشان می‌آورند.
 #: اندازه‌گیری‌شده، نه دستی — تستِ همراهش همین را ثابت می‌کند.
+#: `app.dl_events` و `app.history` را پنل خودش import نمی‌کند؛ fixtureهای خودکارِ
+#: `tests/conftest.py` (`dl_event_rows`، `history_rows`) در **هر** تستی بارشان می‌کنند.
 _SESSIONMAKER_HOLDERS = ("app.db", "app.admin_web", "app.settings_store", "app.textstore",
-                         "app.panel_data", "app.dl_events")
+                         "app.panel_data", "app.dl_events", "app.history")
 
 #: شناسهٔ ادمینِ تست. `settings.admin_id_set` یک propertyِ **فقط‌خواندنی** است
 #: (`app/config.py:181`) و مشتق از `admin_ids`، پس باید فیلدِ زیرین ست شود.

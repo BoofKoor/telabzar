@@ -70,6 +70,7 @@ from .panel_i18n import LANGS as PANEL_LANGS
 from .panel_i18n import STRINGS as _PANEL_STRINGS
 from .panel_i18n import normalize_lang, normalize_theme, pt
 from .settings_store import ENUM_VALUES, RUNTIME_KEYS
+from .textfold import fold
 
 log = logging.getLogger("telabzar.admin")
 
@@ -2482,14 +2483,9 @@ def _text_cat(key: str) -> str:
 
 
 #: شکلِ جست‌وجوپذیرِ متن — **همان** قاعده‌ای که `fold`ِ `panel.js` دارد، تا فیلترِ
-#: سمتِ سرور (بی‌JS) و فیلترِ درجا یک جواب بدهند: حروفِ کوچک، «ي/ى/ك»ِ عربی →
-#: «ی/ک»ِ فارسی، و بی‌نیم‌فاصله و نشانهٔ جهت — وگرنه «میشود» «می‌شود» را پیدا نمی‌کرد.
-_FOLD = str.maketrans({"\u064a": "\u06cc", "\u0649": "\u06cc", "\u0643": "\u06a9",
-                       "\u200c": None, "\u200d": None, "\u200e": None, "\u200f": None})
-
-
-def _fold(s: str) -> str:
-    return s.lower().translate(_FOLD)
+#: سمتِ سرور (بی‌JS) و فیلترِ درجا یک جواب بدهند. خودِ قاعده در `app/textfold.py` است،
+#: چون جست‌وجوی تاریخچهٔ ربات هم همان را لازم دارد و ربات `admin_web` را import نمی‌کند.
+_fold = fold
 
 
 def _texts_rows(lang: str, q: str, cat: str, edited_only: bool) -> tuple[list[dict], dict[str, int]]:

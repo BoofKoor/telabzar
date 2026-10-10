@@ -11,7 +11,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 from .config import settings
 from .db import Sessionmaker
 from .middlewares import DataMiddleware
-from .routers import admin, download, files, ops, start
+from .routers import admin, download, files, history, ops, start
 
 
 def create_bot(request_timeout: float = 60.0) -> Bot:
@@ -44,6 +44,10 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(ops.router)
+    # history پیش از download و files: لینکی که وسطِ جست‌وجوی تاریخچه فرستاده شود اول
+    # حالتِ جست‌وجو را پاک می‌کند و بعد با SkipHandler به download می‌رسد (وگرنه حالت
+    # می‌ماند و پیامِ بعدی «جست‌وجو» می‌شد)، و `files.fallback` هر پیامی را برمی‌دارد.
+    dp.include_router(history.router)
     dp.include_router(download.router)
     dp.include_router(files.router)
 

@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
     func,
@@ -76,6 +77,59 @@ class File(Base):
     # پلتفرمِ مبدأ برای فایلِ دانلودی (youtube/instagram/…). شمارنده‌های Redis فقط ۲ روز
     # عمر دارند، پس بدونِ این ستون آمارِ تاریخیِ «کدام پلتفرم» ساخته نمی‌شود.
     platform: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # ── تاریخچهٔ کاربر (۲۰۲۶-۱۰-۱۰، `app/history.py`) ─────────────────────
+    #: کاربر این مورد را «از تاریخچه حذف کرد» — **نرم**، تا کارتی که در چت دارد هنوز
+    #: کار کند (`get_file_by_ref` عمداً به این ستون نگاه نمی‌کند). همین ستون آپلودی را
+    #: هم که هنوز از فیلترِ محتوا رد نشده پنهان نگه می‌دارد (`routers/files.py` →
+    #: `tasks.run_screen`): تاریخچه فقط چیزی را نشان می‌دهد که ربات **قبلاً فرستاده**.
+    hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: نشانِ «⭐» کاربر؛ در گروه روی همهٔ اعضا با هم.
+    starred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: فایل‌هایی که **با هم** رسیدند (کاروسل، آلبوم، چند خروجیِ یک عملیات) یک
+    #: `group_ref` دارند و در تاریخچه یک مورد‌اند. از مالک و اعضا مشتق می‌شود
+    #: (`history.group_ref_for`)، پس همان آلبوم که دوباره از کش برسد ردیفِ تکراری نمی‌سازد.
+    group_ref: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
+    #: لینکی که فایلِ دانلودی از آن آمد — فقط برای نمایش در تاریخچه.
+    source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    #: آخرین باری که این فایل **عوض شد یا دوباره رسید** (عملیاتِ درجا، آلبومِ تکراری).
+    #: ترتیبِ تاریخچه `last_at` و در نبودش `created_at` است. `created_at` عمداً دست
+    #: نمی‌خورد: آمارِ روزانهٔ پنل روی همان سوار است.
+    last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # تاریخچه همیشه «فایل‌های همین کاربر، تازه‌ترین اول» را می‌خواهد.
+    __table_args__ = (Index("ix_files_owner_created", "owner_id", "created_at"),)
+
+
+class FileVersion(Base):
+    """نسخهٔ **قبلیِ** یک فایل، درست پیش از اینکه یک عملیاتِ درجا آن را عوض کند.
+
+    عملیاتِ درجا (کاهش حجم، تبدیل، برش، تغییرِ نام، …) `File.file_id` را با خروجی
+    بازنویسی می‌کند، و پیامِ آپلودیِ کاربر هم پاک شده است — پس بی این جدول فایلِ
+    اصلی برای همیشه از دست می‌رفت. هر ردیف فقط `file_id`ِ تلگرام و چند فیلدِ نمایشی
+    است، پس بی‌هزینه است. `label` = آخرین کارِ انجام‌شده روی همان نسخه (`None` یعنی
+    فایلِ اصل)، و `changelog` همان فهرست تا آن لحظه، تا نسخهٔ بازگردانده کپشنِ
+    درستی داشته باشد.
+    """
+
+    __tablename__ = "file_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    parent_id: Mapped[int] = mapped_column(ForeignKey("files.id"), index=True)
+    file_id: Mapped[str] = mapped_column(String(256))
+    file_unique_id: Mapped[str] = mapped_column(String(64), default="")
+    kind: Mapped[str] = mapped_column(String(16))
+    mime: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    width: Mapped[int | None] = mapped_column(nullable=True)
+    height: Mapped[int | None] = mapped_column(nullable=True)
+    duration: Mapped[int | None] = mapped_column(nullable=True)
+    label: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    changelog: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -96,6 +96,7 @@ CONVERTIBLE = set(CONVERT_FORMATS)
 # `(مقصدِ Nav, کلیدِ برچسب)` است و هر دو ساز‌ندهٔ زیر روی همین‌ها حلقه می‌زنند.
 # کلیدِ برچسب باید در **هر دو** کاتالوگ باشد (گاردِ `tests/test_locale_parity`).
 HOME_ITEMS: tuple[tuple[str, str], ...] = (
+    ("history", "btn_history"),
     ("settings", "btn_settings"),
     ("help", "btn_help"),
 )

@@ -212,7 +212,7 @@ async def test_a_user_who_already_chose_is_never_asked_again(
 
     payload = bot._last("send_message")
     assert payload["text"] == EN["welcome"]
-    assert [cb for _t, cb in bot.buttons("send_message")] == ["nv:settings", "nv:help"]
+    assert [cb for _t, cb in bot.buttons("send_message")] == ["nv:history", "nv:settings", "nv:help"]
     assert not any(cb.startswith("lang:") for _t, cb in bot.buttons("send_message"))
 
 
@@ -234,6 +234,8 @@ async def test_a_user_with_no_language_yet_is_asked(session, no_added_langs):
 async def test_the_welcome_screen_offers_settings_and_help(
         session, no_added_langs):
     """قراردادِ امروز، با هدفِ **لفظی** — عمداً از `HOME_ITEMS` مشتق نمی‌شود.
+    (از ۲۰۲۶-۱۰-۱۰ «🗂 تاریخچه» اولین کلید است؛ نامِ تست عوض نشد چون دفترچهٔ
+    سابوتاژ با همین نام به آن اشاره می‌کند.)
 
     سابوتاژ این را نشان داد و ارزشش از خودِ تست بیشتر بود: تستِ زیر انتظارش
     را از همان فهرستی می‌سازد که سابوتاژ ویرایش می‌کند، پس با حذفِ یک آیتم
@@ -251,6 +253,7 @@ async def test_the_welcome_screen_offers_settings_and_help(
     await cmd_start(_msg(bot), user, "fa")
 
     assert bot.buttons("send_message") == [
+        (FA["btn_history"], "nv:history"),
         (FA["btn_settings"], "nv:settings"),
         (FA["btn_help"], "nv:help"),
     ]
@@ -311,7 +314,7 @@ async def test_back_from_settings_returns_to_the_welcome_screen(
     await navigate(_cq(bot, "nv:home"), Nav(to="home"), user, "fa")
 
     assert bot._last("edit_message_text")["text"] == FA["welcome"]
-    assert [cb for _t, cb in bot.buttons("edit_message_text")] == ["nv:settings", "nv:help"]
+    assert [cb for _t, cb in bot.buttons("edit_message_text")] == ["nv:history", "nv:settings", "nv:help"]
 
 
 async def test_the_settings_language_menu_ticks_the_current_language(
@@ -354,7 +357,7 @@ async def test_the_first_ever_choice_lands_on_the_welcome_screen(
     await choose_lang(_cq(bot, "lang:en"), Lang(code="en"), session, user)
 
     assert bot._last("edit_message_text")["text"] == EN["welcome"]
-    assert [cb for _t, cb in bot.buttons("edit_message_text")] == ["nv:settings", "nv:help"]
+    assert [cb for _t, cb in bot.buttons("edit_message_text")] == ["nv:history", "nv:settings", "nv:help"]
 
 
 async def test_no_language_set_toast_is_sent_any_more(session, added_langs):
@@ -402,7 +405,7 @@ async def test_a_user_pinned_to_a_deleted_language_can_still_reach_settings(
     await session.flush()
 
     await cmd_start(_msg(bot), user, "es")
-    assert [cb for _t, cb in bot.buttons("send_message")] == ["nv:settings", "nv:help"]
+    assert [cb for _t, cb in bot.buttons("send_message")] == ["nv:history", "nv:settings", "nv:help"]
 
     await navigate(_cq(bot, "nv:lang"), Nav(to="lang"), user, "es")
     codes = [cb for _t, cb in bot.buttons("edit_message_text")]

@@ -34,6 +34,7 @@ _METHOD_MODEL = {
     "send_audio": methods.SendAudio,
     "send_animation": methods.SendAnimation,
     "send_media_group": methods.SendMediaGroup,
+    "send_rich_message": methods.SendRichMessage,
     "edit_message_text": methods.EditMessageText,
     "edit_message_caption": methods.EditMessageCaption,
     "edit_message_media": methods.EditMessageMedia,
@@ -113,6 +114,9 @@ class ValidatingBot:
 
     async def send_media_group(self, *a, **kw):
         return self._on("send_media_group", bind_like_aiogram("send_media_group", a, kw))
+
+    async def send_rich_message(self, *a, **kw):
+        return self._on("send_rich_message", bind_like_aiogram("send_rich_message", a, kw))
 
     # ── مسیرِ دومِ aiogram: متدهای «چسبیده به شیء» ────────────────────
     # `cq.answer()` و `msg.edit_text()` مستقیم روی بات صدا زده نمی‌شوند؛ aiogram

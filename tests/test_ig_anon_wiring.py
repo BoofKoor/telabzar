@@ -189,10 +189,10 @@ def delivered(monkeypatch):
     async def _spawn(bot, chat_id, owner_id, path, name, kind, info, lang, **kw):
         out.append(("spawn", path, kind, kw.get("post_caption")))
 
-    async def _rich(bot, chat_id, owner_id, media_paths, caption, lang):
+    async def _rich(bot, chat_id, owner_id, media_paths, caption, lang, **kw):
         out.append(("rich", list(media_paths), caption))
 
-    async def _album(bot, chat_id, owner_id, media_paths, caption, lang):
+    async def _album(bot, chat_id, owner_id, media_paths, caption, lang, **kw):
         out.append(("album", list(media_paths), caption))
         return [], None          # (آیتم‌های رسیده, خطا) — همان قراردادِ `_deliver_album`
 

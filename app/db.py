@@ -75,6 +75,17 @@ _MIGRATIONS = [
     # Postgres 11+ catalog-only‌اند (بدونِ بازنویسیِ جدول) — هم‌ردهٔ ADD COLUMNهای بالا.
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(64)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(128)",
+    # تاریخچهٔ کاربر (۲۰۲۶-۱۰-۱۰). همه nullable و بی‌پیش‌فرض، پس catalog-only —
+    # هم‌ردهٔ ADD COLUMNهای بالا. جدولِ `file_versions` تازه است و `create_all` می‌سازدش.
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMPTZ",
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS starred_at TIMESTAMPTZ",
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS group_ref VARCHAR(12)",
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS source_url VARCHAR(1024)",
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS last_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS ix_files_group_ref ON files (group_ref)",
+    # فهرستِ تاریخچه «فایل‌های همین کاربر، تازه‌ترین اول» است؛ ایندکسِ تک‌ستونیِ
+    # `owner_id` مرتب‌سازی را نمی‌دهد. `create_all` ایندکسِ جدولِ **موجود** را نمی‌سازد.
+    "CREATE INDEX IF NOT EXISTS ix_files_owner_created ON files (owner_id, created_at)",
 ]
 
 

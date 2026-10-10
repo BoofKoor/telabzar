@@ -11,6 +11,7 @@ MESSAGES: dict[str, str] = {
     # Kept although nothing consumes it any more — see the note in fa.py.
     "language_set": "Language set to English ✅",
     # user menus (welcome / settings / help)
+    "btn_history": "🗂 File history",
     "btn_settings": "⚙️ Settings",
     "btn_help": "📘 How to use",
     "btn_change_language": "🌐 Change language",
@@ -33,7 +34,11 @@ MESSAGES: dict[str, str] = {
         "card and the same menu.\n\n"
         "💡 For big files I also make a download and streaming link.\n\n"
         "<b>4) Several files at once</b>\n"
-        "Tap “Zip” or “Merge” and send the rest."
+        "Tap “Zip” or “Merge” and send the rest.\n\n"
+        "<b>5) History</b>\n"
+        "Every file you sent or received stays in “🗂 File history” — sorted "
+        "by type, searchable and starrable. I’ll send it to you again any "
+        "time, and if you worked on it, its earlier version is there too."
     ),
     # file card
     "detected_document": "🗎 <b>Document</b> detected\n<code>{name}</code> · {size}\nWhat should I do?",
@@ -348,4 +353,69 @@ MESSAGES: dict[str, str] = {
     "office_failed": "⚠️ This document could not be opened — it may be damaged or in an unsupported format.",
     "to_pdf_unsupported": "⚠️ A “{ext}” file can't be converted to PDF. Word, Excel, PowerPoint, text, HTML and OpenDocument files are supported.",
     "to_pdf_empty": "📭 This text file is empty.",
+    # ── file history (`app/routers/history.py`) ──
+    "hist_title": "🗂 <b>File history</b>",
+    "hist_summary": "{files} files · {size}\nLatest: {last}",
+    "hist_capped": "ℹ️ Only your latest {n} files are counted.",
+    "hist_pick": "Pick a category:",
+    "hist_empty": (
+        "🗂 <b>Your history is empty for now.</b>\n\n"
+        "Every file you send, download from a link or work on stays here — "
+        "sorted by type, and I’ll send it to you again whenever you want."
+    ),
+    "hist_cat_all": "🕘 All",
+    "hist_cat_star": "⭐ Starred",
+    "hist_cat_album": "📚 Albums",
+    "hist_cat_link": "🔗 Downloads",
+    "hist_cat_video": "🎬 Videos",
+    "hist_cat_audio": "🎵 Audio",
+    "hist_cat_image": "🖼 Images",
+    "hist_cat_pdf": "📕 PDFs",
+    "hist_cat_document": "🗎 Documents",
+    "hist_cat_archive": "🗜 Archives",
+    "hist_cat_app": "📦 Apps",
+    "hist_cat_search": "🔎 “{q}”",
+    "hist_list_head": "{title}\n<i>{n} items · page {page} of {pages}</i>",
+    "hist_list_empty": "{title}\n\nNothing here.",
+    "hist_btn_prev": "‹ Prev",
+    "hist_btn_next": "Next ›",
+    "hist_btn_cats": "‹ Categories",
+    "hist_btn_search": "🔎 Search",
+    "hist_btn_clear": "🧹 Clear history",
+    "hist_btn_cancel": "✕ Cancel",
+    "hist_search_prompt": "🔎 Send part of a file name or of a post’s text:",
+    "hist_search_short": "Send at least {n} characters.",
+    "hist_search_none": "🔎 Nothing matches “{q}”.",
+    "hist_search_expired": "⌛ This search has expired — search again.",
+    "hist_group_n": "{n} items",
+    "hist_group_hint": "Tap one and I’ll send it on its own.",
+    "hist_src_upload": "📤 You sent it",
+    "hist_src_dl": "🔗 Downloaded from {platform}",
+    "hist_src_op": "🛠 Made by an operation",
+    "hist_source_link": "Original link",
+    "hist_ops_done": "🛠 Done: {ops}",
+    "hist_btn_send": "📤 Send it again",
+    "hist_btn_send_all": "📤 Send them all again",
+    "hist_btn_star": "⭐ Star",
+    "hist_btn_unstar": "☆ Unstar",
+    "hist_btn_hide": "🗑 Remove",
+    "hist_btn_versions": "🗂 Earlier versions ({n})",
+    "hist_confirm_hide": "🗑 Remove this from your history?\n\nThe files already in this chat stay as they are.",
+    "hist_btn_yes_hide": "🗑 Yes, remove",
+    "hist_btn_no": "‹ No",
+    "hist_confirm_clear": (
+        "🧹 <b>Clear your whole history?</b>\n\n"
+        "The files already in this chat stay; they just leave this list."
+    ),
+    "hist_btn_yes_clear": "🧹 Yes, clear it all",
+    "hist_cleared": "🧹 History cleared.",
+    "hist_hidden": "🗑 Removed from history.",
+    "hist_starred": "⭐ Starred.",
+    "hist_unstarred": "Unstarred.",
+    "hist_sent": "📤 Sent.",
+    "hist_send_failed": "⚠️ Telegram no longer serves this file.",
+    "hist_missing": "This item is no longer in your history.",
+    "hist_versions_title": "🗂 <b>Earlier versions of</b> {name}\n\nTap one and I’ll send it as a new card.",
+    "hist_version_original": "📄 Original file",
+    "hist_restored": "📤 Sent that version.",
 }

@@ -33,6 +33,7 @@ from . import dl_active
 from . import dl_events as EV
 from . import dl_cache
 from . import downloader as D
+from . import history as H
 from . import instagram_anon as IGA
 from . import probe_stats as PS
 from . import processing as P
@@ -576,7 +577,8 @@ _ALBUM_VID = (".mp4", ".mov", ".webm", ".mkv", ".m4v")
 
 
 async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str],
-                         caption: str | None, lang: str) -> tuple[list[dict], str | None]:
+                         caption: str | None, lang: str, *, platform: str | None = None,
+                         source_url: str | None = None) -> tuple[list[dict], str | None]:
     """پستِ چند‌تاییِ گالری (کاروسلِ اینستاگرام) → آلبومِ سوایپ‌شدنیِ تلگرام.
 
     کپشنِ پست (بدونِ هشتگ) روی آیتمِ اول؛ عکس و ویدیو در همان آلبوم؛ بدونِ دکمه/کارت
@@ -596,11 +598,13 @@ async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str]
         for p in media:
             kind = "video" if p.lower().endswith(_ALBUM_VID) else "image"
             err = await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
-                               kind, {}, lang) or err
+                               kind, {}, lang, platform=platform,
+                               source_url=source_url) or err
         return [], err
     cap_text = D.clean_caption(caption)  # تضمینِ بدونِ‌هشتگ + سقفِ ۱۰۲۴ (idempotent)
     cap = escape(cap_text) if cap_text else None  # parse_mode=HTML → کپشنِ کاربر escape شود
     items: list[dict] = []
+    sent_all: list = []
     failed, last = 0, ""
     for gi in range(0, len(media), 10):  # سقفِ ۱۰ آیتم در هر media group
         batch = media[gi:gi + 10]
@@ -613,16 +617,22 @@ async def _deliver_album(bot: Bot, chat_id: int, owner_id: int, files: list[str]
         try:
             sent = await bot.send_media_group(chat_id, media=b.build())
             items += dl_cache.collect_album_items(sent)   # برای کشِ کاروسل
+            sent_all += list(sent or [])
         except Exception as exc:  # noqa: BLE001
             log.exception("album send failed (batch starting %d)", gi)
             failed, last = failed + len(batch), str(exc)
     if failed:
         return items, f"{failed}/{len(media)} not sent: {last}"
+    # تاریخچه: آلبومِ **کامل** یک گروه می‌شود — همان قاعدهٔ کش (ناقص نه).
+    await H.record_safely(owner_id, H.infos_of(sent_all), source="dl",
+                          names=[os.path.basename(p) for p in media], platform=platform,
+                          post_caption=cap_text or None, source_url=source_url)
     return items, None
 
 
 async def _deliver_rich_post(bot: Bot, chat_id: int, owner_id: int, files: list[str],
-                             caption: str | None, lang: str) -> None:
+                             caption: str | None, lang: str, *, platform: str | None = None,
+                             source_url: str | None = None) -> None:
     """پستِ چند‌تایی → Rich Message (Bot API 10.1): پاراگرافِ کپشن + Slideshowِ
     ورق‌زدنیِ عکس/ویدیو (تا ۵۰ رسانه در یک پست). آپلودِ محلی، بدونِ دکمه.
 
@@ -636,7 +646,7 @@ async def _deliver_rich_post(bot: Bot, chat_id: int, owner_id: int, files: list[
         for p in media:
             kind = "video" if p.lower().endswith(_ALBUM_VID) else "image"
             err = await _spawn(bot, chat_id, owner_id, p, os.path.basename(p),
-                               kind, {}, lang)
+                               kind, {}, lang, platform=platform, source_url=source_url)
             if err:
                 raise RuntimeError(err)      # فراخوان به مسیرِ آلبوم برمی‌گردد
         return
@@ -651,7 +661,11 @@ async def _deliver_rich_post(bot: Bot, chat_id: int, owner_id: int, files: list[
     if cap:
         blocks.append(InputRichBlockParagraph(text=cap))
     blocks.append(InputRichBlockSlideshow(blocks=slides))
-    await bot.send_rich_message(chat_id, rich_message=InputRichMessage(blocks=blocks))
+    msg = await bot.send_rich_message(chat_id, rich_message=InputRichMessage(blocks=blocks))
+    # تاریخچه: رسانه‌ها داخلِ بلوک‌های پیام‌اند نه روی خودِ پیام (`history.rich_infos`).
+    await H.record_safely(owner_id, H.rich_infos(msg), source="dl",
+                          names=[os.path.basename(p) for p in media[:50]], platform=platform,
+                          post_caption=cap or None, source_url=source_url)
 
 
 async def _media_meta(path: str, kind: str, info: dict,
@@ -763,7 +777,8 @@ def _canonical_url(info: dict, platform: str | None) -> str | None:
 async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
                  kind: str, info: dict, lang: str, thumb_path: str | None = None,
                  post_caption: str | None = None, platform: str | None = None,
-                 url: str | None = None, selector: str | None = None) -> str | None:
+                 url: str | None = None, selector: str | None = None,
+                 source_url: str | None = None) -> str | None:
     """فایلِ دانلودی را وارد pipeline می‌کند (الگوی spawn) با source='dl'.
     url/selector اگر داده شوند، نتیجه کش می‌شود (مسیرِ gallery-dl از این‌جا می‌آید).
 
@@ -786,6 +801,7 @@ async def _spawn(bot: Bot, chat_id: int, owner_id: int, path: str, name: str,
             width=info.get("width"), height=info.get("height"),
             duration=int(info["duration"]) if info.get("duration") else None,
             changelog=[], source="dl", post_caption=post_caption, platform=platform,
+            source_url=H.clip_url(source_url or url),
         )
         s.add(f)
         await s.commit()
@@ -840,6 +856,7 @@ async def _deliver_single(bot: Bot, chat_id: int, anchor_mid: int, owner_id: int
             width=info.get("width"), height=info.get("height"),
             duration=int(info["duration"]) if info.get("duration") else None,
             changelog=[], source="dl", post_caption=post_caption, platform=platform,
+            source_url=H.clip_url(url),
         )
         s.add(f)
         await s.commit()
@@ -1620,13 +1637,15 @@ async def _run_download(ctx: dict, payload: dict, ev: dict) -> None:
             delivered = False
             if await settings_store.get_bool("dl_rich_posts", settings.dl_rich_posts):
                 try:
-                    await _deliver_rich_post(bot, chat_id, owner_id, media_paths, gallery_caption, lang)
+                    await _deliver_rich_post(bot, chat_id, owner_id, media_paths, gallery_caption,
+                                             lang, platform=platform, source_url=url)
                     delivered = True
                 except Exception as exc:  # noqa: BLE001
                     log.warning("rich post failed (%s); fallback به آلبوم", str(exc)[:120])
             if not delivered:
                 items, deliver_err = await _deliver_album(bot, chat_id, owner_id, media_paths,
-                                                          gallery_caption, lang)
+                                                          gallery_caption, lang,
+                                                          platform=platform, source_url=url)
                 if items and not deliver_err:   # کاروسل هم کش می‌شود → بارِ بعد آنی
                     try:
                         async with Sessionmaker() as cs:
@@ -1653,7 +1672,8 @@ async def _run_download(ctx: dict, payload: dict, ev: dict) -> None:
                                    post_caption=_post_text(info, gallery_caption),
                                    platform=platform,
                                    # تک‌فایلِ گالری (ریلز/عکسِ تکی) هم کش شود
-                                   url=url if len(paths) == 1 else None, selector=selector)
+                                   url=url if len(paths) == 1 else None, selector=selector,
+                                   source_url=url)
                 if err:
                     failed_n, deliver_err = failed_n + 1, err
             if failed_n and len(paths) > 1:
