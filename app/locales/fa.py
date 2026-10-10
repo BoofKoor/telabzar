@@ -302,7 +302,7 @@ MESSAGES: dict[str, str] = {
     "limit_rate": "یه کم سریع رفتی! چند لحظه صبر کن ⏳",
     "limit_quota": "به سقفِ روزانهٔ عملیات رسیدی. فردا دوباره امتحان کن.",
     # ابزارهای PDF
-    "btn_pdf_convert": "🔄 تبدیل (ورد، متن، عکس)",
+    "btn_pdf_convert": "🔄 تبدیل به متن یا عکس",
     "btn_pdf_pages": "📑 صفحه‌ها",
     "btn_pdf_pw": "🔐 رمز",
     "btn_pdf_c_normal": "🗜 معمولی — کیفیتِ خوب",
@@ -316,7 +316,7 @@ MESSAGES: dict[str, str] = {
     "btn_pdf_lock": "🔒 گذاشتنِ رمز",
     "btn_pdf_unlock": "🔓 برداشتنِ رمز",
     "btn_img_pdf_fit": "🖼 PDF به اندازهٔ عکس",
-    "fmt_pdf_docx": "📝 ورد (DOCX)",
+    "fmt_pdf_docx": "📝 تبدیل به ورد (Word)",
     "fmt_pdf_txt": "📃 متن (TXT)",
     "fmt_pdf_jpg": "🖼 عکسِ صفحه‌ها (JPG)",
     "fmt_pdf_png": "🖼 عکسِ صفحه‌ها (PNG)",

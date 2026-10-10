@@ -37,6 +37,7 @@ log = logging.getLogger("telabzar.pdf")
 QPDF = "qpdf"
 GS = "gs"
 PDFTOPPM = "pdftoppm"
+PDFINFO = "pdfinfo"
 TESSERACT = "tesseract"
 
 #: سقفِ صفحه‌هایی که به تصویر تبدیل می‌شوند (هر صفحه یک فایل).
@@ -272,9 +273,37 @@ async def render_pages(src: str, outdir: str, fmt: str, *, n_pages: int,
     return files
 
 
+async def page_size(src: str, page: int, cancel=None) -> tuple[float, float] | None:
+    """اندازهٔ صفحه (pt) از `pdfinfo` — همان MediaBox که pdftoppm بی‌`-cropbox` رندر
+    می‌کند. خوانده نشد → `None` (رندر با همان dpiِ خواسته‌شده می‌رود)."""
+    if not have(PDFINFO):
+        return None
+    rc, out, _ = await _capture([PDFINFO, "-f", str(page), "-l", str(page), src],
+                                timeout=60, cancel=cancel)
+    m = re.search(rb"Page\s+%d size:\s+([\d.]+) x ([\d.]+)" % page, out)
+    return (float(m[1]), float(m[2])) if m else None
+
+
+def fit_dpi(size: tuple[float, float] | None, dpi: int, max_px: int) -> int:
+    """dpi‌ای که ضلعِ بلندِ صفحه از `max_px` پیکسل نگذرد — هرگز **بیشتر** از `dpi`.
+
+    PDFی که از عکس ساخته شده (اسکنِ گوشی، PILِ پیش‌فرض) اندازهٔ صفحه‌اش پیکسل است نه
+    اینچ: ۲۴۸۰×۳۵۰۸ pt یعنی ۳۴×۴۹ اینچ. همان صفحه در ۳۰۰dpi یک تصویرِ ۱۵۱ مگاپیکسلی
+    بود که tesseract با **۱٫۶ گیگابایت** حافظه و ۲۸ ثانیه می‌خواندش (اندازه‌گیری‌شده) —
+    سی صفحه یعنی بیش از ربع ساعت یا OOMِ ورکر، در حالی که عکسِ مبدأ خودش ۲۴۸۰ پیکسل
+    است و dpiِ بیشتر هیچ جزئیاتی اضافه نمی‌کند.
+    """
+    long_pt = max(size) if size else 0.0
+    if long_pt <= 0:
+        return dpi
+    return max(1, min(dpi, int(max_px * 72 / long_pt)))
+
+
 async def render_page(src: str, page: int, out_base: str, *, dpi: int, gray: bool = False,
-                      cancel=None) -> str:
-    """یک صفحه → `<out_base>.png`."""
+                      max_px: int | None = None, cancel=None) -> str:
+    """یک صفحه → `<out_base>.png`. با `max_px` ضلعِ بلند از آن نمی‌گذرد (`fit_dpi`)."""
+    if max_px:
+        dpi = fit_dpi(await page_size(src, page, cancel=cancel), dpi, max_px)
     cmd = [PDFTOPPM, "-f", str(page), "-l", str(page), "-r", str(dpi), "-png", "-singlefile"]
     if gray:
         cmd.append("-gray")
@@ -294,6 +323,9 @@ def zip_files(paths: list[str], out: str) -> None:
 
 # ── OCR ──────────────────────────────────────────────────────────
 OCR_DPI = 300
+#: سقفِ ضلعِ بلندِ تصویرِ OCR (پیکسل): A4 در ۳۰۰dpi ۳۵۰۸ است و A3 در ۲۵۴dpi همین؛ صفحه‌ای
+#: که بیش از این بخواهد اندازه‌اش پیکسل است نه کاغذ (`fit_dpi`).
+OCR_MAX_PX = 4200
 
 
 async def ocr_png(png: str, cancel=None, langs: str = "fas+eng") -> str:
@@ -307,28 +339,46 @@ async def ocr_png(png: str, cancel=None, langs: str = "fas+eng") -> str:
     return out.decode("utf-8", "ignore")
 
 
-async def ocr_pages(src: str, workdir: str, pages: list[int], cancel=None, progress=None) -> list[str]:
+async def ocr_pages(src: str, workdir: str, pages: list[int], cancel=None,
+                    progress=None) -> list[str | None]:
     """متنِ هر صفحه (به همان ترتیب). صفحه‌ها یکی‌یکی رندر می‌شوند و PNGِ هر صفحه
     بلافاصله پاک می‌شود: یک A4 در ۳۰۰dpi حدودِ ۹ مگاپیکسل است و صد صفحهٔ هم‌زمان
-    روی دیسک یعنی گیگابایت."""
+    روی دیسک یعنی گیگابایت.
+
+    صفحه‌ای که رندر یا OCRش شکست بخورد (ابزار خطا داد، تایم‌اوت، کشته‌شدن) `None`
+    می‌گیرد و بقیه ادامه می‌دهند — یک صفحهٔ عجیب نباید تبدیلِ سی‌صفحه‌ای را بکشد؛ در
+    Word همان صفحه عکس می‌شود. اگر **هیچ** صفحه‌ای خوانده نشد مشکل از سیستم است نه از
+    یک صفحه، پس خطای آخر بالا می‌رود.
+    """
     if not have(TESSERACT):
         raise UserFacingError("pdf_ocr_unavailable")
-    texts: list[str] = []
+    texts: list[str | None] = []
+    last_err: RuntimeError | None = None
     for i, p in enumerate(pages):
-        png = await render_page(src, p, os.path.join(workdir, f"_ocr-{p}"), dpi=OCR_DPI,
-                                gray=True, cancel=cancel)
+        png = None
         try:
+            png = await render_page(src, p, os.path.join(workdir, f"_ocr-{p}"), dpi=OCR_DPI,
+                                    gray=True, max_px=OCR_MAX_PX, cancel=cancel)
             texts.append(await ocr_png(png, cancel=cancel))
+        except UserFacingError:
+            raise
+        except RuntimeError as e:      # ProcessingTimeout هم RuntimeError است؛ لغو نه
+            log.warning("ocr failed on page %s", p, exc_info=True)
+            texts.append(None)
+            last_err = e
         finally:
-            try:
-                os.remove(png)
-            except OSError:
-                pass
+            if png:
+                try:
+                    os.remove(png)
+                except OSError:
+                    pass
         if progress is not None:
             try:
                 await progress((i + 1) / len(pages) * 100)
             except Exception:  # noqa: BLE001
                 pass
+    if last_err is not None and all(x is None for x in texts):
+        raise last_err
     return texts
 
 
