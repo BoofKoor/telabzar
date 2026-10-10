@@ -267,7 +267,8 @@ async def on_link(message: Message, lang: str, arq_pool: ArqRedis, user: User | 
             # لینک را نگه‌دار و روی همان ریپلای بده (به‌جای حذفِ پیامِ کاربر)
             status = await message.reply(detected)
             if await dl_cache.deliver_from_cache(message.bot, session, message.chat.id, owner_id,
-                                                 cache, lang, anchor_mid=status.message_id):
+                                                 cache, lang, anchor_mid=status.message_id,
+                                                 source_url=url):
                 await _record_cached(owner_id, uid, platform, url, quick_sel, cache)
                 return
             # file_id باطل شده بود (ردیف پاک شد) → همین پیام را لنگرگاهِ دانلودِ عادی کن
@@ -350,7 +351,8 @@ async def on_dl_pick(cq: CallbackQuery, callback_data: Dl, lang: str,
             await cq.answer()
             if await dl_cache.deliver_from_cache(cq.message.bot, session, cq.message.chat.id,
                                                  ctx["owner_id"], cache, lang,
-                                                 anchor_mid=cq.message.message_id):
+                                                 anchor_mid=cq.message.message_id,
+                                                 source_url=ctx["url"]):
                 await _record_cached(ctx.get("owner_id"), uid, ctx.get("platform"),
                                      ctx["url"], sel, cache)
                 return

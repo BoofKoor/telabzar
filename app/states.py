@@ -42,3 +42,7 @@ class PdfPages(StatesGroup):
 
 class PdfPassword(StatesGroup):
     waiting = State()         # منتظرِ رمز (گذاشتن یا برداشتن — mode در داده)
+
+
+class HistorySearch(StatesGroup):
+    waiting = State()         # منتظرِ متنِ جست‌وجو در تاریخچه

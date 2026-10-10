@@ -1,4 +1,4 @@
-"""‏/start، انتخابِ زبان، و منوهای کاربر (خوش‌آمد ← تنظیمات ← آموزش)."""
+"""‏/start، انتخابِ زبان، و منوهای کاربر (خوش‌آمد ← تاریخچه / تنظیمات / آموزش)."""
 from __future__ import annotations
 
 from aiogram import Router
@@ -10,6 +10,7 @@ from ..callbacks import Lang, Nav
 from ..i18n import DEFAULT, available_languages, t
 from ..keyboards import back_kb, home_kb, lang_keyboard, settings_kb
 from ..models import User
+from .history import overview_view
 
 router = Router(name="start")
 
@@ -70,10 +71,14 @@ async def choose_lang(
 
 @router.callback_query(Nav.filter())
 async def navigate(cq: CallbackQuery, callback_data: Nav,
-                   user: User | None, lang: str) -> None:
+                   user: User | None, lang: str,
+                   session: AsyncSession | None = None) -> None:
     to = callback_data.to
     if isinstance(cq.message, Message):
-        if to == "settings":
+        if to == "history" and user is not None and session is not None:
+            text, kb = await overview_view(session, user, lang)
+            await cq.message.edit_text(text, reply_markup=kb)
+        elif to == "settings":
             await cq.message.edit_text(
                 t(lang, "settings_title"), reply_markup=settings_kb(lang))
         elif to == "help":

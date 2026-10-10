@@ -9,7 +9,7 @@ from aiogram.types import Message
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import safety
+from .. import history, safety
 from ..cards import send_card
 from ..filetypes import detect
 from ..i18n import t
@@ -48,6 +48,7 @@ async def on_file(
                 await message.answer(t(lang, "nsfw_user_blocked"))
             return
 
+    screen = bool(pol.enabled and pol.scan_pixels and info.kind in safety.SCANNABLE_KINDS)
     file = File(
         ref=_new_ref(),
         owner_id=user.id,
@@ -62,6 +63,10 @@ async def on_file(
         duration=info.duration,
         changelog=[],
     )
+    if screen:
+        # تا فیلتر ردش نکرده در تاریخچه دیده نشود — وگرنه «دوباره بفرست» راهی بود که
+        # ربات محتوای غربال‌نشده را پیش از گیت بفرستد. `run_screen` آزادش می‌کند.
+        history.hold_for_screen(file)
     session.add(file)
     await session.commit()
 
@@ -73,7 +78,7 @@ async def on_file(
     # باشد نه بعدش. اسکن در ورکر است (کارِ CPU نباید حلقهٔ long-pollingِ ربات را
     # بگیرد)، پس این‌جا فقط یک یادداشتِ «در حالِ بررسی» می‌ماند که خودِ ورکر یا
     # کارت می‌کندش یا پیامِ رد.
-    if pol.enabled and pol.scan_pixels and info.kind in safety.SCANNABLE_KINDS:
+    if screen:
         note = await message.answer(t(lang, "nsfw_checking"))
         await arq_pool.enqueue_job("run_screen", {
             "file_id_row": file.id, "chat_id": message.chat.id,

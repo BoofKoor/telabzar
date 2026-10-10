@@ -26,6 +26,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InputMediaPhoto, InputMediaVideo
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import history
 from .cards import message_media_id, send_card, update_card
 from .filetypes import mime_from_name
 # `_MATCH_PLATFORMS` تنها منبعِ «هدف را ما انتخاب می‌کنیم» است (`downloader.py:53`)
@@ -285,17 +286,21 @@ async def _drop(session: AsyncSession, cache: DownloadCache, why: str) -> None:
 
 async def deliver_from_cache(bot: Bot, session: AsyncSession, chat_id: int, owner_id: int,
                              cache: DownloadCache, lang: str,
-                             anchor_mid: int | None = None) -> bool:
+                             anchor_mid: int | None = None,
+                             source_url: str | None = None) -> bool:
     """تحویلِ آنی از کش. True = تحویل شد · False = file_id باطل بود و ردیف پاک شد
-    (صداکننده باید به دانلودِ عادی برگردد؛ کش هرگز نباید دانلود را بشکند)."""
+    (صداکننده باید به دانلودِ عادی برگردد؛ کش هرگز نباید دانلود را بشکند).
+    `source_url` = لینکی که کاربر فرستاد، فقط برای نمایش در تاریخچه."""
     if cache.items:
-        return await _deliver_album_cached(bot, session, chat_id, cache)
+        return await _deliver_album_cached(bot, session, chat_id, cache,
+                                           owner_id=owner_id, source_url=source_url)
     f = File(
         ref=secrets.token_urlsafe(6)[:8], owner_id=owner_id,
         file_unique_id=cache.file_unique_id or "", file_id=cache.file_id,
         kind=cache.kind, mime=mime_from_name(cache.name), name=cache.name, size=cache.size,
         width=cache.width, height=cache.height, duration=cache.duration,
         changelog=[], source="dl", post_caption=cache.post_caption, platform=cache.platform,
+        source_url=history.clip_url(source_url),
     )
     session.add(f)
     await session.commit()
@@ -314,22 +319,35 @@ async def deliver_from_cache(bot: Bot, session: AsyncSession, chat_id: int, owne
 
 
 async def _deliver_album_cached(bot: Bot, session: AsyncSession, chat_id: int,
-                                cache: DownloadCache) -> bool:
+                                cache: DownloadCache, *, owner_id: int = 0,
+                                source_url: str | None = None) -> bool:
     """کاروسلِ کش‌شده → همان آلبومِ تلگرام، از روی file_idها."""
     items = list(cache.items or [])
     # parse_mode=HTML است و متنِ پست خام ذخیره می‌شود → مثلِ مسیرِ آلبومِ تازه escape شود
     cap = escape(cache.post_caption) if cache.post_caption else None
+    sent_all: list = []
     try:
         for gi in range(0, len(items), 10):        # سقفِ ۱۰ آیتم در هر media group
             chunk = items[gi:gi + 10]
             batch = [_media_for(it, cap if (gi == 0 and n == 0) else None)
                      for n, it in enumerate(chunk)]
-            await bot.send_media_group(chat_id, media=batch)
+            sent = await bot.send_media_group(chat_id, media=batch)
+            sent_all += list(sent or []) if isinstance(sent, list) else []
     except TelegramBadRequest as exc:
         await _drop(session, cache, str(exc)[:120])
         return False
     cache.hits = (cache.hits or 0) + 1
     await session.commit()
+    # تاریخچه: همان گروهِ تحویلِ اول (`group_ref` از اعضا مشتق می‌شود)، پس آلبومی که
+    # دوباره از کش رسید ردیفِ تکراری نمی‌سازد و فقط بالای فهرست می‌آید.
+    if owner_id:
+        try:
+            await history.record_infos(session, owner_id, history.infos_of(sent_all),
+                                       source="dl", platform=cache.platform,
+                                       post_caption=cache.post_caption, source_url=source_url)
+        except Exception:  # noqa: BLE001 — تاریخچه نباید تحویلِ انجام‌شده را بشکند
+            log.warning("history record of a cached album failed", exc_info=True)
+            await session.rollback()   # نشستِ فراخوان با flushِ نیمه‌کاره نماند
     return True
 
 

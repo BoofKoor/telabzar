@@ -49,7 +49,10 @@ async def _init_arq(dp: Dispatcher) -> None:
 
 async def _set_commands(bot: Bot) -> None:
     try:
-        await bot.set_my_commands([BotCommand(command="start", description="شروع / Start")])
+        await bot.set_my_commands([
+            BotCommand(command="start", description="شروع / Start"),
+            BotCommand(command="history", description="تاریخچهٔ فایل‌ها / File history"),
+        ])
     except Exception as exc:  # noqa: BLE001
         log.warning("set_my_commands failed: %s", exc)
 

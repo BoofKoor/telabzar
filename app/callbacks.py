@@ -29,7 +29,7 @@ class Nav(CallbackData, prefix="nv"):
     `SETTINGS_ITEMS` باشد و نه یک کلاسِ تازه. `nv:settings` = ۱۱ بایت.
     """
 
-    to: str  # home | settings | lang | help
+    to: str  # home | history | settings | lang | help
 
 
 class Act(CallbackData, prefix="act"):
@@ -88,6 +88,27 @@ class Ck(CallbackData, prefix="ck"):
 
     act: str   # paste | off | del
     tok: str
+
+
+class Hist(CallbackData, prefix="hs"):
+    """تاریخچهٔ فایل‌ها (`routers/history.py`). کلاسِ **تازه** با پیشوندِ تازه — دلیلش
+    داکس‌استرینگِ `Lang` است: فیلدِ تازه روی کلاسِ موجود دکمه‌های در پرواز را می‌شکند.
+
+    `v` کنش: `o` نمای کلی · `l` فهرست · `d`/`g` جزئیاتِ فایل/گروه · `ss`/`sa`/`sm`
+    فرستادنِ فایل/همهٔ گروه/یک عضو · `s1`/`s0`، `g1`/`g0` نشان · `x`/`xy`، `gx`/`gxy`
+    حذف (پرسش/انجام) · `vl`/`vr` نسخه‌ها (فهرست/بازگردانی) · `q` جست‌وجو · `c`/`cy`
+    پاک‌کردنِ همه · `n` بی‌اثر (شمارهٔ صفحه).
+    `c` دسته (`history.CAT_*`؛ نتیجهٔ جست‌وجو = `q` + توکنِ Redis، چون خودِ متن در
+    ۶۴ بایت جا نمی‌شود) · `p` صفحهٔ فهرست، تا «بازگشت» به همان صفحه برگردد ·
+    `m` صفحهٔ اعضای گروه · `r` = `ref`ِ فایل، `group_ref`، یا شناسهٔ نسخه.
+    بدترین حالت ~۳۲ بایت است.
+    """
+
+    v: str
+    c: str = "a"
+    p: int = 1
+    m: int = 1
+    r: str = ""
 
 
 class Pdf(CallbackData, prefix="pdf"):

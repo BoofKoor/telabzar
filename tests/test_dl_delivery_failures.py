@@ -232,7 +232,7 @@ async def test_a_failed_spawn_does_not_delete_the_status_message(engines, redis,
 async def test_a_partial_album_is_not_cached_and_not_a_success(engines, redis, monkeypatch):
     cached = []
 
-    async def album(bot, chat_id, owner_id, media_paths, caption, lang):
+    async def album(bot, chat_id, owner_id, media_paths, caption, lang, **kw):
         return [{"t": "photo", "id": "A"}], "2/3 not sent: network down"
 
     async def put_album_cached(*a, **kw):
@@ -252,7 +252,7 @@ async def test_a_clean_album_is_still_cached_and_a_success(engines, redis, monke
     """کنترل."""
     cached = []
 
-    async def album(bot, chat_id, owner_id, media_paths, caption, lang):
+    async def album(bot, chat_id, owner_id, media_paths, caption, lang, **kw):
         return [{"t": "photo", "id": "A"}], None
 
     async def put_album_cached(*a, **kw):

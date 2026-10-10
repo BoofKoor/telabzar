@@ -21,6 +21,7 @@ from typing import Any
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
+from . import history as H
 from . import pagespec
 from . import pdftext
 from . import pdftools
@@ -799,8 +800,9 @@ async def _do_op(bot: Bot, op: str, args: dict[str, Any], file: File, inpath: st
 
 
 async def _send_files(bot: Bot, chat_id: int, paths: list[str], *,
-                      album: bool) -> tuple[int, Exception | None]:
-    """فایل‌ها → چت. `(تعدادِ نرسیده, آخرین خطا)`.
+                      album: bool, sent: list | None = None) -> tuple[int, Exception | None]:
+    """فایل‌ها → چت. `(تعدادِ نرسیده, آخرین خطا)`. `sent` اگر داده شود پیام‌های
+    رسیده را به ترتیب جمع می‌کند — تاریخچه از همان‌ها `file_id` برمی‌دارد.
 
     با `album` ده‌تا‌ده‌تا یک آلبومِ سند (صفحه‌های PDF، هر صفحه یک PDF) — بیست
     پیامِ پشتِ‌هم هم چت را می‌پوشاند و هم به سقفِ نرخ نزدیک می‌شود. آلبومی که
@@ -815,7 +817,9 @@ async def _send_files(bot: Bot, chat_id: int, paths: list[str], *,
     async def one(p: str) -> None:
         nonlocal failed_n, last_exc
         try:
-            await bot.send_document(chat_id, FSInputFile(p, filename=os.path.basename(p)))
+            msg = await bot.send_document(chat_id, FSInputFile(p, filename=os.path.basename(p)))
+            if sent is not None:
+                sent.append(msg)
         except Exception as exc:  # noqa: BLE001
             failed_n, last_exc = failed_n + 1, exc
             log.warning("sending output file failed: %s", p)
@@ -833,7 +837,9 @@ async def _send_files(bot: Bot, chat_id: int, paths: list[str], *,
                  for p in chunk]
         for attempt in (1, 2):
             try:
-                await bot.send_media_group(chat_id, media)
+                msgs = await bot.send_media_group(chat_id, media)
+                if sent is not None and isinstance(msgs, list):
+                    sent.extend(msgs)
                 break
             except TelegramRetryAfter as exc:
                 if attempt == 1:
@@ -867,6 +873,8 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
 
         job.status = "running"
         await session.commit()
+        # خروجیِ تازه‌ای که رسید (پیام‌ها، نام‌ها) — بعد از commitِ جاب به تاریخچه می‌رود.
+        remember: tuple[list, list | None] | None = None
 
         try:
             os.makedirs(workdir, exist_ok=True)
@@ -1056,11 +1064,11 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 src = FSInputFile(p, filename=sm.get("filename") or os.path.basename(p))
                 try:
                     if sm["as"] == "animation":
-                        await bot.send_animation(chat_id, src)
+                        out_msg = await bot.send_animation(chat_id, src)
                     elif sm["as"] == "photo":
-                        await bot.send_photo(chat_id, src)
+                        out_msg = await bot.send_photo(chat_id, src)
                     else:
-                        await bot.send_document(chat_id, src)
+                        out_msg = await bot.send_document(chat_id, src)
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ بدونِ بن‌بست
                     log.exception("job %s artifact delivery failed", job_id)
                     job.status = "failed"
@@ -1072,13 +1080,16 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     file.changelog = list(file.changelog or []) + [res["label"]]
                     await _card_below(bot, chat_id, card_mid, file, lang)
                     job.status = "done"
+                    remember = ([out_msg], [sm.get("filename")])
             elif res.get("files") is not None:
                 # خروجیِ چندفایلی (استخراج) → فایل‌ها بالا، کارتِ تازه پایین (چت تمیز)
                 # هر فایل جدا فرستاده می‌شود و شکستِ یکی بقیه را متوقف نمی‌کند؛ ولی
                 # جاب فقط وقتی `done` است که **همه** رسیده باشند. پیش از فاز ۲ِ ممیزی
                 # شکست‌ها فقط لاگ می‌شدند و جاب حتی با صفر فایلِ رسیده `done` می‌گرفت.
+                out_msgs: list = []
                 failed_n, last_exc = await _send_files(bot, chat_id, res["files"],
-                                                       album=bool(res.get("album")))
+                                                       album=bool(res.get("album")),
+                                                       sent=out_msgs)
                 if failed_n:
                     total_n = len(res["files"])
                     job.status = "failed"
@@ -1091,6 +1102,7 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     file.changelog = list(file.changelog or []) + [res["label"]]
                     await _card_below(bot, chat_id, card_mid, file, lang)
                     job.status = "done"
+                    remember = (out_msgs, None)
             elif res.get("message") is not None:
                 # نتیجهٔ متنی (لیستِ آرشیو) → پیام بالا، کارتِ تازه پایین
                 try:
@@ -1114,6 +1126,15 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                 # عملیاتِ رسانه‌ساز → فیلدهای فایل را عوض کن و کارت را درجا به‌روزرسانی کن
                 orig = (file.name, file.size, file.kind, list(file.changelog or []),
                         file.width, file.height, file.duration, file.mime)
+                # نسخهٔ پیش از این عملیات — برای «نسخه‌های قبلی»ِ تاریخچه. بی این، فایلِ
+                # اصل برای همیشه می‌رفت: پیامِ آپلودی پاک شده و ردیف بازنویسی می‌شود.
+                # برخلافِ ردیف‌های تاریخچه (`remember`) عمداً در **همان** تراکنشِ
+                # بازنویسی است: جدا، `file_id` می‌توانست عوض شود و نسخهٔ اصل ثبت نشود.
+                # خطرش هم کم است — همهٔ مقدارها از خودِ ردیفِ `File` با همان عرضِ ستون‌اند.
+                before = dict(file_id=file.file_id, file_unique_id=file.file_unique_id,
+                              kind=file.kind, mime=file.mime, name=file.name, size=file.size,
+                              width=file.width, height=file.height, duration=file.duration,
+                              changelog=list(file.changelog or []))
                 outpath = res["path"]
                 file.name = res["filename"]
                 if res.get("kind"):
@@ -1155,6 +1176,9 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
                     if res.get("new_meta"):  # متادیتای فعلی را با تگ‌های نوشته‌شده به‌روز کن
                         file.meta = {**(file.meta or {}), **res["new_meta"]}
                     job.status = "done"
+                    if fid and fid != before["file_id"]:
+                        session.add(H.version_row(file.id, **before))
+                    H.touch(file)
                 except Exception as exc:  # noqa: BLE001  — تحویل شکست خورد؛ فایل را برگردان
                     log.exception("job %s delivery failed", job_id)
                     (file.name, file.size, file.kind, file.changelog,
@@ -1175,6 +1199,14 @@ async def run_op(ctx: dict, job_id: int, chat_id: int, card_mid: int, lang: str)
             if settings.node_role:  # مشاهده‌پذیری: کارِ انجام‌شدهٔ این نود را بشمار
                 from . import nodes
                 nodes.note_job_done()
+        if remember is not None:
+            # تاریخچه **بعد از** commitِ جاب و در نشستِ خودش (`record_safely` خطا را
+            # می‌بلعد): ردیفِ تاریخچه‌ای که به هر دلیلی نوشته نشود نباید وضعیتِ جابی را
+            # که خروجی‌اش رسیده بشکند — در همان تراکنش، یک خطای DB جاب را `running` جا
+            # می‌گذاشت. بهایش این است که اگر پروسه دقیقاً بینِ دو commit بمیرد، یک خروجی
+            # در تاریخچه نمی‌آید؛ بهترین‌تلاش است، مثلِ مسیرِ دانلود.
+            msgs, names = remember
+            await H.record_safely(file.owner_id, H.infos_of(msgs), source="op", names=names)
 
 
 async def run_screen(ctx: dict, payload: dict) -> None:
@@ -1271,6 +1303,10 @@ async def run_screen(ctx: dict, payload: dict) -> None:
             file = await session.get(File, file_id_row)
             if file is not None:
                 await send_card(bot, chat_id, file, lang)
+                # تا این‌جا در تاریخچه پنهان بود (`routers/files.py`): تاریخچه فقط چیزی
+                # را دوباره می‌فرستد که ربات خودش فرستاده، نه آپلودِ غربال‌نشده.
+                H.release_after_screen(file)
+                await session.commit()
         return
 
     log.info("nsfw blocked upload (%s) from %s", why, tg_user_id)

@@ -52,3 +52,25 @@ def dl_event_rows(monkeypatch):
 
     monkeypatch.setattr(dl_events, "_write", _write)
     return rows
+
+
+@pytest.fixture(autouse=True)
+def history_rows(monkeypatch):
+    """ثبتِ تاریخچه از مسیرهای تحویلِ دانلود (`history.record_safely`) در حافظه.
+
+    همان استدلالِ `dl_event_rows`: آن تابع نشستِ **خودش** را باز می‌کند، پس بی این
+    fixture هر تستِ `run_download` یک اتصالِ ردشده به Postgresِ ناموجود می‌زد —
+    بی‌خطر چون بلعیده می‌شود، ولی کور. تستی که خودِ نوشتن در DB را می‌خواهد
+    (`tests/test_history_data.py`) نسخهٔ اصلی را از `history._record_safely_real`
+    برمی‌دارد.
+    """
+    from app import history
+
+    rows: list[dict] = []
+
+    async def _record(owner_id, infos, **kw):
+        rows.append({"owner_id": owner_id, "infos": list(infos or []), **kw})
+        return []
+
+    monkeypatch.setattr(history, "record_safely", _record)
+    return rows
