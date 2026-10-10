@@ -3670,6 +3670,153 @@ CASES: list[dict] = [
      'new': '    return re.sub(r"[\\s٬,]", "", str(value or ""))[:64]',
      'target': _LRL,
      'expect': 'test_a_persian_digit_code_signs_in'},
+
+    # ── بخشِ PDF (۲۰۲۶-۱۰-۰۹) ──────────────────────────────────────
+    # هر مورد یکی از باگ‌هایی است که روی ابزارِ واقعی اندازه گرفته شد، یا یکی از
+    # قیدهای امنیتیِ رمز. نام‌ها همه با «pdf:» شروع می‌شوند تا `python -m
+    # tests.sabotage pdf` همه را با هم بزند.
+    {'name': 'pdf: the glyph layer is skipped and poppler text wins again',
+     'path': 'app/pdftext.py',
+     'old': '                if need and same:\n                    _assign(page, dedupe(pp.chars))',
+     'new': '                if False and same:\n                    _assign(page, dedupe(pp.chars))',
+     'target': 'tests/test_pdf_extract.py',
+     'expect': 'test_chrome_persian_reads_correctly'},
+
+    {'name': 'pdf: mirrored brackets are no longer un-mirrored',
+     'path': 'app/pdftext.py',
+     'old': 'return "".join(_MIRROR.get(u, u) if lv % 2 else u for u, lv in seq)',
+     'new': 'return "".join(u for u, lv in seq)',
+     'target': 'tests/test_pdf_bidi.py',
+     'expect': 'test_mirrored_parentheses_come_back'},
+
+    {'name': 'pdf: the LibreOffice ZWNJ becomes a plain space',
+     'path': 'app/pdftext.py',
+     'old': 'if between and gap < size * 0.12 and _joining(texts[i - 1]) and _joining(texts[i]):',
+     'new': 'if False:',
+     'target': 'tests/test_pdf_bidi.py',
+     'expect': 'test_libreoffice_zwnj_is_a_zero_advance_space_between_joining_letters'},
+
+    {'name': 'pdf: RTL columns are read left-first again',
+     'path': 'app/pdftext.py',
+     'old': 'if rtl and sum(1 for c in cols if len(c) >= 3) >= 2:',
+     'new': 'if False:',
+     'target': 'tests/test_pdf_bidi.py',
+     'expect': 'test_rtl_columns_are_read_right_first'},
+
+    {'name': 'pdf: logical text is judged with the visual-order heuristic',
+     'path': 'app/pdftext.py',
+     'old': 'rtl = logical_rtl(line)',
+     'new': 'rtl = block_rtl([list(line)])',
+     'target': 'tests/test_pdf_extract.py',
+     'expect': 'test_text_file_to_word_sets_direction_per_line'},
+
+    {'name': 'pdf: fake-bold duplicates are kept',
+     'path': 'app/pdftext.py',
+     'old': '        key = (c["text"], round(c["x0"]), round(c["top"]), round(c.get("size") or 0))\n'
+            '        if key in seen:\n            continue\n',
+     'new': '        key = (c["text"], round(c["x0"]), round(c["top"]), round(c.get("size") or 0))\n',
+     'target': 'tests/test_pdf_bidi.py',
+     'expect': 'test_fake_bold_duplicates_are_dropped_in_linear_time'},
+
+    {'name': 'pdf: an owner-locked PDF is no longer decrypted on open',
+     'path': 'app/pdftools.py',
+     'old': 'cmd = [QPDF, "--decrypt"]',
+     'new': 'cmd = [QPDF]',
+     'target': 'tests/test_pdftools.py',
+     'expect': 'test_an_owner_locked_pdf_opens_without_a_password'},
+
+    {'name': 'pdf: the lock password goes on the command line',
+     'path': 'app/pdftools.py',
+     'old': '    args = _secret_file(workdir, "enc", ["--encrypt", password, owner, "256", "--"])\n'
+            '    rc, _, err = await _capture([QPDF, f"@{args}", src, out], timeout=300, cancel=cancel)',
+     'new': '    rc, _, err = await _capture([QPDF, "--encrypt", password, owner, "256", "--", src, out],\n'
+            '                                timeout=300, cancel=cancel)',
+     'target': 'tests/test_pdftools.py',
+     'expect': 'test_lock_never_puts_the_password_on_the_command_line'},
+
+    {'name': 'pdf: a phone photo loses its EXIF rotation',
+     'path': 'app/pdftools.py',
+     'old': 'img = P._upright(path)',
+     'new': 'img = Image.open(path)',
+     'target': 'tests/test_pdftools.py',
+     'expect': 'test_exif_rotation_is_applied'},
+
+    {'name': 'pdf: a JPEG is re-encoded instead of embedded as is',
+     'path': 'app/pdftools.py',
+     'old': 'if fmt == "JPEG" and mode in ("RGB", "L") and orient in (1, None):',
+     'new': 'if False:',
+     'target': 'tests/test_pdftools.py',
+     'expect': 'test_a_jpeg_is_embedded_as_is'},
+
+    {'name': 'pdf: the strong level leaves the image filter to Ghostscript',
+     'path': 'app/pdftools.py',
+     'old': '               "-dAutoFilterColorImages=false", "-dColorImageFilter=/DCTEncode",\n'
+            '               "-dAutoFilterGrayImages=false", "-dGrayImageFilter=/DCTEncode"],',
+     'new': '               ],',
+     'target': 'tests/test_pdftools.py',
+     'expect': 'test_strong_is_not_larger_than_normal'},
+
+    {'name': 'pdf: merge members skip prepare (owner locks break the merge)',
+     'path': 'app/tasks.py',
+     'old': 'paths.append(await pdftools.prepare(p, sub, cancel=cancel))',
+     'new': 'paths.append(p)',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_merge_is_a_new_card_and_names_a_locked_member'},
+
+    {'name': 'pdf: the stored password can be read twice',
+     'path': 'app/tasks.py',
+     'old': 'redis.getdel(',
+     'new': 'redis.get(',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_lock_then_unlock_and_the_password_is_used_once'},
+
+    {'name': 'pdf: an office conversion becomes a document card again',
+     'path': 'app/tasks.py',
+     'old': '        return {"spawn": {"path": out, "name": f"{stem}.pdf", "kind": "pdf"},\n'
+            '                "label": t(lang, "cl_topdf")}',
+     'new': '        return {"spawn": {"path": out, "name": f"{stem}.pdf", "kind": "document"},\n'
+            '                "label": t(lang, "cl_topdf")}',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_document_to_pdf_is_a_pdf_card'},
+
+    {'name': 'pdf: a user-facing refusal falls into the generic error path',
+     'path': 'app/tasks.py',
+     'old': '        except UserFacingError as exc:\n'
+            '            # شکستی که پیامِ خودش را دارد',
+     'new': '        except ValueError as exc:\n'
+            '            # شکستی که پیامِ خودش را دارد',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_run_op_shows_the_users_message_and_stores_a_stable_key'},
+
+    {'name': 'pdf: page images are sent one message each',
+     'path': 'app/tasks.py',
+     'old': 'if not album or len(paths) < 2:',
+     'new': 'if True:',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_album_is_sent_ten_at_a_time'},
+
+    {'name': 'pdf: LibreOffice is killed without its process group',
+     'path': 'app/processing.py',
+     'old': 'group = _ProcGroup(proc)',
+     'new': 'group = proc',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_office_convert_kills_the_whole_tree[job-cancel]'},
+
+    {'name': 'pdf: the password message is left in the chat',
+     'path': 'app/routers/ops.py',
+     'old': '    pw = message.text or ""\n    try:\n        await message.delete()\n'
+            '    except Exception:  # noqa: BLE001\n        pass\n',
+     'new': '    pw = message.text or ""\n',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_the_password_is_deleted_first_and_never_enters_the_job'},
+
+    {'name': 'pdf: merge members keep the arrival order',
+     'path': 'app/routers/ops.py',
+     'old': '        members.sort(key=lambda m: m.get("mid", 0))\n'
+            '        await state.update_data(members=members)',
+     'new': '        await state.update_data(members=members)',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_merge_order_is_the_send_order_not_the_arrival_order'},
 ]
 
 

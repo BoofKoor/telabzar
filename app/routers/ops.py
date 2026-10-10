@@ -15,20 +15,20 @@ from aiogram.types import CallbackQuery, Message
 from arq import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import counters, nodes, settings_store
+from .. import counters, nodes, pagespec, settings_store
 from ..cards import _fmt_dur, card_caption, meta_editor_view, set_card_note, update_card
-from ..callbacks import Act, Cmp, Conv, Meta, Rot, Rsz, Spd, Tr, Wm
+from ..callbacks import Act, Cmp, Conv, Meta, Pdf, Rot, Rsz, Spd, Tr, Wm
 from ..config import settings
 from ..crud import get_file_by_ref, get_owned_job, link_expired
 from ..filetypes import detect, suggested_name
 from ..i18n import t
 from ..keyboards import (
     CONVERTIBLE, FIELD_LABEL, VIDEO_KBPS, cancel_job_kb, cancel_kb, collapsed_kb, collect_kb,
-    compress_menu_kb, convert_menu_kb, effective_kbps, link_menu_kb, resize_menu_kb, rotate_menu_kb,
-    speed_menu_kb, transcribe_menu_kb, watermark_pos_kb,
+    compress_menu_kb, convert_menu_kb, effective_kbps, link_menu_kb, pdf_compress_kb, pdf_pages_kb,
+    pdf_pw_kb, resize_menu_kb, rotate_menu_kb, speed_menu_kb, transcribe_menu_kb, watermark_pos_kb,
 )
 from ..models import Job, User
-from ..states import Collect, MetaEdit, Rename, Screenshot, SetCover, Trim, Watermark
+from ..states import Collect, MetaEdit, PdfPages, PdfPassword, Rename, Screenshot, SetCover, Trim, Watermark
 
 router = Router(name="ops")
 
@@ -238,6 +238,16 @@ async def _start(cq: CallbackQuery, file, lang, arq_pool, session, op, args, use
                    cq.message.chat.id, cq.message.message_id, lang)
 
 
+async def _show_menu(cq: CallbackQuery, file, lang: str, note_key: str, kb) -> None:
+    """زیرمنو روی همان کارت: یادداشت + کیبوردِ تازه (ویرایشِ ناموفق بی‌صدا)."""
+    try:
+        await cq.message.edit_caption(caption=card_caption(file, lang, note=t(lang, note_key)),
+                                      reply_markup=kb)
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
 # ── فشرده‌سازی ──────────────────────────────────────────────────
 @router.callback_query(Act.filter(F.op == "compress"))
 async def op_compress(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
@@ -246,11 +256,14 @@ async def op_compress(cq: CallbackQuery, callback_data: Act, session: AsyncSessi
     if file is None or not isinstance(cq.message, Message):
         await cq.answer()
         return
-    if file.kind not in _PROCESSING_KINDS:
+    if file.kind not in _PROCESSING_KINDS and file.kind != "pdf":
         await cq.answer(t(lang, "coming_soon"), show_alert=True)
         return
     if await _too_large(file.size):
         await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
+        return
+    if file.kind == "pdf":  # «معمولی» یا «حداکثر» (رجوع به `pdftools._GS_LEVEL`)
+        await _show_menu(cq, file, lang, "pdf_compress_choose", pdf_compress_kb(file.ref, lang))
         return
     if file.kind == "video":  # منوی کیفیت (رزولوشن‌های پایین‌تر + تخمینِ حجم)
         try:
@@ -551,8 +564,9 @@ async def op_rename_recv(message: Message, state: FSMContext, session: AsyncSess
 
 
 async def _collect_start(cq: CallbackQuery, file, lang: str, state: FSMContext, purpose: str) -> None:
+    # `mid` = شمارهٔ پیامِ آپلود — ترتیبِ واقعیِ فرستادن. کارتِ اولیه همیشه اول است.
     members = [{"file_id": file.file_id, "name": suggested_name(file.name, file.kind, file.mime),
-                "size": file.size or 0}]
+                "size": file.size or 0, "mid": 0}]
     await state.set_state(Collect.collecting)
     await state.update_data(ref=file.ref, card_chat=cq.message.chat.id,
                             card_mid=cq.message.message_id, members=members, purpose=purpose)
@@ -666,7 +680,12 @@ async def collect_recv(message: Message, state: FSMContext, session: AsyncSessio
                 await _warn(t(lang, "vjoin_too_big", mb=cap_mb))
                 return
         name = suggested_name(info.name, info.kind, info.mime, idx=len(members) + 1)
-        members.append({"file_id": info.file_id, "name": name, "size": info.size or 0})
+        members.append({"file_id": info.file_id, "name": name, "size": info.size or 0,
+                        "mid": message.message_id})
+        # ترتیب = ترتیبِ فرستادن، نه ترتیبِ رسیدنِ هندلرها: aiogram آپدیت‌های یک آلبوم
+        # را هم‌زمان پردازش می‌کند و «صفحهٔ ۳» می‌توانست پیش از «صفحهٔ ۲» ثبت شود —
+        # برای ادغامِ PDF و عکس‌ها → PDF ترتیب خودِ نتیجه است.
+        members.sort(key=lambda m: m.get("mid", 0))
         await state.update_data(members=members)
         try:
             await message.bot.edit_message_caption(
@@ -681,7 +700,7 @@ async def collect_recv(message: Message, state: FSMContext, session: AsyncSessio
 
 
 # ── جمع‌کردن: اجرا (زیپ یا ادغامِ PDF) ──────────────────────────
-@router.callback_query(Act.filter(F.op == "collect_go"))
+@router.callback_query(Act.filter(F.op.in_({"collect_go", "collect_fit"})))
 async def op_collect_go(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
                         state: FSMContext, arq_pool: ArqRedis, user: User | None) -> None:
     data = await state.get_data()
@@ -711,7 +730,11 @@ async def op_collect_go(cq: CallbackQuery, callback_data: Act, session: AsyncSes
     await cq.answer()
     op = {"merge": "pdf_merge", "img_pdf": "images_to_pdf",
           "vjoin": "video_concat"}.get(purpose, "zip_many")
-    await _enqueue(cq.message.bot, arq_pool, session, file, op, {"members": members},
+    members.sort(key=lambda m: m.get("mid", 0))
+    args: dict = {"members": members}
+    if purpose == "img_pdf":
+        args["mode"] = "fit" if callback_data.op == "collect_fit" else "a4"
+    await _enqueue(cq.message.bot, arq_pool, session, file, op, args,
                    cq.message.chat.id, cq.message.message_id, lang)
 
 
@@ -1177,6 +1200,137 @@ async def op_screenshot_recv(message: Message, state: FSMContext, session: Async
             await set_card_note(message.bot, card_chat, card_mid, file, lang, note=t(lang, f"limit_{limit}"), keyboard=True)
             return
     await _enqueue(message.bot, arq_pool, session, file, "screenshot", {"ts": ts}, card_chat, card_mid, lang)
+
+
+# ── ابزارهای PDF ────────────────────────────────────────────────
+# زیرمنوها `Act` (باز کردن) و `Pdf` (انتخاب) هستند؛ هر کاری که ورودی می‌خواهد (صفحه‌ها
+# یا رمز) یک FSM دارد، دقیقاً مثلِ برش. اسمِ هر op **لفظی** به `_start`/`_enqueue`
+# می‌رود تا گاردِ opِ مرده (`tests/test_dead_ops.py`) ببیندش.
+_PDF_MENUS = {"pdf_pages": ("pdf_pages_choose", pdf_pages_kb), "pdf_pw": ("pdf_pw_choose", pdf_pw_kb)}
+
+
+@router.callback_query(Act.filter(F.op.in_(set(_PDF_MENUS))))
+async def op_pdf_menu(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
+                      user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "pdf":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    note_key, kb = _PDF_MENUS[callback_data.op]
+    await _show_menu(cq, file, lang, note_key, kb(file.ref, lang))
+
+
+_PDF_ROTATE = {"r90": 90, "r180": 180, "r270": 270}
+
+
+@router.callback_query(Pdf.filter())
+async def op_pdf(cq: CallbackQuery, callback_data: Pdf, session: AsyncSession, lang: str,
+                 state: FSMContext, arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "pdf":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
+        return
+    act = callback_data.act
+    if act in ("cnorm", "cstrong"):
+        await _start(cq, file, lang, arq_pool, session, "compress",
+                     {"level": "strong" if act == "cstrong" else "normal"}, user)
+    elif act in _PDF_ROTATE:
+        await _start(cq, file, lang, arq_pool, session, "pdf_rotate", {"angle": _PDF_ROTATE[act]}, user)
+    elif act == "split":
+        await _start(cq, file, lang, arq_pool, session, "pdf_split", {}, user)
+    elif act in ("keep", "del"):
+        await _ask(cq, file, lang, state, PdfPages.waiting, "pdf_pages_ask_" + act,
+                   mode="delete" if act == "del" else "keep")
+    elif act in ("lock", "unlock"):
+        await _ask(cq, file, lang, state, PdfPassword.waiting, "pdf_pw_ask_" + act, mode=act)
+    else:
+        await cq.answer()
+
+
+async def _ask(cq: CallbackQuery, file, lang: str, state: FSMContext, st, note_key: str, **data) -> None:
+    """FSMِ یک‌ورودی: کارت سؤال را نشان می‌دهد، پاسخ در هندلرِ متنیِ همان حالت."""
+    await state.set_state(st)
+    await state.update_data(ref=file.ref, card_chat=cq.message.chat.id,
+                            card_mid=cq.message.message_id, **data)
+    try:
+        await cq.message.edit_caption(caption=card_caption(file, lang, note=t(lang, note_key)),
+                                      reply_markup=cancel_kb(file.ref, lang))
+    except Exception:  # noqa: BLE001
+        pass
+    await cq.answer()
+
+
+@router.message(PdfPages.waiting, F.text)
+async def op_pdf_pages_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str,
+                            arq_pool: ArqRedis, user: User | None) -> None:
+    data = await state.get_data()
+    ref, card_chat, card_mid = data.get("ref", ""), data.get("card_chat"), data.get("card_mid")
+    spec = (message.text or "").strip()[:200]
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    file = await get_file_by_ref(session, ref, user)
+    if file is None or card_chat is None:
+        return
+    if pagespec.parse(spec) is None:  # نحو همین‌جا؛ کران (تعدادِ صفحه) در ورکر
+        await set_card_note(message.bot, card_chat, card_mid, file, lang,
+                            note=t(lang, "pdf_pages_bad"), keyboard=cancel_kb(file.ref, lang))
+        return
+    await state.clear()
+    if user is not None:
+        limit = await _check_limits(arq_pool, user.tg_user_id)
+        if limit:
+            await set_card_note(message.bot, card_chat, card_mid, file, lang, note=t(lang, f"limit_{limit}"), keyboard=True)
+            return
+    await _enqueue(message.bot, arq_pool, session, file, "pdf_select",
+                   {"spec": spec, "mode": data.get("mode", "keep")}, card_chat, card_mid, lang)
+
+
+@router.message(PdfPassword.waiting, F.text)
+async def op_pdf_pw_recv(message: Message, state: FSMContext, session: AsyncSession, lang: str,
+                         arq_pool: ArqRedis, user: User | None) -> None:
+    """رمز **اول** از چت پاک می‌شود، بعد هر چیزِ دیگر — پیامی که رمز دارد نباید
+    حتی در مسیرِ خطا بماند. رمز فقط در Redis با TTL می‌نشیند و جاب تنها توکنش را
+    می‌برد (`pagespec.PW_KEY`)؛ جدولِ jobs را پنل نشان می‌دهد."""
+    pw = message.text or ""
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    data = await state.get_data()
+    ref, card_chat, card_mid = data.get("ref", ""), data.get("card_chat"), data.get("card_mid")
+    file = await get_file_by_ref(session, ref, user)
+    if file is None or card_chat is None:
+        await state.clear()
+        return
+    if not pagespec.check_password(pw):
+        await set_card_note(message.bot, card_chat, card_mid, file, lang,
+                            note=t(lang, "pdf_pw_bad"), keyboard=cancel_kb(file.ref, lang))
+        return
+    await state.clear()
+    if user is not None:
+        limit = await _check_limits(arq_pool, user.tg_user_id)
+        if limit:
+            await set_card_note(message.bot, card_chat, card_mid, file, lang, note=t(lang, f"limit_{limit}"), keyboard=True)
+            return
+    tok = secrets.token_urlsafe(12)
+    await arq_pool.set(pagespec.PW_KEY.format(tok=tok), pw, ex=pagespec.PW_TTL)
+    if data.get("mode") == "unlock":
+        await _enqueue(message.bot, arq_pool, session, file, "pdf_unlock", {"tok": tok},
+                       card_chat, card_mid, lang)
+    else:
+        await _enqueue(message.bot, arq_pool, session, file, "pdf_lock", {"tok": tok},
+                       card_chat, card_mid, lang)
 
 
 # ── لغوِ جابِ در حالِ اجرا ──────────────────────────────────────

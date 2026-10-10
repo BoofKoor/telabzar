@@ -20,3 +20,23 @@ class ProcessingTimeout(RuntimeError):
     دیگر می‌ساخت و مجموع از `job_timeout`ِ ARQ رد می‌شد. تایم‌اوت یعنی «وقت کم
     آمد»، نه «این انکودر کار نمی‌کند» — پس نباید fallback بدهد.
     """
+
+
+class UserFacingError(RuntimeError):
+    """شکستی که **پیامِ کاربرِ خودش** را دارد: کلیدِ locale + پارامترها.
+
+    `run_op` این را جدا از `Exception`ِ عمومی می‌گیرد و به‌جای «❌ ناموفق» +
+    دُمِ خامِ انگلیسیِ ابزار، `t(lang, key, **kw)` را نشان می‌دهد — مثلاً «این PDF
+    رمز دارد؛ اول رمزش را بردار» به‌جای `qpdf: invalid password`.
+
+    `str(exc)` عمداً **همان کلید** است نه متنِ پیام: `job.error` از آن ساخته
+    می‌شود و صفحهٔ آمار خطاها را با متنِ دقیقشان گروه می‌کند، پس کلیدِ ثابت یعنی
+    همهٔ «رمز لازم است»ها یک ردیف می‌شوند (همان قیدِ `op_too_large`). `detail` اگر
+    باشد زیرِ پیام در `<code>` می‌آید — برای وقتی که دلیلِ فنی به کاربر کمک می‌کند.
+    """
+
+    def __init__(self, key: str, detail: str | None = None, **kw):
+        super().__init__(key)
+        self.key = key
+        self.detail = detail
+        self.kw = kw

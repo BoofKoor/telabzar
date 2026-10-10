@@ -8,5 +8,7 @@ rembg>=2.0,<3              # حذفِ پس‌زمینهٔ تصویر (مدلِ u
 onnxruntime>=1.16,<2       # موتورِ اجرای مدلِ rembg + VADِ whisper + NudeNet (CPU)
 nudenet>=3.4,<4            # فیلترِ محتوای بزرگسال (مدلِ ONNXِ ~۷MB، app/safety.py)
 faster-whisper>=1.0,<2     # رونویسیِ صوت (Whisper روی CTranslate2)
+pdfplumber>=0.11,<0.12     # گلیف‌های PDF با لیگاتورِ سالم («لا») — app/pdftext.py
+python-docx>=1.1,<2        # خروجیِ Wordِ ویرایش‌پذیر از PDF، و TXT → PDF با جهتِ درست
 # نکته: ابزارهای دانلود (yt-dlp/gallery-dl/bgutil) در requirements-worker-dl.txt‌اند
 # — روی ایمیجِ لاغرِ download-worker نصب می‌شوند، نه این ورکرِ سنگین.

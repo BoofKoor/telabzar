@@ -4,14 +4,18 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# ابزارها: ffmpeg (ویدیو/صوت) · 7-Zip + unrar (آرشیو) · LibreOffice (سند↔PDF)
-#          · poppler-utils (تبدیل/ادغامِ PDF) · tesseract + فارسی/انگلیسی (OCR) + فونت‌ها
+# ابزارها: ffmpeg (ویدیو/صوت) · 7-Zip + unrar (آرشیو) · LibreOffice (سند → PDF)
+#          · poppler-utils (متن/رندرِ PDF) · qpdf (باز/تعمیر، صفحه‌ها، ادغام، رمز)
+#          · ghostscript (کاهشِ حجمِ PDF) · tesseract + فارسی/انگلیسی (OCR) + فونت‌ها
+#          (Noto Sans Arabicِ fonts-noto-core: قلمِ فارسیِ TXT → PDF، `pdftext.text_to_docx`.
+#          `fonts-vazirmatn` عمداً نه: بستهٔ **اوبونتو**ست (`-0ubuntu1`) و در دبیانِ
+#          ایمیجِ slim نیست — apt سرِ build می‌شکست.)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
         p7zip-full unrar-free \
         libreoffice-writer libreoffice-calc libreoffice-impress \
-        poppler-utils \
+        poppler-utils qpdf ghostscript \
         tesseract-ocr tesseract-ocr-fas tesseract-ocr-eng \
         libgomp1 libglib2.0-0 \
         fonts-liberation fonts-dejavu fonts-noto-core fonts-hosny-amiri \

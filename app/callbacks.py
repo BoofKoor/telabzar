@@ -88,3 +88,16 @@ class Ck(CallbackData, prefix="ck"):
 
     act: str   # paste | off | del
     tok: str
+
+
+class Pdf(CallbackData, prefix="pdf"):
+    """ابزارهای PDF (زیرمنوها). کلاسِ **تازه** با پیشوندِ تازه، نه فیلدِ تازه روی
+    `Act`/`Cmp`/`Rot` — دلیلش داکس‌استرینگِ `Lang` است: دکمه‌های در پرواز را نشکن.
+
+    `act`: `cnorm`/`cstrong` (کاهشِ حجم) · `keep`/`del` (جدا/حذفِ صفحه — FSM) ·
+    `r90`/`r180`/`r270` (چرخش) · `split` · `lock`/`unlock` (رمز — FSM).
+    بدونِ `:` — جداکنندهٔ خودِ CallbackData است و aiogram مقدارِ دارای آن را رد می‌کند.
+    """
+
+    ref: str
+    act: str

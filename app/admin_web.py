@@ -292,7 +292,8 @@ _OP_ICON = {
     "bg_remove": ("eraser", "t5"), "ocr": ("scan-text", "t5"), "video_concat": ("combine", "t5"),
     "rename": ("pencil", "t5"),
     "zip_many": ("file-archive", "t6"), "list_zip": ("list", "t6"), "extract": ("package-open", "t6"),
-    "pdf_merge": ("files", "t6"),
+    "pdf_merge": ("files", "t6"), "pdf_select": ("scissors", "t6"), "pdf_rotate": ("rotate-cw", "t6"),
+    "pdf_split": ("copy", "t6"), "pdf_lock": ("lock", "t3"), "pdf_unlock": ("key-round", "t3"),
     "scan": ("shield-check", "t3"),
 }
 _JOB_PILL = {"done": ("good", "check", "st.done"), "failed": ("bad", "x", "st.failed"),

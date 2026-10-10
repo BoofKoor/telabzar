@@ -78,19 +78,24 @@ jobs:
       # `unrar-free` در همین گام (فاز ۳، موردِ ۲۵): RAR حالا از آن رد می‌شود و
       # `tests/test_rar_extract.py` با `needs_unrar` گیت شده — بدونِ نصب، همان
       # تله‌ای می‌شد که `needs_7z` از آن ترسیده بود: تستی که هیچ‌جا نمی‌دود.
+      # ابزارهای PDF هم همین‌جا (۲۰۲۶-۱۰): poppler/qpdf/Ghostscript/tesseract با
+      # بستهٔ فارسی — تست‌های `tests/pdfgates.py` بدونِ آن‌ها skip می‌شدند.
+      # LibreOffice عمداً نه (~۵۰۰ مگ): مسیرش با یک `soffice`ِ ساختگی روی PATH
+      # تست می‌شود (`tests/test_pdf_ops.py`).
       - name: install ffmpeg
         run: |
           apt_opts="-qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           for attempt in 1 2 3; do
             if sudo timeout -k 10 60 apt-get $apt_opts update \
-               && sudo timeout -k 10 180 apt-get $apt_opts install -y ffmpeg unrar-free; then
+               && sudo timeout -k 10 180 apt-get $apt_opts install -y ffmpeg unrar-free \
+                    poppler-utils qpdf ghostscript tesseract-ocr tesseract-ocr-eng tesseract-ocr-fas; then
               exit 0
             fi
             echo "::warning::apt attempt $attempt failed or timed out; retrying"
             sudo dpkg --configure -a || true
             sleep 10
           done
-          echo "::error::ffmpeg/unrar-free could not be installed after 3 attempts"
+          echo "::error::ffmpeg/unrar-free/PDF tools could not be installed after 3 attempts"
           exit 1
 
       # به READMEی رانر تکیه نمی‌کنیم: خودِ اجرا باید حضورِ ffmpeg را ثابت کند،
@@ -118,6 +123,15 @@ jobs:
 
       - name: prove unrar-free is present
         run: unrar-free --version
+
+      # بدونِ این، نصبِ ناقص تست‌های PDF را بی‌صدا skip می‌کرد و CI سبز می‌ماند.
+      # بستهٔ فارسیِ tesseract جدا سنجیده می‌شود: نبودنش فقط OCR را می‌کشد.
+      - name: prove PDF tools are present
+        run: |
+          qpdf --version
+          gs --version
+          pdftoppm -v
+          tesseract --list-langs | grep -qx fas
 
       # Caddy، **همان نسخه‌ای که `docker-compose.yml` پین کرده** (نسخه از خودِ
       # compose خوانده می‌شود، پس دو عدد برای یک چیز وجود ندارد)، تا

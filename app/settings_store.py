@@ -45,6 +45,7 @@ RUNTIME_KEYS: dict[str, tuple[str, object]] = {
     "compress_tiny_target_mb": ("int", settings.compress_tiny_target_mb),
     "compress_tiny_height": ("int", settings.compress_tiny_height),
     "vjoin_max_mb": ("int", settings.vjoin_max_mb),
+    "pdf_ocr_max_pages": ("int", settings.pdf_ocr_max_pages),  # OCRِ PDFِ اسکن · ۰ = خاموش
     # دامنهٔ لینکِ /dl و /s روی **همین** سرور — Caddy برایش سرتیفیکیتِ خودکار می‌گیرد
     # (`/tls/ask`ِ پنل تأییدش می‌کند). خواننده فقط `link_domain()`ِ پایینِ همین ماژول.
     "link_domain": ("str", settings.link_domain),

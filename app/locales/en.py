@@ -24,7 +24,9 @@ MESSAGES: dict[str, str] = {
         "• Image: OCR, watermark, resize, rotate, remove background, to PDF\n"
         "• Video: compress, trim, extract audio, cover, screenshot, GIF, mute\n"
         "• Music: edit tags, transcribe, trim, normalize, change speed\n"
-        "• PDF and archives: merge, extract, list contents, security scan\n\n"
+        "• PDF: to Word, text or images (scans via OCR), compress, extract/delete/rotate pages, password, merge\n"
+        "• Documents (Word, Excel, PowerPoint, text): to PDF\n"
+        "• Archives: extract, list contents, security scan\n\n"
         "<b>3) Send a link</b>\n"
         "YouTube, Instagram, Twitter/X, TikTok, SoundCloud, Spotify, "
         "Apple Music, Aparat, Vimeo and a few more. The result gets the same "
@@ -205,7 +207,7 @@ MESSAGES: dict[str, str] = {
     "img_pdf_collect_prompt": "📄 <b>Images → PDF</b> — send the other images to include (one page each), then tap “Make PDF”.",
     "img_pdf_list_header": "🖼 Images ({n}):",
     "img_pdf_only_image": "⚠️ Please send an image only.",
-    "btn_img_pdf_go": "📄 Make PDF",
+    "btn_img_pdf_go": "📄 PDF on A4 pages",
     "cl_img_pdf": "📄 Built PDF from {n} images",
     # deep audio
     "btn_normalize": "🔊 Normalize",
@@ -288,4 +290,62 @@ MESSAGES: dict[str, str] = {
     # limits
     "limit_rate": "A bit too fast! Please wait a moment ⏳",
     "limit_quota": "You've hit today's operation limit. Try again tomorrow.",
+    # PDF tools
+    "btn_pdf_convert": "🔄 Convert (Word, text, images)",
+    "btn_pdf_pages": "📑 Pages",
+    "btn_pdf_pw": "🔐 Password",
+    "btn_pdf_c_normal": "🗜 Normal — good quality",
+    "btn_pdf_c_strong": "🗜 Maximum — smallest file",
+    "btn_pdf_keep": "✂️ Extract pages",
+    "btn_pdf_del": "🗑 Delete pages",
+    "btn_pdf_r270": "⟲ 90°",
+    "btn_pdf_r90": "⟳ 90°",
+    "btn_pdf_r180": "🔄 180°",
+    "btn_pdf_split": "📄 One file per page",
+    "btn_pdf_lock": "🔒 Add a password",
+    "btn_pdf_unlock": "🔓 Remove the password",
+    "btn_img_pdf_fit": "🖼 PDF at photo size",
+    "fmt_pdf_docx": "📝 Word (DOCX)",
+    "fmt_pdf_txt": "📃 Text (TXT)",
+    "fmt_pdf_jpg": "🖼 Page images (JPG)",
+    "fmt_pdf_png": "🖼 Page images (PNG)",
+    "pdf_compress_choose": "How small?\n<i>“Normal” keeps text and tables fully readable; “Maximum” compresses the images harder.</i>",
+    "pdf_pages_choose": "What should I do with the pages?",
+    "pdf_pw_choose": "PDF password:",
+    "pdf_pages_ask_keep": "✂️ Send the page numbers you want — e.g. <code>1-3, 5, 8-</code>.\n<i>The order you write is the order of the new file; “8-” means 8 to the end.</i>",
+    "pdf_pages_ask_del": "🗑 Send the page numbers to delete — e.g. <code>2, 5-7</code> or “last”.",
+    "pdf_pages_bad": "⚠️ I didn't get that. Try something like <code>1-3, 5</code>.",
+    "pdf_pw_ask_lock": "🔒 Send the password you want. Your message is deleted right away and the password is not stored — <b>remember it</b>, the file won't open without it.",
+    "pdf_pw_ask_unlock": "🔓 Send the file's password (your message is deleted right away).\n<i>If the file only blocks printing or copying and opens without a password, send anything.</i>",
+    "pdf_pw_bad": "⚠️ The password must be one line and at most 127 bytes. Send it again.",
+    "pdf_pw_expired": "⌛ The password expired. Start again from “🔐 Password”.",
+    "pr_pdf": "Working on the PDF…",
+    "cl_pdf_compress": "🗜 PDF size went from {before} to {after}",
+    "cl_pdf_no_gain": "🗜 This PDF did not get smaller — it is already optimized",
+    "cl_pdf_deleted": "🗑 Deleted pages {pages}",
+    "cl_pdf_extracted": "✂️ Extracted pages {pages}",
+    "cl_pdf_rotated": "🔄 Rotated {deg}°",
+    "cl_pdf_split": "📄 Split into {n} single-page files",
+    "cl_pdf_locked": "🔒 Password added",
+    "cl_pdf_unlocked": "🔓 Password removed",
+    "cl_pdf_not_locked": "🔓 This PDF had no password",
+    "cl_pdf_ocr_pages": "OCR on {n} pages",
+    "cl_pdf_first_pages": "only the first {n} of {total} pages",
+    "pdf_not_pdf": "⚠️ This file is not really a PDF — it has a .pdf name but not PDF content.",
+    "pdf_damaged": "⚠️ This PDF is damaged and can't be opened.",
+    "pdf_needs_password": "🔐 This PDF has a password. Remove it first from “🔐 Password” → “🔓 Remove the password”.",
+    "pdf_wrong_password": "❌ Wrong password.",
+    "pdf_needs_password_member": "🔐 “{name}” has a password. Remove it first, then merge.",
+    "pdf_not_pdf_member": "⚠️ “{name}” is not really a PDF.",
+    "pdf_damaged_member": "⚠️ “{name}” is damaged and can't be opened.",
+    "pdf_pages_empty": "⚠️ No pages were selected.",
+    "pdf_page_out_of_range": "⚠️ There is no page {page} — this PDF has {n} pages.",
+    "pdf_delete_all": "⚠️ You can't delete every page.",
+    "pdf_split_single": "This PDF has only one page.",
+    "pdf_no_text": "📭 No text was found in this PDF.",
+    "pdf_no_text_ocr_limit": "📭 No text found: {n} scanned pages were past the OCR limit. Try “Word” — the pages come through as images there.",
+    "pdf_ocr_unavailable": "⚠️ OCR is not installed on this server.",
+    "office_failed": "⚠️ This document could not be opened — it may be damaged or in an unsupported format.",
+    "to_pdf_unsupported": "⚠️ A “{ext}” file can't be converted to PDF. Word, Excel, PowerPoint, text, HTML and OpenDocument files are supported.",
+    "to_pdf_empty": "📭 This text file is empty.",
 }

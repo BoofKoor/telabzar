@@ -37,6 +37,7 @@
 | `max_file_mb` | `2000` | ✅ | سقفِ حجمِ فایلِ ورودی |
 | `compress_speed` | `fast` | ✅ | سرعت/کیفیتِ کاهشِ حجم: `fast`(veryfast)/`balanced`(medium)/`quality`(slow) |
 | `video_encoder` | `x264` | ✅ | انکودِ ویدیو: `x264` (CPU) یا `nvenc` (GPU؛ fallbackِ خودکار به x264) |
+| `pdf_ocr_max_pages` | `30` | ✅ | سقفِ صفحه‌های اسکن‌شده‌ای که در تبدیلِ PDF → Word/متن با OCR خوانده می‌شوند (`0` = بدونِ OCR؛ صفحهٔ اسکنِ بیشتر در Word عکس می‌ماند) |
 | `MAX_EXTRACT_FILES` | `40` | — (env) | سقفِ تعدادِ فایل هنگامِ استخراجِ آرشیو |
 | `MAX_EXTRACT_MB` | `500` | — (env) | سقفِ حجمِ اعلام‌شدهٔ آرشیو برای استخراج |
 

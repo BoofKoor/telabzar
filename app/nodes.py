@@ -54,7 +54,7 @@ ROLES: dict[str, dict] = {
 OFFLOAD_OPS: frozenset[str] = frozenset({
     "compress", "convert", "transcribe", "bg_remove", "to_gif", "extract_audio",
     "watermark", "trim", "normalize", "speed", "video_concat", "screenshot",
-    "mute", "images_to_pdf", "to_pdf",
+    "mute", "images_to_pdf", "to_pdf", "pdf_merge",
 })
 
 _NODE_PREFIX = "node:"          # کلیدِ heartbeat: node:{id} → JSON با TTL

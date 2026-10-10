@@ -5,7 +5,7 @@ from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMa
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from . import textstore
-from .callbacks import Act, Ck, Cmp, Conv, Dl, Lang, Meta, Nav, Rot, Rsz, Spd, Tr, Wm
+from .callbacks import Act, Ck, Cmp, Conv, Dl, Lang, Meta, Nav, Pdf, Rot, Rsz, Spd, Tr, Wm
 from .i18n import t
 
 # رزولوشن‌های هدفِ کاهشِ حجمِ ویدیو → (ارتفاع, بیت‌ریتِ ویدیو kbps)
@@ -57,7 +57,8 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "pdf": [
-        ("convert", "btn_convert"), ("merge", "btn_merge"), ("link", "btn_link"),
+        ("convert", "btn_pdf_convert"), ("compress", "btn_compress"), ("pdf_pages", "btn_pdf_pages"),
+        ("merge", "btn_merge"), ("pdf_pw", "btn_pdf_pw"), ("link", "btn_link"),
         ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "archive": [
@@ -75,12 +76,17 @@ _DEFAULT_OPS: list[tuple[str, str]] = [
 ]
 
 # عملیاتی که در M2 واقعاً کار می‌کنند
-COMPRESSIBLE = {"image", "video", "audio"}
+COMPRESSIBLE = {"image", "video", "audio", "pdf"}
 CONVERT_FORMATS: dict[str, list[str]] = {
     "image": ["jpg", "png", "webp"],
     "video": ["mp4", "webm", "mkv"],
     "audio": ["mp3", "m4a", "ogg", "wav"],
-    "pdf": ["docx", "jpg", "txt"],
+    "pdf": ["docx", "txt", "jpg", "png"],
+}
+# برچسبِ خوانا به‌جای پسوندِ خام («Word» نه «DOCX») — فقط برای نوع‌هایی که مقصدشان
+# سندِ دیگری است؛ تصویر/ویدیو/صوت همان پسوندِ بزرگ را نشان می‌دهند.
+_FMT_LABEL: dict[str, dict[str, str]] = {
+    "pdf": {"docx": "fmt_pdf_docx", "txt": "fmt_pdf_txt", "jpg": "fmt_pdf_jpg", "png": "fmt_pdf_png"},
 }
 CONVERTIBLE = set(CONVERT_FORMATS)
 
@@ -336,13 +342,53 @@ def link_menu_kb(ref: str, lang: str, dl_url: str, stream_url: str, streamable: 
 
 
 def collect_kb(ref: str, lang: str, purpose: str) -> InlineKeyboardMarkup:
-    """کیبوردِ جمع‌کردنِ فایل — دکمهٔ اجرا بسته به هدف (زیپ / ادغامِ PDF / عکس‌ها به PDF)."""
+    """کیبوردِ جمع‌کردنِ فایل — دکمهٔ اجرا بسته به هدف (زیپ / ادغامِ PDF / عکس‌ها به PDF).
+
+    عکس‌ها → PDF دو دکمهٔ اجرا دارد: صفحهٔ A4 (برای چاپ و فرستادنِ رسمی، جهتِ هر
+    صفحه از جهتِ عکس) و «اندازهٔ عکس» (بی‌حاشیه، مثلِ اسکن‌های گوشی).
+    """
     go_key = {"merge": "btn_merge_go", "img_pdf": "btn_img_pdf_go",
               "vjoin": "btn_vjoin_go"}.get(purpose, "btn_zip_go")
     b = InlineKeyboardBuilder()
     b.button(text=t(lang, go_key), callback_data=Act(op="collect_go", ref=ref))
+    if purpose == "img_pdf":
+        b.button(text=t(lang, "btn_img_pdf_fit"), callback_data=Act(op="collect_fit", ref=ref))
     b.button(text=t(lang, "btn_cancel"), callback_data=Act(op="cancel", ref=ref))
-    b.adjust(2)
+    b.adjust(2, 1) if purpose == "img_pdf" else b.adjust(2)
+    return b.as_markup()
+
+
+def pdf_compress_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    """کاهشِ حجمِ PDF: «معمولی» (۱۵۰dpi — متن و جدول خوانا) یا «حداکثر» (۹۶dpi)."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_pdf_c_normal"), callback_data=Pdf(ref=ref, act="cnorm"))
+    b.button(text=t(lang, "btn_pdf_c_strong"), callback_data=Pdf(ref=ref, act="cstrong"))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(1)
+    return b.as_markup()
+
+
+def pdf_pages_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    """ابزارهای صفحه: جدا کردن · حذف · چرخش · هر صفحه یک فایل."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_pdf_keep"), callback_data=Pdf(ref=ref, act="keep"))
+    b.button(text=t(lang, "btn_pdf_del"), callback_data=Pdf(ref=ref, act="del"))
+    b.button(text=t(lang, "btn_pdf_r270"), callback_data=Pdf(ref=ref, act="r270"))
+    b.button(text=t(lang, "btn_pdf_r90"), callback_data=Pdf(ref=ref, act="r90"))
+    b.button(text=t(lang, "btn_pdf_r180"), callback_data=Pdf(ref=ref, act="r180"))
+    b.button(text=t(lang, "btn_pdf_split"), callback_data=Pdf(ref=ref, act="split"))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(2, 3, 1, 1)
+    return b.as_markup()
+
+
+def pdf_pw_kb(ref: str, lang: str) -> InlineKeyboardMarkup:
+    """رمز: گذاشتن یا برداشتن."""
+    b = InlineKeyboardBuilder()
+    b.button(text=t(lang, "btn_pdf_lock"), callback_data=Pdf(ref=ref, act="lock"))
+    b.button(text=t(lang, "btn_pdf_unlock"), callback_data=Pdf(ref=ref, act="unlock"))
+    b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
+    b.adjust(2, 1)
     return b.as_markup()
 
 
@@ -412,13 +458,16 @@ def compress_menu_kb(ref: str, file, lang: str) -> InlineKeyboardMarkup:
 def convert_menu_kb(ref: str, kind: str, lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     fmts = CONVERT_FORMATS.get(kind, [])
+    labels = _FMT_LABEL.get(kind, {})
     for fmt in fmts:
-        b.button(text=fmt.upper(), callback_data=Conv(ref=ref, fmt=fmt))
+        text = t(lang, labels[fmt]) if fmt in labels else fmt.upper()
+        b.button(text=text, callback_data=Conv(ref=ref, fmt=fmt))
     b.button(text=t(lang, "btn_back"), callback_data=Act(op="menu", ref=ref))
 
-    sizes = [3] * (len(fmts) // 3)
-    if len(fmts) % 3:
-        sizes.append(len(fmts) % 3)
+    per = 2 if labels else 3   # برچسبِ بلند → دوتایی، پسوندِ کوتاه → سه‌تایی
+    sizes = [per] * (len(fmts) // per)
+    if len(fmts) % per:
+        sizes.append(len(fmts) % per)
     sizes.append(1)  # بازگشت
     b.adjust(*sizes)
     return b.as_markup()
