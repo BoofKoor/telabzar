@@ -45,8 +45,55 @@ IMG_MIN_PT = 28
 #: سقفِ تعدادِ عکس در یک خروجیِ Word.
 IMG_MAX = 300
 IMG_DPI = 150
+#: سقفِ ضلعِ بلندِ صفحهٔ رندرشده برای عکس‌های Word (پیکسل) — A4 در ۱۵۰dpi ۱۷۵۴ است.
+#: بی‌سقف، صفحهٔ «اسکنِ گوشی» که اندازه‌اش پیکسل است نه اینچ (۲۴۸۰×۳۵۰۸ pt) در ۱۵۰dpi
+#: یک تصویرِ ۳۸ مگاپیکسلی می‌شد.
+IMG_MAX_PX = 2500
+#: Word صفحهٔ بزرگ‌تر از ۲۲ اینچ نمی‌سازد (۳۱۶۸۰ twip). صفحهٔ PDFِ بزرگ‌تر از این عملاً
+#: اسکنی است که اندازه‌اش پیکسل است، یا پوستر — به A4 کوچک می‌شود.
+WORD_MAX_PT = 22 * 72
+A4_LONG_PT = 841.89
 
 _NS = "{http://www.w3.org/1999/xhtml}"
+
+# ── نویسه‌هایی که متن نیستند ─────────────────────────────────────
+# قلمی که ToUnicodeِ خرابی دارد گلیف را به کدِ کنترلی نگاشته (رایج‌ترینش ‎\x03‎ است:
+# شمارهٔ گلیفِ «فاصله» در قلم‌های TrueType). poppler آن بایت را **خام** در XMLِ
+# `-bbox-layout` می‌نویسد و expat با «not well-formed» کلِ تبدیل را می‌کشت؛ همان
+# نویسه از pdfplumber به python-docx می‌رسید و lxml با «All strings must be XML
+# compatible» ردش می‌کرد (هر دو اندازه‌گیری‌شده، `tests/test_pdf_robust.py`).
+_C0 = re.compile(r"[\x00-\x1f]")
+_NONCHAR = re.compile(r"[\ufffe\uffff\ud800-\udfff]")
+#: دقیقاً آنچه lxml رد می‌کند: C0 جز تب/خطِ جدید/CR، دو نانویسه، و نیمِ جانشین
+_NOT_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff\ud800-\udfff]")
+#: همان C0ها در سطحِ بایت، برای خروجیِ poppler پیش از expat. در UTF-8 این بایت‌ها هرگز
+#: جزئی از نویسهٔ چندبایتی نیستند (بایتِ ادامه ‎0x80–0xBF‎ است)، پس جایگزینیِ بایت‌به‌بایت
+#: هیچ نویسهٔ سالمی را نمی‌شکند.
+_C0_BYTES = bytes(b for b in range(0x20) if b not in (0x09, 0x0A, 0x0D))
+_C0_TO_SPACE = bytes.maketrans(_C0_BYTES, b" " * len(_C0_BYTES))
+
+
+def clean_text(text: str) -> str:
+    """متنِ یک کلمه/گلیفِ PDF → متن. کنترل → فاصله (گلیفِ پشتش جا دارد و اغلب خودِ
+    فاصله است)، نانویسه و نیمِ جانشین → حذف."""
+    return _NONCHAR.sub("", _C0.sub(" ", text))
+
+
+def xml_safe(text: str) -> str:
+    """آخرین گارد پیش از python-docx: فقط آنچه lxml رد می‌کند برداشته می‌شود — یک
+    نویسهٔ عجیب نباید کلِ سندِ Word را بکشد."""
+    return _NOT_XML.sub("", text)
+
+
+class _XmlSafeReader:
+    """فایلِ خروجیِ poppler با C0ها به‌جای فاصله، برای `ET.iterparse` (جریانی، نه کلِ فایل
+    در حافظه)."""
+
+    def __init__(self, fh):
+        self._fh = fh
+
+    def read(self, n: int = -1) -> bytes:
+        return self._fh.read(n).translate(_C0_TO_SPACE)
 
 
 # ── bidi: ترتیبِ دیداری → منطقی ──────────────────────────────────
@@ -325,27 +372,30 @@ def parse_bbox(path: str) -> list[Page]:
     cur: Page | None = None
     ln: Line | None = None
     flow = -1
-    for ev, el in ET.iterparse(path, events=("start", "end")):
-        tag = el.tag.replace(_NS, "")
-        if ev == "start":
-            if tag == "page":
-                cur = Page(no=len(pages) + 1, width=_f(el, "width"), height=_f(el, "height"))
-            elif tag == "flow":
-                flow += 1
-            elif tag == "line" and cur is not None:
-                ln = Line(_f(el, "xMin"), _f(el, "yMin"), _f(el, "xMax"), _f(el, "yMax"), flow=flow)
-            continue
-        if tag == "word" and ln is not None:
-            ln.words.append(el.text or "")
-            ln.word_w.append(_f(el, "xMax") - _f(el, "xMin"))
-        elif tag == "line" and cur is not None and ln is not None:
-            if ln.words:
-                cur.lines.append(ln)
-            ln = None
-        elif tag == "page" and cur is not None:
-            pages.append(cur)
-            cur = None
-            el.clear()
+    # C0 به فاصله پیش از expat (نگاه کن `_XmlSafeReader`)
+    with open(path, "rb") as fh:
+        for ev, el in ET.iterparse(_XmlSafeReader(fh), events=("start", "end")):
+            tag = el.tag.replace(_NS, "")
+            if ev == "start":
+                if tag == "page":
+                    cur = Page(no=len(pages) + 1, width=_f(el, "width"), height=_f(el, "height"))
+                elif tag == "flow":
+                    flow += 1
+                elif tag == "line" and cur is not None:
+                    ln = Line(_f(el, "xMin"), _f(el, "yMin"), _f(el, "xMax"), _f(el, "yMax"),
+                              flow=flow)
+                continue
+            if tag == "word" and ln is not None:
+                ln.words.append(clean_text(el.text or ""))
+                ln.word_w.append(_f(el, "xMax") - _f(el, "xMin"))
+            elif tag == "line" and cur is not None and ln is not None:
+                if ln.words:
+                    cur.lines.append(ln)
+                ln = None
+            elif tag == "page" and cur is not None:
+                pages.append(cur)
+                cur = None
+                el.clear()
     return pages
 
 
@@ -618,6 +668,17 @@ def dedupe(chars: list[dict]) -> list[dict]:
     return out
 
 
+def _clean_chars(chars: list[dict]) -> list[dict]:
+    """متنِ هر گلیف از `clean_text`؛ گلیفی که چیزی از آن نمی‌ماند (نانویسهٔ تنها) کنار می‌رود."""
+    out: list[dict] = []
+    for c in chars:
+        raw = c.get("text") or ""
+        text = clean_text(raw)
+        if text:
+            out.append(c if text == raw else {**c, "text": text})
+    return out
+
+
 def _plumb(src: str, pages: list[Page], want_images: bool, cancel_flag) -> None:
     """در thread: گلیف‌ها (و برای Word جعبهٔ عکس‌ها) از pdfplumber، صفحه به صفحه."""
     import pdfplumber  # ورودِ تنبل: فقط ورکر این وابستگی را دارد
@@ -634,7 +695,7 @@ def _plumb(src: str, pages: list[Page], want_images: bool, cancel_flag) -> None:
                 # صفحهٔ چرخیده: مختصاتِ دو ابزار ممکن است هم‌خوان نباشد → فقط poppler
                 same = abs(pp.width - page.width) < 2 and abs(pp.height - page.height) < 2
                 if need and same:
-                    _assign(page, dedupe(pp.chars))
+                    _assign(page, dedupe(_clean_chars(pp.chars)))
                 if want_images and same:
                     page.images = _page_images(pp.images, page)
                 pp.close()
@@ -711,8 +772,9 @@ async def extract(src: str, workdir: str, *, max_pages: int, ocr_max_pages: int,
         texts = await T.ocr_pages(src, workdir, [p.no for p in ocr_these],
                                   cancel=cancel, progress=progress)
         for p, txt in zip(ocr_these, texts):
-            p.ocr = T.tidy_ocr(txt)
-        doc.ocr_pages = len(ocr_these)
+            if txt is not None:           # صفحه‌ای که OCRش شکست خورد عکس می‌ماند
+                p.ocr = T.tidy_ocr(txt)
+        doc.ocr_pages = sum(1 for txt in texts if txt is not None)
     for p in empty:
         if p.ocr is None:
             p.scan = True
@@ -812,8 +874,15 @@ async def render_images(src: str, workdir: str, doc: Doc, cancel=None) -> None:
         if not targets or count >= IMG_MAX or not p.width:
             p.images = []
             continue
-        png = await T.render_page(src, p.no, os.path.join(workdir, f"_pg-{p.no}"),
-                                  dpi=IMG_DPI, cancel=cancel)
+        try:
+            png = await T.render_page(src, p.no, os.path.join(workdir, f"_pg-{p.no}"),
+                                      dpi=IMG_DPI, max_px=IMG_MAX_PX, cancel=cancel)
+        except UserFacingError:
+            raise
+        except RuntimeError:          # صفحه‌ای که رندر نشد عکسش را از دست می‌دهد، نه کلِ سند
+            log.warning("page %s did not render; its pictures are skipped", p.no, exc_info=True)
+            p.images = []
+            continue
         kept: list[Img] = []
         with Image.open(png) as im:
             sx, sy = im.width / p.width, im.height / p.height
@@ -868,7 +937,9 @@ def text_to_docx(text: str, out: str, font: str = "Noto Sans Arabic") -> None:
     fonts.set(qn("w:ascii"), "DejaVu Sans")
     fonts.set(qn("w:hAnsi"), "DejaVu Sans")
     normal.paragraph_format.space_after = Pt(2)
-    for line in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    # فرم‌فید/تبِ عمودیِ فایلِ متنیِ قدیمی شکستِ سطر است، نه نویسه‌ای که حذف شود
+    text = (text or "").replace("\r\n", "\n").translate({0x0D: "\n", 0x0C: "\n", 0x0B: "\n"})
+    for line in xml_safe(text).split("\n"):
         line = line.rstrip()
         par = d.add_paragraph()
         if not line:
@@ -879,6 +950,20 @@ def text_to_docx(text: str, out: str, font: str = "Noto Sans Arabic") -> None:
         for chunk, r in _runs(line, rtl):
             _style_run(par.add_run(chunk), 11, False, r)
     d.save(out)
+
+
+def page_scale(width: float, height: float) -> float:
+    """ضریبِ اندازهٔ صفحهٔ Word: ۱ مگر صفحه از حدِ Word (۲۲ اینچ، ‎31680 twip‎) بزرگ‌تر
+    باشد؛ آن‌وقت ضلعِ بلند A4 می‌شود. چنین صفحه‌ای عملاً اسکنی است که اندازه‌اش پیکسل
+    است (۲۴۸۰×۳۵۰۸ pt = ۳۴×۴۹ اینچ)، و سندِ Word با صفحهٔ ۳۴ اینچی نه چاپ‌شدنی است و نه
+    در محدودهٔ Word."""
+    long_pt = max(width, height)
+    return A4_LONG_PT / long_pt if long_pt > WORD_MAX_PT else 1.0
+
+
+def _font_pt(size: float) -> float:
+    """اندازهٔ قلم به نیم‌پوینت، در بازه‌ای که Word می‌پذیرد (۱ تا ۱۶۳۸pt)."""
+    return min(max(round(size * 2) / 2, 1.0), 1638.0)
 
 
 def to_docx(doc: Doc, out: str) -> None:
@@ -893,7 +978,11 @@ def to_docx(doc: Doc, out: str) -> None:
     d = Document()
     paras = [para for p in doc.pages for para in p.paras]
     sizes = [x for para in paras for ln in para.lines for x in ln.sizes if x > 0]
-    body = statistics.median(sizes) if sizes else 11.0
+    first = next((p for p in doc.pages if p.width), None)
+    # صفحهٔ بزرگ‌تر از حدِ Word (۲۲ اینچ) به A4 کوچک می‌شود و هرچه اندازه‌اش از مختصاتِ
+    # PDF آمده (قلم، عکس) با همان نسبت؛ متنِ OCR اندازهٔ مختصاتی ندارد و دست نمی‌خورد.
+    scale = page_scale(first.width, first.height) if first is not None else 1.0
+    body = statistics.median(sizes) * scale if sizes else 11.0
     if paras:
         rtl_doc = sum(1 for x in paras if x.rtl) > len(paras) / 2
     else:
@@ -902,33 +991,35 @@ def to_docx(doc: Doc, out: str) -> None:
     # قلمِ «پیچیده» (فارسی) Tahoma: روی هر ویندوزی هست و فارسیِ خوانا دارد؛ قلمِ
     # اصلیِ PDF (B Nazanin و …) ممکن است روی دستگاهِ کاربر نباشد.
     normal = d.styles["Normal"]
-    normal.font.size = Pt(round(body * 2) / 2)
+    normal.font.size = Pt(_font_pt(body))
     normal.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:cs"), "Tahoma")
 
-    first = next((p for p in doc.pages if p.width), None)
     sec = d.sections[0]
+    page_w, page_h = (first.width * scale, first.height * scale) if first else (612.0, 792.0)
     if first is not None:
-        sec.page_width, sec.page_height = Pt(first.width), Pt(first.height)
+        sec.page_width, sec.page_height = Pt(page_w), Pt(page_h)
+    margin = min(48.0, min(page_w, page_h) / 8)    # برچسبِ کوچک حاشیهٔ ۴۸pt را جا ندارد
     for m in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
-        setattr(sec, m, Pt(48))
+        setattr(sec, m, Pt(margin))
     if rtl_doc:
         sec._sectPr.append(OxmlElement("w:bidi"))
-    text_w = (first.width if first else 595) - 96
+    text_w = page_w - 2 * margin
 
     def add_text(text: str, rtl: bool, size: float, bold: bool, center: bool) -> None:
+        text = xml_safe(text)
         par = d.add_paragraph()
         if rtl:
             _set_rtl_para(par)
         if center:
             par.alignment = WD_ALIGN_PARAGRAPH.CENTER
         for chunk, r in _runs(text, rtl):
-            _style_run(par.add_run(chunk), round(size * 2) / 2, bold, r)
+            _style_run(par.add_run(chunk), _font_pt(size), bold, r)
 
     def add_image(img: Img) -> None:
         if not img.path:
             return
         try:
-            d.add_picture(img.path, width=Pt(min(img.x1 - img.x0, text_w)))
+            d.add_picture(img.path, width=Pt(min((img.x1 - img.x0) * scale, text_w)))
         except Exception:  # noqa: BLE001 — یک عکسِ خراب نباید کلِ سند را بشکند
             log.warning("docx picture failed: %s", img.path, exc_info=True)
             return
@@ -958,7 +1049,7 @@ def to_docx(doc: Doc, out: str) -> None:
                 add_image(im)
             text = para.joined()
             if text:
-                add_text(text, para.rtl, para.size, para.bold, para.center)
+                add_text(text, para.rtl, para.size * scale, para.bold, para.center)
         for img in pending:
             add_image(img)
     d.save(out)

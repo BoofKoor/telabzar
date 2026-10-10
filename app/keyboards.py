@@ -24,7 +24,7 @@ FIELD_LABEL: dict[str, str] = {field: key for field, key in META_FIELDS}
 FIELD_LABEL["cover"] = "btn_f_cover"
 
 # نوع‌هایی که کلیدِ اولِ منویشان تمام‌عرض (ردیفِ جدا) نمایش داده می‌شود
-FEATURED_TOP = {"audio", "video", "image"}
+FEATURED_TOP = {"audio", "video", "image", "pdf"}
 
 # عرض‌های هدفِ تغییرِ اندازهٔ تصویر (px)
 IMAGE_RESIZE_WIDTHS = [1920, 1280, 800, 512]
@@ -57,6 +57,9 @@ OPS_BY_KIND: dict[str, list[tuple[str, str]]] = {
         ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
     ],
     "pdf": [
+        # برچسب همان `fmt_pdf_docx`ِ زیرمنوی قبلی است، نه کلیدِ تازه: بستهٔ زبانی که از
+        # آن روز export شده آن کلید را دارد، و کلیدِ ناشناخته کلِ import را رد می‌کند.
+        ("to_word", "fmt_pdf_docx"),
         ("convert", "btn_pdf_convert"), ("compress", "btn_compress"), ("pdf_pages", "btn_pdf_pages"),
         ("merge", "btn_merge"), ("pdf_pw", "btn_pdf_pw"), ("link", "btn_link"),
         ("scan", "btn_scan"), ("rename", "btn_rename"), ("zip", "btn_zip"),
@@ -81,12 +84,15 @@ CONVERT_FORMATS: dict[str, list[str]] = {
     "image": ["jpg", "png", "webp"],
     "video": ["mp4", "webm", "mkv"],
     "audio": ["mp3", "m4a", "ogg", "wav"],
-    "pdf": ["docx", "txt", "jpg", "png"],
+    # Word این‌جا نیست: دکمهٔ مستقلِ خودش را دارد (`to_word`، بالای کارتِ PDF)، چون
+    # زیرِ «تبدیل» پیدا نمی‌شد. `Conv(fmt="docx")`ِ منوهای قدیمیِ در پرواز همچنان کار
+    # می‌کند — `op_convert_pick` مقصد را با این فهرست نمی‌سنجد و `_convert_pdf` docx دارد.
+    "pdf": ["txt", "jpg", "png"],
 }
 # برچسبِ خوانا به‌جای پسوندِ خام («Word» نه «DOCX») — فقط برای نوع‌هایی که مقصدشان
 # سندِ دیگری است؛ تصویر/ویدیو/صوت همان پسوندِ بزرگ را نشان می‌دهند.
 _FMT_LABEL: dict[str, dict[str, str]] = {
-    "pdf": {"docx": "fmt_pdf_docx", "txt": "fmt_pdf_txt", "jpg": "fmt_pdf_jpg", "png": "fmt_pdf_png"},
+    "pdf": {"txt": "fmt_pdf_txt", "jpg": "fmt_pdf_jpg", "png": "fmt_pdf_png"},
 }
 CONVERTIBLE = set(CONVERT_FORMATS)
 

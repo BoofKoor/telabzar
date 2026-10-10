@@ -3677,8 +3677,8 @@ CASES: list[dict] = [
     # tests.sabotage pdf` همه را با هم بزند.
     {'name': 'pdf: the glyph layer is skipped and poppler text wins again',
      'path': 'app/pdftext.py',
-     'old': '                if need and same:\n                    _assign(page, dedupe(pp.chars))',
-     'new': '                if False and same:\n                    _assign(page, dedupe(pp.chars))',
+     'old': '                if need and same:\n                    _assign(page, dedupe(_clean_chars(pp.chars)))',
+     'new': '                if False and same:\n                    _assign(page, dedupe(_clean_chars(pp.chars)))',
      'target': 'tests/test_pdf_extract.py',
      'expect': 'test_chrome_persian_reads_correctly'},
 
@@ -3817,6 +3817,147 @@ CASES: list[dict] = [
      'new': '        await state.update_data(members=members)',
      'target': 'tests/test_pdf_ops.py',
      'expect': 'test_merge_order_is_the_send_order_not_the_arrival_order'},
+
+    # ── PDF → Word: دکمهٔ مستقیم (۲۰۲۶-۱۰-۱۰) ──
+    {'name': 'pdf: the Word button disappears from the PDF card',
+     'path': 'app/keyboards.py',
+     'old': '        ("to_word", "fmt_pdf_docx"),\n',
+     'new': '',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_word_is_the_first_full_width_button_of_a_pdf_card'},
+
+    {'name': 'pdf: the Word button shares a row instead of standing on top',
+     'path': 'app/keyboards.py',
+     'old': 'FEATURED_TOP = {"audio", "video", "image", "pdf"}',
+     'new': 'FEATURED_TOP = {"audio", "video", "image"}',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_word_is_the_first_full_width_button_of_a_pdf_card'},
+
+    {'name': 'pdf: the Word button queues a text conversion',
+     'path': 'app/routers/ops.py',
+     'old': '"convert", {"target": "docx"}, user)',
+     'new': '"convert", {"target": "txt"}, user)',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_the_word_button_queues_a_docx_conversion'},
+
+    {'name': 'pdf: the Word button converts a file that is not a PDF',
+     'path': 'app/routers/ops.py',
+     'old': '    if file.kind != "pdf":\n        await cq.answer(t(lang, "coming_soon"), show_alert=True)\n'
+            '        return\n    if await _too_large(file.size):\n'
+            '        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)\n'
+            '        return\n    await _start(cq, file, lang, arq_pool, session, "convert", {"target": "docx"}',
+     'new': '    if await _too_large(file.size):\n'
+            '        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)\n'
+            '        return\n    await _start(cq, file, lang, arq_pool, session, "convert", {"target": "docx"}',
+     'target': 'tests/test_pdf_ops.py',
+     'expect': 'test_the_word_button_refuses_a_file_that_is_not_a_pdf'},
+
+
+    # ── PDF → Word روی PDFهای ناعادی (۲۰۲۶-۱۰-۱۰) ──
+    {'name': "pdf robust: poppler's raw control byte reaches expat again",
+     'path': 'app/pdftext.py',
+     'old': 'ET.iterparse(_XmlSafeReader(fh), events=("start", "end"))',
+     'new': 'ET.iterparse(fh, events=("start", "end"))',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_a_control_code_from_the_font_does_not_kill_an_english_page'},
+
+    {'name': 'pdf robust: a bad glyph from pdfplumber is no longer cleaned',
+     'path': 'app/pdftext.py',
+     'old': '_assign(page, dedupe(_clean_chars(pp.chars)))',
+     'new': '_assign(page, dedupe(pp.chars))',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_text_output_carries_no_control_characters'},
+
+    {'name': 'pdf robust: a control code is dropped instead of becoming a space',
+     'path': 'app/pdftext.py',
+     'old': 'return _NONCHAR.sub("", _C0.sub(" ", text))',
+     'new': 'return _NONCHAR.sub("", _C0.sub("", text))',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_a_narrow_control_glyph_is_a_word_break_not_a_deletion'},
+
+    {'name': 'pdf robust: the Word writer drops its last guard',
+     'path': 'app/pdftext.py',
+     'old': '        text = xml_safe(text)\n        par = d.add_paragraph()\n',
+     'new': '        par = d.add_paragraph()\n',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_the_word_writer_is_the_last_guard'},
+
+    {'name': 'pdf robust: xml_safe forgets the noncharacters',
+     'path': 'app/pdftext.py',
+     'old': '_NOT_XML = re.compile(r"[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\ufffe\\uffff\\ud800-\\udfff]")',
+     'new': '_NOT_XML = re.compile(r"[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]")',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_xml_safe_removes_exactly_what_word_rejects'},
+
+    {'name': 'pdf robust: text to Word stops guarding its input',
+     'path': 'app/pdftext.py',
+     'old': '    for line in xml_safe(text).split("\\n"):',
+     'new': '    for line in text.split("\\n"):',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_a_text_file_with_a_form_feed_and_nul_becomes_word'},
+
+    {'name': 'pdf robust: a form feed in a text file is deleted, not a line break',
+     'path': 'app/pdftext.py',
+     'old': '.translate({0x0D: "\\n", 0x0C: "\\n", 0x0B: "\\n"})',
+     'new': '.translate({0x0D: "\\n"})',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_a_text_file_with_a_form_feed_and_nul_becomes_word'},
+
+    {'name': 'pdf robust: OCR renders a pixel-sized page at full 300 dpi again',
+     'path': 'app/pdftools.py',
+     'old': 'gray=True, max_px=OCR_MAX_PX, cancel=cancel)',
+     'new': 'gray=True, cancel=cancel)',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_a_pixel_sized_page_is_ocred_at_a_capped_size'},
+
+    {'name': 'pdf robust: fit_dpi upsamples ordinary pages',
+     'path': 'app/pdftools.py',
+     'old': 'return max(1, min(dpi, int(max_px * 72 / long_pt)))',
+     'new': 'return max(1, int(max_px * 72 / long_pt))',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_an_ordinary_page_keeps_full_ocr_resolution'},
+
+    {'name': 'pdf robust: Word pictures render a pixel-sized page uncapped',
+     'path': 'app/pdftext.py',
+     'old': 'dpi=IMG_DPI, max_px=IMG_MAX_PX, cancel=cancel)',
+     'new': 'dpi=IMG_DPI, cancel=cancel)',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_word_pictures_are_capped_too'},
+
+    {'name': 'pdf robust: one failed OCR page fails the whole document again',
+     'path': 'app/pdftools.py',
+     'old': '            log.warning("ocr failed on page %s", p, exc_info=True)\n            texts.append(None)\n',
+     'new': '            raise\n',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_one_failed_ocr_page_does_not_fail_the_rest'},
+
+    {'name': 'pdf robust: OCR broken everywhere passes as an empty document',
+     'path': 'app/pdftools.py',
+     'old': '    if last_err is not None and all(x is None for x in texts):\n        raise last_err\n',
+     'new': '',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_ocr_that_fails_everywhere_is_still_an_error'},
+
+    {'name': 'pdf robust: a failed OCR page counts as read',
+     'path': 'app/pdftext.py',
+     'old': 'doc.ocr_pages = sum(1 for txt in texts if txt is not None)',
+     'new': 'doc.ocr_pages = len(ocr_these)',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_a_page_whose_ocr_failed_becomes_a_picture_in_word'},
+
+    {'name': 'pdf robust: a pixel-sized page goes to Word at its pixel size',
+     'path': 'app/pdftext.py',
+     'old': '    return A4_LONG_PT / long_pt if long_pt > WORD_MAX_PT else 1.0\n',
+     'new': '    return 1.0\n',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_a_pixel_sized_page_makes_a_word_page_word_can_open'},
+
+    {'name': 'pdf robust: Word font sizes are no longer clamped',
+     'path': 'app/pdftext.py',
+     'old': '    return min(max(round(size * 2) / 2, 1.0), 1638.0)\n',
+     'new': '    return round(size * 2) / 2\n',
+     'target': 'tests/test_pdf_robust.py',
+     'expect': 'test_word_page_and_font_limits'},
 ]
 
 

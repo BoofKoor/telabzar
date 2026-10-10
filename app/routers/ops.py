@@ -502,6 +502,25 @@ async def op_convert_pick(cq: CallbackQuery, callback_data: Conv, session: Async
     await _start(cq, file, lang, arq_pool, session, "convert", {"target": callback_data.fmt}, user)
 
 
+# ── PDF → Word: دکمهٔ مستقیم ─────────────────────────────────────
+# پیش از این Word فقط زیرِ «تبدیل» بود و کاربر پیدایش نمی‌کرد. جاب همان `convert` با
+# مقصدِ docx است، پس `_do_op`، صفِ نودِ پردازش (`OFFLOAD_OPS`) و آمارِ پنل همان می‌مانند.
+@router.callback_query(Act.filter(F.op == "to_word"))
+async def op_to_word(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str,
+                     arq_pool: ArqRedis, user: User | None) -> None:
+    file = await get_file_by_ref(session, callback_data.ref, user)
+    if file is None or not isinstance(cq.message, Message):
+        await cq.answer()
+        return
+    if file.kind != "pdf":
+        await cq.answer(t(lang, "coming_soon"), show_alert=True)
+        return
+    if await _too_large(file.size):
+        await cq.answer(t(lang, "too_large", mb=await _max_mb()), show_alert=True)
+        return
+    await _start(cq, file, lang, arq_pool, session, "convert", {"target": "docx"}, user)
+
+
 # ── بازگشت به منوی اصلیِ کارت ───────────────────────────────────
 @router.callback_query(Act.filter(F.op == "menu"))
 async def op_back(cq: CallbackQuery, callback_data: Act, session: AsyncSession, lang: str, user: User | None) -> None:
