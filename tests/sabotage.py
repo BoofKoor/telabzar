@@ -3873,7 +3873,7 @@ CASES: list[dict] = [
      'old': 'return _NONCHAR.sub("", _C0.sub(" ", text))',
      'new': 'return _NONCHAR.sub("", _C0.sub("", text))',
      'target': 'tests/test_pdf_robust.py',
-     'expect': 'test_a_control_code_from_the_font_does_not_kill_an_english_page'},
+     'expect': 'test_a_narrow_control_glyph_is_a_word_break_not_a_deletion'},
 
     {'name': 'pdf robust: the Word writer drops its last guard',
      'path': 'app/pdftext.py',

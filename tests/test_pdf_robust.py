@@ -37,17 +37,18 @@ _FA = [(0x41, "0627"), (0x42, "0644"), (0x43, "0645"), (0x20, "0020")]
 _LAT = [(0x41, "0048"), (0x42, "0069"), (0x43, "0021"), (0x20, "0020")]
 
 
-def _bad_font_pdf(path, cmap: list[tuple[int, str]], text: bytes = b"ABC ABDC") -> str:
-    """یک صفحه با قلمی که ToUnicodeش `cmap` است (`D` = نویسهٔ مشکل‌دار). نامِ قلم عمداً
-    از ۱۴ قلمِ استاندارد نیست، وگرنه pdfminer `/Widths` را نادیده می‌گیرد و همهٔ گلیف‌ها
-    پهنای صفر می‌گیرند (اندازه‌گیری‌شده)."""
+def _bad_font_pdf(path, cmap: list[tuple[int, str]], text: bytes = b"ABC ABDC",
+                  d_width: int = 600) -> str:
+    """یک صفحه با قلمی که ToUnicodeش `cmap` است (`D` = نویسهٔ مشکل‌دار، با پهنای `d_width`
+    هزارمِ em). نامِ قلم عمداً از ۱۴ قلمِ استاندارد نیست، وگرنه pdfminer `/Widths` را نادیده
+    می‌گیرد و همهٔ گلیف‌ها پهنای صفر می‌گیرند (اندازه‌گیری‌شده)."""
     bf = "\n".join(f"<{s:02X}> <{d}>" for s, d in cmap)
     tounicode = (b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n"
                  b"/CMapName /X def /CMapType 2 def\n1 begincodespacerange <00> <FF> "
                  b"endcodespacerange\n" + f"{len(cmap)} beginbfchar\n{bf}\nendbfchar\n".encode()
                  + b"endcmap CMapName currentdict /CMap defineresource pop end end")
     content = b"BT /F1 24 Tf 72 700 Td (" + text + b") Tj ET"
-    widths = b" ".join([b"300"] + [b"600"] * 36)
+    widths = b" ".join([b"300"] + [b"600"] * 35 + [b"%d" % d_width])     # ۳۲…۶۸، آخری D
     objs = [b"<< /Type /Catalog /Pages 2 0 R >>",
             b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
             b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
@@ -128,6 +129,17 @@ async def test_a_control_code_from_the_font_does_not_kill_an_english_page(tmp_pa
     doc = await X.extract(src, str(tmp_path), max_pages=5, ocr_max_pages=0, want_images=False)
     # ‎\x03‎ پشتِ یک گلیفِ جادار است، پس فاصله می‌شود نه چسباندنِ دو تکه
     assert X.to_text(doc) == "Hi! Hi !\n"
+
+
+@needs_pdf_text
+async def test_a_narrow_control_glyph_is_a_word_break_not_a_deletion(tmp_path):
+    """کدِ کنترلی **فاصله** می‌شود نه حذف. گلیفِ فاصلهٔ واقعی ~۰٫۲۵em است، درست روی آستانهٔ
+    شکافِ `line_units`؛ اگر نویسه حذف شود، شکافِ ۰٫۲۴emِ پشتش دیگر فاصله خوانده نمی‌شود و
+    دو کلمه به هم می‌چسبند. (در صفحهٔ انگلیسی فیلترِ بایتیِ پیش از expat همین را می‌کند،
+    پس آن‌جا این ادعا دیده نمی‌شود — §۶، دفاعِ لایه‌ای.)"""
+    src = _bad_font_pdf(tmp_path, _FA + [(0x44, "0003")], text=b"ABDC", d_width=240)
+    doc = await X.extract(src, str(tmp_path), max_pages=5, ocr_max_pages=0, want_images=False)
+    assert X.to_text(doc) == "م لا\n"
 
 
 @needs_pdf_text
